@@ -1,33 +1,47 @@
 #!/usr/bin/env bash
 # claude-baton installer
-# Installs the sessions-and-handoffs methodology for Claude Code into the
-# CURRENT directory (your project root).
-#
-# Usage:
-#   cd /path/to/your/project
-#   curl -fsSL https://raw.githubusercontent.com/compota334/claude-baton/main/install.sh | bash
-#   # or, from a local clone:
-#   bash /path/to/claude-baton/install.sh
-#
-# Re-run to update. Files you have modified are never overwritten unless you
-# pass --force:
-#   curl -fsSL .../install.sh | bash -s -- --force
+# Installs the working methodology for Claude Code into the CURRENT directory
+# (your project root).
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 REPO_RAW="https://raw.githubusercontent.com/compota334/claude-baton/main"
-TEMPLATES=(context-warn.sh handoff.md CLAUDE.md.section)
+TEMPLATES=(context-warn.sh handoff.md kickoff.md revisit.md CLAUDE.md.section INDEX.md)
 MARK_START="<!-- claude-baton:start -->"
 MARK_END="<!-- claude-baton:end -->"
+GI_START="# >>> claude-baton private mode >>>"
+GI_END="# <<< claude-baton private mode <<<"
+
+usage() {
+  cat <<EOF
+claude-baton v${VERSION} installer
+
+Usage (from YOUR project root, which must be a git repository):
+  curl -fsSL ${REPO_RAW}/install.sh | bash
+  curl -fsSL ${REPO_RAW}/install.sh | bash -s -- --force --private
+  bash /path/to/claude-baton/install.sh [--force] [--private]
+
+Options:
+  --force    Overwrite installed files you have edited locally (refuses
+             otherwise). Never touches docs/handoff/ content or INDEX.md.
+  --private  Also add CLAUDE.md, .claude/ and docs/handoff/ to .gitignore
+             (solo mode: the methodology stays local, out of the repo).
+             Without it, the files are left for you to commit (team mode).
+  --help     This text.
+
+Uninstall:
+  curl -fsSL ${REPO_RAW}/uninstall.sh | bash
+EOF
+}
 
 FORCE=0
+PRIVATE=0
 for arg in "$@"; do
   case "$arg" in
     --force) FORCE=1 ;;
-    -h|--help)
-      sed -n '2,14p' "$0" 2>/dev/null || true
-      exit 0 ;;
-    *) echo "ERROR: unknown argument: $arg (only --force is supported)" >&2; exit 1 ;;
+    --private) PRIVATE=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "ERROR: unknown argument: $arg (see --help)" >&2; exit 1 ;;
   esac
 done
 
@@ -80,10 +94,12 @@ install_file() {
   info "installed: $dest"
 }
 
-# --- 1. Hook + slash command ------------------------------------------------
+# --- 1. Hook + slash commands -----------------------------------------------
 mkdir -p .claude/hooks .claude/commands
 install_file "$TPL/context-warn.sh" .claude/hooks/context-warn.sh 755
 install_file "$TPL/handoff.md" .claude/commands/handoff.md 644
+install_file "$TPL/kickoff.md" .claude/commands/kickoff.md 644
+install_file "$TPL/revisit.md" .claude/commands/revisit.md 644
 
 # --- 2. Register the hook in .claude/settings.json (merge, don't clobber) ---
 SETTINGS=".claude/settings.json"
@@ -123,10 +139,36 @@ else
   info "updated: CLAUDE.md (claude-baton section appended)"
 fi
 
-# --- 4. Handoff folder ------------------------------------------------------
+# --- 4. Handoff folder + library index --------------------------------------
 mkdir -p docs/handoff
 touch docs/handoff/.gitkeep
-info "ready: docs/handoff/"
+if [ -f docs/handoff/INDEX.md ]; then
+  info "unchanged: docs/handoff/INDEX.md (never overwritten: it holds your history)"
+else
+  cp "$TPL/INDEX.md" docs/handoff/INDEX.md
+  info "installed: docs/handoff/INDEX.md"
+fi
+
+# --- 5. Private mode (optional): keep the methodology out of the repo -------
+if [ "$PRIVATE" -eq 1 ]; then
+  if [ -f .gitignore ] && grep -qF "$GI_START" .gitignore; then
+    info "unchanged: .gitignore (private-mode block already present)"
+  else
+    { [ -f .gitignore ] && [ -s .gitignore ] && echo; cat <<EOF
+$GI_START
+CLAUDE.md
+.claude/
+docs/handoff/
+$GI_END
+EOF
+    } >> .gitignore
+    info "updated: .gitignore (private mode: CLAUDE.md, .claude/, docs/handoff/ ignored)"
+  fi
+  TRACKED="$(git ls-files CLAUDE.md .claude docs/handoff 2>/dev/null | head -1 || true)"
+  [ -n "$TRACKED" ] && info "NOTE: some of these files are already tracked by git; .gitignore does
+        not untrack them. To untrack (keeping them on disk):
+        git rm -r --cached CLAUDE.md .claude docs/handoff"
+fi
 
 # --- Done -------------------------------------------------------------------
 cat <<'EOF'
@@ -140,12 +182,13 @@ Done. Next steps:
        - /statusline              (see your own context % as the human)
        - 1M window? Add "env": {"CLAUDE_CONTEXT_LIMIT": "1000000"}
          to your .claude/settings.local.json
-  3. Decide with your team whether CLAUDE.md, .claude/settings.json,
-     .claude/commands/ and .claude/hooks/ get COMMITTED (shared methodology,
-     recommended for teams) or gitignored (personal setup). docs/handoff/ can
-     be committed as shared history or ignored as private notes.
+       - custom warning thresholds? "CLAUDE_CONTEXT_WARN": "60,75"
+  3. Team mode (default): commit CLAUDE.md, .claude/settings.json,
+     .claude/commands/, .claude/hooks/ and docs/handoff/ so every dev's agent
+     follows the same rules and shares the session history. Solo/private mode:
+     re-run with --private to gitignore all of it instead.
 
-Start your next session with: "read the latest handoff in docs/handoff/ and
-let's continue" (the first session has none: just start working, the first
-handoff will be written when the session closes).
+Daily cycle: start every session with /kickoff, close it with /handoff (the
+agent will also do it on its own when the context hook warns). The first
+session has no handoff yet: just start working.
 EOF

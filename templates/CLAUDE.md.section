@@ -1,30 +1,81 @@
 <!-- claude-baton:start -->
+# Working methodology (claude-baton)
+
+Installed by [claude-baton](https://github.com/compota334/claude-baton). These
+rules govern how the agent works in this repo: how it codes, how it verifies,
+how it handles errors, and how sessions open and close.
+
+## How to work
+
+- **Phases**: never multi-file refactors in a single pass. Split the work into
+  explicit phases of 5 files or fewer, and verify each phase before moving on.
+- **Cleanup first**: before a structural refactor on a file over 300 lines,
+  first remove dead code (unused imports/exports, dead props, debug logs) and
+  commit that cleanup separately.
+- **Senior level**: if the architecture is wrong, state is duplicated or
+  patterns are inconsistent, propose and apply the structural fix instead of
+  patching over it. Ask "what would a perfectionist senior dev reject in code
+  review?" and fix that.
+- **Sub-agents**: for tasks touching more than 5 independent files, launch
+  parallel sub-agents (5-8 files per agent) instead of processing sequentially.
+- **Renames**: there is no semantic search, there is grep. When renaming a
+  function/type/column, search separately for: direct calls, type-level
+  references, string literals containing the name, dynamic imports, barrel
+  files, tests and mocks. Never assume a single grep caught everything.
+- **Re-read before editing**: in long conversations, re-read a file before
+  editing it and verify the edit applied. Do not trust context memory.
+
+## Mandatory verification before reporting anything as done
+
+Run this project's own checks on everything you touched (type-check, linter,
+build, test suite, whichever exist here) and fix ALL resulting errors before
+reporting the task as complete. If the project has no checks configured, state
+that explicitly instead of claiming success. Never report success without
+having run the verification.
+
+## Error philosophy: FAIL LOUD, NEVER FAKE SUCCESS
+
+- Prefer a visible failure over any silent fallback. NO placeholder data,
+  cached defaults, alternative code paths or compatibility shims, unless the
+  owner explicitly asks for them.
+- If something fails or an edge case appears: raise a clear error and stop. Do
+  not swallow exceptions or substitute fake data. If the primary logic cannot
+  work, fail hard and say exactly why.
+- No legacy fallbacks: if the new requirement makes something redundant,
+  delete it.
+- Always attack the root cause; never hide the symptom behind a workaround.
+
 ## Sessions and handoffs (context methodology)
 
-Installed by [claude-baton](https://github.com/compota334/claude-baton). A
-Claude Code session is NEVER stretched until auto-compact: that is where the
+A Claude Code session is NEVER stretched until auto-compact: that is where the
 detail of the conversation gets lost. The cycle is: new session -> read the
 handoff -> work -> close with a handoff -> new session. The full history stays
-in `docs/handoff/` and every session starts with fresh context.
+in `docs/handoff/`, every closed conversation keeps its full context intact
+(reopenable later for questions), and every new session starts fresh.
 
-**When a session starts, the agent must:**
-1. Read the most recent handoff in `docs/handoff/` (or the one the user points
-   to) BEFORE touching any code.
+**When a session starts, the agent must (the `/kickoff` command runs this
+ritual):**
+1. Read `docs/handoff/INDEX.md` (the session catalog) and the most recent
+   handoff in `docs/handoff/` (or the one the user points to) BEFORE touching
+   any code.
 2. Check git state BEFORE working: `git fetch origin`, which branch you are on,
    whether it is up to date with its remote, and whether there is uncommitted
    work from a previous session. If it is not clear which branch to work on
    (or where to branch from), ASK the user before touching anything.
 3. Remind the user of the cycle in two lines: a hook warns at 70% and 80% of
-   the context window, at 70% the session starts closing, and at the end there
-   will be a handoff plus a new session.
+   the context window (defaults; configurable via `CLAUDE_CONTEXT_WARN`), at
+   the first warning the session starts closing, and at the end there will be
+   a handoff plus a new session.
 
 **During the session:** the repo hook (`.claude/hooks/context-warn.sh`) injects
 context warnings to the agent (the agent CANNOT see its own percentage without
 this; the human sees it in the statusline). Rules on receiving the warning:
-- **70%**: do not start new large tasks. Finish what is open, write the
-  handoff, and commit and push. The goal is to close leaving 10-15% of the
-  window free.
-- **80%**: write the handoff NOW, before anything else.
+- **Soft threshold (70% by default)**: do not start new large tasks. Finish
+  what is open, write the handoff, and commit and push. The goal is to close
+  leaving 10-15% of the window free, so the conversation stays complete and
+  can be reopened later.
+- **Hard threshold (80% by default)**: write the handoff NOW, before anything
+  else.
 
 **When closing the session (the agent does this WITHOUT being asked; also via
 `/handoff`):**
@@ -39,19 +90,41 @@ this; the human sees it in the statusline). Rules on receiving the warning:
    handoff, absorb into the new one whatever is still relevant. Handoffs
    ACCUMULATE: never delete or overwrite the old ones (that is why they carry
    dates); the newest is the starting point and the older ones remain as
-   history.
+   history. Start the handoff with the metadata header defined in `/handoff`
+   (Session, Date, Dev, Commits, Topics, Summary) and append the matching row
+   to `docs/handoff/INDEX.md` (append-only: never edit or delete old rows).
 2. Commit and push everything verified.
 3. Give the user the close-out with LITERAL, copy-ready instructions (assume an
    inexperienced user; this applies to every manual instruction you give):
    (a) "Copy and paste this into this same chat and press Enter:
    `/rename DD-MM-YY <short title of what was done>`" (the agent builds the
-   date and the title; only the human can rename), and (b) "Then close this
-   conversation, open a NEW one, and make your first message: read the handoff
-   `docs/handoff/<file just created>` and let's continue".
+   date and the title, identical to the `Session` field of the handoff
+   header; only the human can rename), and (b) "Then close this conversation,
+   open a NEW one, and make your first message: `/kickoff`".
+
+**Revisiting closed sessions:** old conversations are part of the archive:
+reopen one with the `Resume:` command from its handoff header (or `/revisit
+<topic>` finds it for you). A revisited session is for ASKING, not working:
+it sits near the top of its window. Guard warnings fire at 85, 90, 95 and
+99%. **STOP LAW: when the 99% warning arrives, do NOT answer the pending
+request. Reply only, in the user's language, that you reached 99% of context,
+that continuing will trigger auto-compact and destroy the conversation's
+remaining detail, and ask if they are SURE they want to continue. Wait for
+their explicit confirmation.** New work belongs in a new session.
+
+**If the "user" is itself an agent** (an operator agent driving Claude Code,
+e.g. an autonomous agent on a VPS): the same cycle applies unchanged, with the
+operator playing the human role. The operator answers your questions, and the
+close-out instructions of step 3 are for IT to execute, not to display: it
+sends `/rename <Session name>` into this same session, closes it, opens a new
+one, and sends `/kickoff`. NAME in handoffs is the operator's uppercase name
+(e.g. HERMES). Everything else (thresholds, handoffs, index) works identically.
 
 **Per-dev setup (once):** update Claude Code (`claude update`; old versions do
 not support the hook); enable the statusline with the context percentage
 (`/statusline`); if you use a 1M window, add
 `"env": {"CLAUDE_CONTEXT_LIMIT": "1000000"}` to your
-`.claude/settings.local.json` (the hook default is 200k).
+`.claude/settings.local.json` (the hook default is 200k). To change the
+warning thresholds, set `CLAUDE_CONTEXT_WARN` (e.g. `"60,75"`; default
+`"70,80"`) the same way.
 <!-- claude-baton:end -->
