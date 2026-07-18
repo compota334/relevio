@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# claude-baton installer
+# relevio installer
 # Installs the working methodology for Claude Code into the CURRENT directory
 # (your project root).
 set -euo pipefail
 
-VERSION="0.3.0"
-REPO_RAW="https://raw.githubusercontent.com/compota334/claude-baton/main"
+VERSION="0.4.0"
+REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh handoff.md kickoff.md revisit.md CLAUDE.md.section INDEX.md)
-MARK_START="<!-- claude-baton:start -->"
-MARK_END="<!-- claude-baton:end -->"
-GI_START="# >>> claude-baton private mode >>>"
-GI_END="# <<< claude-baton private mode <<<"
+MARK_START="<!-- relevio:start -->"
+MARK_END="<!-- relevio:end -->"
+GI_START="# >>> relevio private mode >>>"
+GI_END="# <<< relevio private mode <<<"
 
 usage() {
   cat <<EOF
-claude-baton v${VERSION} installer
+relevio v${VERSION} installer
 
 Usage (from YOUR project root, which must be a git repository):
   curl -fsSL ${REPO_RAW}/install.sh | bash
   curl -fsSL ${REPO_RAW}/install.sh | bash -s -- --force --private
-  bash /path/to/claude-baton/install.sh [--force] [--private]
+  bash /path/to/relevio/install.sh [--force] [--private]
 
 Options:
   --force    Overwrite installed files you have edited locally (refuses
@@ -48,7 +48,7 @@ done
 fail() { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "  $*"; }
 
-echo "claude-baton v${VERSION} installer"
+echo "relevio v${VERSION} installer"
 echo "Target project: $(pwd)"
 echo
 
@@ -63,7 +63,7 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "this directory is n
 SRC="${BASH_SOURCE[0]:-}"
 if [ -n "$SRC" ] && [ -f "$(dirname "$SRC")/templates/context-warn.sh" ]; then
   TPL="$(cd "$(dirname "$SRC")/templates" && pwd)"
-  [ "$(dirname "$TPL")" = "$(pwd)" ] && fail "you are running the installer inside the claude-baton repo itself.
+  [ "$(dirname "$TPL")" = "$(pwd)" ] && fail "you are running the installer inside the relevio repo itself.
        cd into YOUR project first, then run: bash $(pwd)/install.sh"
   info "using local templates: $TPL"
 else
@@ -130,13 +130,13 @@ elif grep -qF "$MARK_START" CLAUDE.md; then
       'index($0,s){skip=1} !skip{print} index($0,e){skip=0}' CLAUDE.md > CLAUDE.md.tmp
     { echo; cat "$TPL/CLAUDE.md.section"; } >> CLAUDE.md.tmp
     mv CLAUDE.md.tmp CLAUDE.md
-    info "updated: CLAUDE.md (claude-baton section refreshed, moved to the end)"
+    info "updated: CLAUDE.md (relevio section refreshed, moved to the end)"
   else
-    info "unchanged: CLAUDE.md (claude-baton section already present; --force refreshes it)"
+    info "unchanged: CLAUDE.md (relevio section already present; --force refreshes it)"
   fi
 else
   { echo; cat "$TPL/CLAUDE.md.section"; } >> CLAUDE.md
-  info "updated: CLAUDE.md (claude-baton section appended)"
+  info "updated: CLAUDE.md (relevio section appended)"
 fi
 
 # --- 4. Handoff folder + library index --------------------------------------

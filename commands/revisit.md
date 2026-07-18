@@ -23,7 +23,7 @@ session title; if empty, ask what the user is looking for).
    It reopens near the top of its context window; guard warnings fire at 85,
    90, 95 and 99%, and at 99% the agent stops and asks for confirmation before
    any reply that could trigger auto-compact. New work belongs in a new
-   session started with /claude-baton:kickoff.
+   session started with /relevio:kickoff.
 
 If the handoff has no `Resume:` line (sessions closed before this convention),
 say so: the conversation can still be reopened by clicking its name in the

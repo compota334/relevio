@@ -1,24 +1,24 @@
 {
-  "name": "claude-baton",
+  "name": "relevio",
   "owner": {
     "name": "compota334",
     "email": "compota334@gmail.com",
     "url": "https://github.com/compota334"
   },
-  "description": "The claude-baton plugin: session and handoff methodology for Claude Code.",
+  "description": "The relevio plugin: session and handoff methodology for Claude Code.",
   "plugins": [
     {
-      "name": "claude-baton",
+      "name": "relevio",
       "source": "./",
       "description": "Pass the baton between Claude Code sessions: context-usage warnings for the agent, the /kickoff and /handoff cycle, and a navigable archive of never-compacted conversations.",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "author": {
         "name": "compota334",
         "email": "compota334@gmail.com",
         "url": "https://github.com/compota334"
       },
-      "homepage": "https://github.com/compota334/claude-baton",
-      "repository": "https://github.com/compota334/claude-baton",
+      "homepage": "https://github.com/compota334/relevio",
+      "repository": "https://github.com/compota334/relevio",
       "license": "MIT",
       "keywords": ["sessions", "handoff", "context", "auto-compact", "methodology", "hooks"]
     }

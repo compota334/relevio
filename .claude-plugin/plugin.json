@@ -1,15 +1,15 @@
 {
-  "name": "claude-baton",
-  "displayName": "Claude Baton",
-  "version": "0.3.0",
+  "name": "relevio",
+  "displayName": "Relevio",
+  "version": "0.4.0",
   "description": "Pass the baton between Claude Code sessions: context-usage warnings for the agent, the /kickoff and /handoff cycle, and a navigable archive of never-compacted conversations.",
   "author": {
     "name": "compota334",
     "email": "compota334@gmail.com",
     "url": "https://github.com/compota334"
   },
-  "homepage": "https://github.com/compota334/claude-baton",
-  "repository": "https://github.com/compota334/claude-baton",
+  "homepage": "https://github.com/compota334/relevio",
+  "repository": "https://github.com/compota334/relevio",
   "license": "MIT",
   "keywords": ["sessions", "handoff", "context", "auto-compact", "methodology", "hooks"]
 }

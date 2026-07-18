@@ -1,4 +1,4 @@
-# claude-baton
+# relevio
 
 Pass the baton between Claude Code sessions instead of running them into the
 ground. One command installs a complete working methodology into any project:
@@ -13,7 +13,7 @@ pile of conversations named "Untitled", most of them auto-compacted (their
 detail destroyed by summarization), and no record of why anything was done the
 way it was.
 
-With claude-baton, your history becomes a complete, navigable archive:
+With relevio, your history becomes a complete, navigable archive:
 
 - **Every conversation gets closed BEFORE auto-compact**, renamed to
   `DD-MM-YY short-title`, and ends with a written handoff document. Your
@@ -89,7 +89,7 @@ that make agent output trustworthy:
 
 ## Install
 
-There are two ways to get claude-baton: as a **Claude Code plugin** (simplest,
+There are two ways to get relevio: as a **Claude Code plugin** (simplest,
 follows you across every project) or with the **script installer** (installs
 into one repo, so a team can commit and share it).
 
@@ -98,13 +98,13 @@ into one repo, so a team can commit and share it).
 Inside any Claude Code session, run:
 
 ```
-/plugin marketplace add compota334/claude-baton
-/plugin install claude-baton@claude-baton
+/plugin marketplace add compota334/relevio
+/plugin install relevio@relevio
 ```
 
 That's it: the context hook and the commands are active in every project you
-open. Plugin commands are namespaced: use `/claude-baton:kickoff`,
-`/claude-baton:handoff` and `/claude-baton:revisit`. `docs/handoff/` is
+open. Plugin commands are namespaced: use `/relevio:kickoff`,
+`/relevio:handoff` and `/relevio:revisit`. `docs/handoff/` is
 created in each project the first time you close a session there.
 
 What the plugin does NOT carry: the CLAUDE.md methodology section (plugins
@@ -120,22 +120,22 @@ macOS supported):
 
 ```bash
 cd /path/to/your/project
-curl -fsSL https://raw.githubusercontent.com/compota334/claude-baton/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/compota334/relevio/main/install.sh | bash
 ```
 
 Or from a local clone:
 
 ```bash
-git clone https://github.com/compota334/claude-baton.git
+git clone https://github.com/compota334/relevio.git
 cd /path/to/your/project
-bash /path/to/claude-baton/install.sh
+bash /path/to/relevio/install.sh
 ```
 
 The installer is idempotent: re-run it any time to update. It never overwrites
 a file you have edited unless you pass `--force`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/compota334/claude-baton/main/install.sh | bash -s -- --force
+curl -fsSL https://raw.githubusercontent.com/compota334/relevio/main/install.sh | bash -s -- --force
 ```
 
 By default the installed files are left for you to commit (team mode:
@@ -237,7 +237,7 @@ user). The cycle is unchanged; the operator plays the human role:
 
 ```bash
 cd /path/to/your/project
-curl -fsSL https://raw.githubusercontent.com/compota334/claude-baton/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/compota334/relevio/main/uninstall.sh | bash
 ```
 
 Removes the hook, the commands, the settings entry, the CLAUDE.md section

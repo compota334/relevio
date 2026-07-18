@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
-# claude-baton uninstaller
+# relevio uninstaller
 # Removes everything install.sh added to the CURRENT directory, EXCEPT
 # docs/handoff/ (your history) which is always kept.
 #
 # Usage (from your project root):
-#   curl -fsSL https://raw.githubusercontent.com/compota334/claude-baton/main/uninstall.sh | bash
-#   bash /path/to/claude-baton/uninstall.sh
+#   curl -fsSL https://raw.githubusercontent.com/compota334/relevio/main/uninstall.sh | bash
+#   bash /path/to/relevio/uninstall.sh
 set -euo pipefail
 
-MARK_START="<!-- claude-baton:start -->"
-MARK_END="<!-- claude-baton:end -->"
-GI_START="# >>> claude-baton private mode >>>"
-GI_END="# <<< claude-baton private mode <<<"
+MARK_START="<!-- relevio:start -->"
+MARK_END="<!-- relevio:end -->"
+GI_START="# >>> relevio private mode >>>"
+GI_END="# <<< relevio private mode <<<"
 
 fail() { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "  $*"; }
 
-echo "claude-baton uninstaller"
+echo "relevio uninstaller"
 echo "Target project: $(pwd)"
 echo
 
@@ -62,13 +62,13 @@ if [ -f CLAUDE.md ] && grep -qF "$MARK_START" CLAUDE.md; then
   LEFT="$(grep -v '^[[:space:]]*$' CLAUDE.md.tmp | grep -vx '# Instructions for agents' | wc -l)" || true
   if [ "$LEFT" -eq 0 ]; then
     rm CLAUDE.md CLAUDE.md.tmp
-    info "removed: CLAUDE.md (it only contained the claude-baton section)"
+    info "removed: CLAUDE.md (it only contained the relevio section)"
   else
     mv CLAUDE.md.tmp CLAUDE.md
-    info "updated: CLAUDE.md (claude-baton section removed, your content kept)"
+    info "updated: CLAUDE.md (relevio section removed, your content kept)"
   fi
 else
-  info "unchanged: CLAUDE.md (no claude-baton section found)"
+  info "unchanged: CLAUDE.md (no relevio section found)"
 fi
 
 # --- 4. Private-mode block in .gitignore -------------------------------------

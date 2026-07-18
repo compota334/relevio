@@ -2,7 +2,7 @@
 description: Open a session — read the latest handoff, check git state, summarize where things stand
 ---
 
-Open this session following the claude-baton cycle: a session is NEVER
+Open this session following the relevio cycle: a session is NEVER
 stretched until auto-compact (that is where the conversation's detail gets
 lost). Each session opens from the previous session's handoff and will close
 with its own; a hook warns you at 70% and 80% of the context window (or the
@@ -24,7 +24,7 @@ baton from the previous session.
    truth, resumable jobs). Close the summary with the two-line reminder of the
    cycle: the hook warns at 70% and 80% of the context window; at the first
    warning the session starts closing (no new large tasks), and it will end
-   with a handoff (`/claude-baton:handoff`) plus a new session.
+   with a handoff (`/relevio:handoff`) plus a new session.
 4. Then propose starting with the first pending item from the handoff and wait
    for the user's confirmation or their own direction. Do not start coding
    before that confirmation.

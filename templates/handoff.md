@@ -52,8 +52,8 @@ append ONE row to the table with the same data as the metadata header (Date,
 Session, Handoff file, Commits, Topics, Summary). The Commits column carries
 the same `<first>..<last>` range as the header, so from the index anyone can
 run `git log <first>..<last>` and read the session's work commit by commit.
-If INDEX.md does not exist, create it by copying the claude-baton template
-(https://github.com/compota334/claude-baton/blob/main/templates/INDEX.md).
+If INDEX.md does not exist, create it by copying the relevio template
+(https://github.com/compota334/relevio/blob/main/templates/INDEX.md).
 Rows are append-only: never edit or delete existing rows.
 
 Finally, close with LITERAL instructions the user can copy (assume an

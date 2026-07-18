@@ -1,7 +1,7 @@
-<!-- claude-baton:start -->
-# Working methodology (claude-baton)
+<!-- relevio:start -->
+# Working methodology (relevio)
 
-Installed by [claude-baton](https://github.com/compota334/claude-baton). These
+Installed by [relevio](https://github.com/compota334/relevio). These
 rules govern how the agent works in this repo: how it codes, how it verifies,
 how it handles errors, and how sessions open and close.
 
@@ -127,4 +127,4 @@ not support the hook); enable the statusline with the context percentage
 `.claude/settings.local.json` (the hook default is 200k). To change the
 warning thresholds, set `CLAUDE_CONTEXT_WARN` (e.g. `"60,75"`; default
 `"70,80"`) the same way.
-<!-- claude-baton:end -->
+<!-- relevio:end -->
