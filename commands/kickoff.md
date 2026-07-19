@@ -14,7 +14,10 @@ The hook also sends you informational checkpoints at 10, 20, 30, 40, 50 and
 them to PACE the session. With plenty of window left, work normally; from
 around 50-60%, prefer finishing what is open over kicking off the largest
 pending task, and factor the remaining window into any plan you propose (a
-big refactor does not fit in the last 40% of a session).
+big refactor does not fit in the last 40% of a session). Do NOT write the
+handoff early: closing is triggered only by the hook's close-out warnings or
+by the user asking; a finished phase with window still available is a reason
+to keep working, not to close.
 
 1. Read `docs/handoff/INDEX.md` if it exists (the catalog of all sessions),
    then read the most recent handoff in `docs/handoff/` (or the one the user

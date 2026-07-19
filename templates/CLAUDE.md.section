@@ -89,8 +89,11 @@ this; the human sees it in the statusline). You will receive two kinds:
 - **Hard threshold (80% by default)**: write the handoff NOW, before anything
   else.
 
-**When closing the session (the agent does this WITHOUT being asked; also via
-`/handoff`):**
+**When closing the session (also via `/handoff`):** the close-out is
+triggered ONLY by the hook's soft/hard warning or by the user asking for it.
+Do NOT write the handoff early just because a phase or component feels
+finished: with window still available, keep working. When the warning
+arrives, act on your own, without waiting to be asked:
 1. Write the handoff to `docs/handoff/YYYY-MM-DD_<short-title>.md`, where
    `<short-title>` is the same kebab-case title the session name carries (no
    author and no "handoff" suffix in the filename; the author goes in the
