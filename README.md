@@ -107,6 +107,14 @@ open. Plugin commands are namespaced: use `/relevio:kickoff`,
 `/relevio:handoff` and `/relevio:revisit`. `docs/handoff/` is
 created in each project the first time you close a session there.
 
+The plugin also ships a SessionStart hook that arms the agent with the
+methodology at the start of EVERY session, kickoff or not (plugins cannot
+auto-load a CLAUDE.md, so this hook plays that role). The injected message
+adapts to how the session started: a fresh session gets the cycle summary, a
+REOPENED conversation gets the revisit rules automatically (ask, don't work),
+and a session that just auto-compacted is told to salvage what remains into a
+handoff.
+
 What the plugin does NOT carry: the CLAUDE.md methodology section (plugins
 cannot auto-load CLAUDE.md content). The session cycle works fully; if you
 also want the engineering rules (fail loud, phased work, mandatory
@@ -222,6 +230,22 @@ of its context window. The hook fires guard warnings at 85, 90, 95 and 99%,
 and the installed CLAUDE.md contains a STOP LAW: at 99% the agent must not
 answer; it must warn (in the user's language) that one more exchange may
 trigger auto-compact and ask for explicit confirmation to continue.
+
+## Subagents
+
+Sub-agents (the Task tool) and the session cycle complement each other, and
+they do NOT interfere:
+
+- Subagents have their own separate, ephemeral context windows. Work delegated
+  to them barely consumes the main session's window (only their returned
+  summary enters it), so delegating actually makes sessions last longer.
+- **Subagents never write handoffs.** The handoff documents the main
+  conversation, which already received every subagent's report. A subagent's
+  context is discarded when it finishes and cannot be revisited, so anything
+  important a subagent finds must come back in its summary to the main
+  thread: that is what the handoff (and the archive) preserves.
+- The context hooks do not reach subagents: warnings are injected into the
+  main agent only, so a subagent will never try to close your session.
 
 ## Agent operators: when the "user" is itself an agent
 
