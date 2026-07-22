@@ -134,15 +134,20 @@ arrives, act on your own, without waiting to be asked:
    for more code in this same session, do NOT commit on the detached HEAD
    (those commits belong to no branch and get lost): re-establish a branch
    first (fresh worktree, or ask) and point new work to a new session.
-4. Give the user the close-out with LITERAL, copy-ready instructions (assume an
-   inexperienced user; this applies to every manual instruction you give):
-   (a) "Copy and paste this into this same chat and press Enter:
-   `/rename DD-MM-YY <short title of what was done>`" (the agent builds the
-   date and the title, identical to the `Session` field of the handoff
-   header; only the human can rename), and (b) "Then close this conversation,
-   open a NEW one, and make your first message: `/kickoff`", and in that same
-   message state the branch this session worked on and the handoff file, so the
-   next session can reconcile the branch even if it opens on a different one.
+4. Give the user the close-out with LITERAL instructions (assume an
+   inexperienced user; this applies to every manual instruction you give). It is
+   TWO commands, and you MUST put each one in its own fenced code block so the
+   user copies it in one click, never buried inline in a sentence:
+   (a) to rename this session, say "Copy and paste this into this same chat and
+   press Enter:" followed by a code block containing
+   `/rename DD-MM-YY <short title of what was done>` (you build the date and the
+   title, identical to the `Session` field of the handoff header; only the human
+   can rename); (b) to open the next one, say "Then close this conversation, open
+   a NEW one, and paste this as the first message:" followed by a code block
+   containing just `/kickoff` (it already finds and reads the latest handoff on
+   its own; do NOT ask the user to type anything else). Apart from the blocks,
+   state the branch this session worked on and the handoff file, so the next
+   session can reconcile the branch even if it opens on a different one.
 
 **Revisiting closed sessions:** old conversations are part of the archive:
 reopen one with the `Resume:` command from its handoff header (or `/revisit

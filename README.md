@@ -200,9 +200,9 @@ Handoff rules (the agent gets them from CLAUDE.md and `/handoff`):
 - **Handoffs accumulate**: never delete or overwrite old ones; that is why
   they carry dates. The newest is the starting point, the rest is history.
 - **Close-out is literal**: the agent ends every session with copy-paste
-  instructions for the human (rename the session, open a new one, first
-  message: "read the handoff X and let's continue"). The close-out also names
-  the branch it worked on (see below).
+  instructions for the human, each command in its own one-click-copyable code
+  block (rename the session with `/rename`; open a new one whose first message
+  is `/kickoff`). The close-out also names the branch it worked on (see below).
 
 ### Handoffs live on the branch you worked on
 

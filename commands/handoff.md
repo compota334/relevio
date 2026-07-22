@@ -77,16 +77,19 @@ inexperienced user):
    locked for every future session. Detaching frees it instantly while the
    worktree directory stays alive, pinned at this session's final commit, so
    this conversation remains revisitable. Tell the user you did it.
-3. Tell the user, word for word: "Copy and paste this into this same chat and
-   press Enter: `/rename <the exact Session name from the header>`" (only the
-   human can rename).
-4. Tell the user: "Then close this conversation, open a NEW one, and make your
-   first message: `/relevio:kickoff`." State, in that same message, the branch
-   this session worked on and the handoff file, so the next session can
-   reconcile the branch even if it opens on a different one: e.g. "This session
-   worked on branch `<branch>` (handoff `docs/handoff/<file just created>`);
-   /relevio:kickoff will read it and confirm the branch with you before
-   continuing."
+3. Close with TWO commands, and put EACH in its own fenced code block so the
+   user copies it in one click, never buried inline in a sentence:
+   - To rename this session: say "Copy and paste this into this same chat and
+     press Enter:" then a code block with `/rename <the exact Session name from
+     the header>` (only the human can rename).
+   - To open the next one: say "Then close this conversation, open a NEW one, and
+     paste this as the first message:" then a code block with just
+     `/relevio:kickoff` (it already finds and reads the latest handoff on its
+     own). Apart from the block, state the branch this session worked on and the
+     handoff file, so the next session can reconcile even if it opens on a
+     different branch: e.g. "This session worked on branch `<branch>` (handoff
+     `docs/handoff/<file just created>`); /relevio:kickoff will read it and
+     confirm the branch with you before continuing."
 
 After this close-out, if the user asks you to write or edit MORE code in this
 same session: do NOT code in place. If you detached in step 2 you are on a
