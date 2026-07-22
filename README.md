@@ -156,9 +156,11 @@ it also writes a marked block to `.gitignore` so `CLAUDE.md`, `.claude/` and
 
 - Restart Claude Code in the project (hooks load when a session starts).
 - Per dev, once: run `claude update` (old versions do not support the hook)
-  and `/statusline` (so the human sees the context % too). The hook detects
-  the model's real context window automatically (1M for current models, 200k
-  for Haiku); if it ever gets it wrong, override with
+  and `/statusline` (so the human sees the context % too). The hook maps the
+  model to its real context window (1M for current models, 200k for Haiku) and
+  warns by percentage; a model it does not recognize gets its raw token count
+  every 100k instead of a guessed size. Force percentage mode (or fix a
+  mis-detected known model) with
   `"env": {"CLAUDE_CONTEXT_LIMIT": "1000000"}` in your
   `.claude/settings.local.json`. To change the warning thresholds, set
   `"CLAUDE_CONTEXT_WARN": "60,75"` the same way (default `"70,80"`).
@@ -239,15 +241,17 @@ remove`, never forced), and offers to prune detached leftovers.
 
 Claude Code emits a JSONL transcript per session that includes per-message
 token usage. On every tool call (PostToolUse, matcher `*`), the hook reads the
-most recent usage entry and computes the percentage against the model's REAL
-context window: it maps the session's model to its documented window (1M for
-every current model, 200k for Haiku 4.5 and older models), falls back to a
-conservative 200k for unknown models (warning too early is annoying; warning
-too late lets auto-compact hit unannounced), and self-corrects to 1M with a
-loud one-time notice if measured usage ever exceeds the assumed window, which
-proves it wrong. An explicit `CLAUDE_CONTEXT_LIMIT` overrides the detection.
-When a band is crossed it injects a notice into the agent's context via
-`additionalContext`:
+most recent usage entry; what it does with it depends on whether it can size
+the window. For a model it recognizes it computes a percentage against that
+model's REAL window (1M for current models, 200k for Haiku 4.5) and, if
+measured usage ever exceeds that window, self-corrects to 1M with a loud
+one-time notice (evidence beats a wrong assumption). For a model it does NOT
+recognize it refuses to guess a size (that would be a silent fallback): it
+just reports the running token count every 100k and lets the agent -- which
+knows its own window -- decide when to hand off, with no percentage, no
+close-out and no STOP LAW. An explicit `CLAUDE_CONTEXT_LIMIT` overrides
+detection and forces percentage mode. When a band is crossed it injects a
+notice into the agent's context via `additionalContext`:
 
 - **10, 20, 30, 40, 50, 60%**: informational checkpoints. No action required;
   they simply keep the agent aware of where it stands (without the hook, the
@@ -255,6 +259,9 @@ When a band is crossed it injects a notice into the agent's context via
 - **70 and 80%** (or the custom `CLAUDE_CONTEXT_WARN` thresholds): the
   close-out warnings described in the cycle above.
 - **85, 90, 95, 99%**: the revisit guards, ending in the STOP LAW.
+- **Unrecognized model**: none of the above. Instead, a single raw token count
+  every 100k, leaving the handoff call to the agent's own knowledge of its
+  window.
 
 A marker file in `/tmp` guarantees each band fires only once per session, and
 if one tool call jumps several bands at once, only the most serious one

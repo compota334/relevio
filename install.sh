@@ -4,7 +4,7 @@
 # (your project root).
 set -euo pipefail
 
-VERSION="0.10.0"
+VERSION="0.11.0"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh handoff.md kickoff.md revisit.md CLAUDE.md.section INDEX.md)
 MARK_START="<!-- relevio:start -->"
@@ -180,8 +180,9 @@ Done. Next steps:
   2. Per dev, once:
        - claude update            (old versions do not support the hook)
        - /statusline              (see your own context % as the human)
-       - context window is auto-detected per model (1M current, 200k Haiku);
-         override with "env": {"CLAUDE_CONTEXT_LIMIT": "..."} only if wrong
+       - window auto-detected per model (1M current, 200k Haiku) for the
+         percentage; an unrecognized model gets a raw token count every 100k
+         instead. Force percentage with "env": {"CLAUDE_CONTEXT_LIMIT": "..."}
        - custom warning thresholds? "CLAUDE_CONTEXT_WARN": "60,75"
   3. Team mode (default): commit CLAUDE.md, .claude/settings.json,
      .claude/commands/, .claude/hooks/ and docs/handoff/ so every dev's agent

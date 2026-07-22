@@ -164,9 +164,12 @@ one, and sends `/kickoff`. NAME in handoffs is the operator's uppercase name
 
 **Per-dev setup (once):** update Claude Code (`claude update`; old versions do
 not support the hook); enable the statusline with the context percentage
-(`/statusline`). The hook detects the model's context window automatically
-(1M for current models, 200k for Haiku); override with
-`"env": {"CLAUDE_CONTEXT_LIMIT": "1000000"}` in `.claude/settings.local.json`
-only if it gets it wrong. To change the warning thresholds, set
+(`/statusline`). The hook maps the session's model to its real context window
+(1M for current models, 200k for Haiku) and warns by percentage; a model it
+does not recognize gets its raw token count every 100k instead of a guessed
+size, and you decide when to hand off. Force percentage warnings (or fix a
+mis-detected known model) with
+`"env": {"CLAUDE_CONTEXT_LIMIT": "1000000"}` in `.claude/settings.local.json`.
+To change the warning thresholds, set
 `CLAUDE_CONTEXT_WARN` (e.g. `"60,75"`; default `"70,80"`) the same way.
 <!-- relevio:end -->

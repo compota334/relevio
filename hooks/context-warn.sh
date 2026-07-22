@@ -4,27 +4,34 @@
 # usage from the transcript and injecting a notice via additionalContext
 # (PostToolUse). Each band warns ONCE per session.
 #
-# Bands: informational checkpoints every 10% from 10 to 60% (no action, they
-# just keep the agent aware), soft/hard close-out thresholds (default 70,80;
+# Two modes, chosen by whether the model's window size is known:
+#
+# PERCENTAGE mode (window size known -- see resolution below). Bands:
+# informational checkpoints every 10% from 10 to 60% (no action, they just keep
+# the agent aware), soft/hard close-out thresholds (default 70,80;
 # CLAUDE_CONTEXT_WARN), plus fixed revisit guards at 85, 90, 95 and 99% for
 # reopened sessions. At 99% the STOP LAW applies: the agent must stop and ask
 # before continuing. If several bands are crossed in one jump, only the most
 # serious one speaks; the rest are marked silently.
 #
+# RAW-COUNT mode (window size UNKNOWN). The hook does NOT invent a window:
+# faking a percentage against an assumed size is a silent fallback, and
+# fail-loud forbids it (a wrong limit either screams STOP LAW at a real 20% or
+# stays mute past a real 100%). It just reports the running token count once per
+# 100k and leaves the judgement to the agent, which knows its own real window
+# and decides when to hand off. No percentage, no close-out, no STOP LAW.
+#
 # Config (via env, e.g. "env" in .claude/settings.local.json):
-#   CLAUDE_CONTEXT_LIMIT  window size in tokens (default 200000; 1M users: 1000000)
+#   CLAUDE_CONTEXT_LIMIT  window size in tokens; overrides model detection and
+#                         forces PERCENTAGE mode (set it to give an unknown
+#                         model a percentage instead of the raw count)
 #   CLAUDE_CONTEXT_WARN   "soft,hard" percentages (default "70,80")
-# Without CLAUDE_CONTEXT_LIMIT the hook auto-detects 1M windows (known 1M
-# models, or measured usage above the assumed limit, which proves it wrong).
 #
 # Portable: Linux and macOS (no tac, no GNU-only flags). Requires jq.
 INPUT=$(cat)
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 SESSION=$(echo "$INPUT" | jq -r '.session_id // "nosession"')
 { [ -z "$TRANSCRIPT" ] || [ ! -f "$TRANSCRIPT" ]; } && exit 0
-
-LIMIT="${CLAUDE_CONTEXT_LIMIT:-200000}"
-WARN="${CLAUDE_CONTEXT_WARN:-70,80}"
 
 emit() {
   jq -n --arg msg "$1" \
@@ -36,14 +43,6 @@ once() {
   touch "$mark"
 }
 
-SOFT="${WARN%%,*}"
-HARD="${WARN##*,}"
-if ! [[ "$SOFT" =~ ^[0-9]+$ && "$HARD" =~ ^[0-9]+$ ]] || [ "$SOFT" -ge "$HARD" ]; then
-  # Loud, but once: a misconfigured hook must not fake-work silently.
-  once config && emit "relevio: CLAUDE_CONTEXT_WARN is invalid (\"$WARN\"). Expected two increasing percentages like \"70,80\". Context warnings are DISABLED until it is fixed; tell the user."
-  exit 0
-fi
-
 # Last real usage entry. grep streams the file and works on both GNU and BSD.
 USED=$(grep '"input_tokens"' "$TRANSCRIPT" 2>/dev/null | tail -1 | jq -r '
   .message.usage as $u |
@@ -53,22 +52,17 @@ USED=$(grep '"input_tokens"' "$TRANSCRIPT" 2>/dev/null | tail -1 | jq -r '
 [[ "$USED" =~ ^[0-9]+$ ]] || exit 0
 [ "$USED" -eq 0 ] && exit 0
 
-# Window-size detection. A wrong LIMIT makes every percentage a lie (a 1M
-# session read against 200k screams STOP LAW at a real 30%), so the limit is
-# resolved per MODEL, not from a blind default:
-# 1) explicit CLAUDE_CONTEXT_LIMIT always wins;
-# 2) otherwise, map the session's model to its real window (table below,
-#    from Anthropic's model catalog as of 2026-06: every current model is 1M
-#    except Haiku 4.5 at 200k; older 4.5-and-earlier models are 200k);
-# 3) unknown models fall back to 200k ON PURPOSE: underestimating warns too
-#    early (annoying, self-corrects), overestimating warns too late and lets
-#    auto-compact hit unannounced, which is the one failure relevio exists to
-#    prevent;
-# 4) backstop: if USED exceeds LIMIT the limit is PROVABLY wrong (a real
-#    window cannot be over 100% full): correct it to 1M and say so once,
-#    loudly, instead of firing false alarms. This also self-corrects case 3
-#    and an explicit-but-wrong CLAUDE_CONTEXT_LIMIT (evidence beats config).
-if [ -z "${CLAUDE_CONTEXT_LIMIT:-}" ]; then
+# Resolve the context-window size, in precedence order:
+# 1) explicit CLAUDE_CONTEXT_LIMIT always wins (forces PERCENTAGE mode);
+# 2) else map the session's model to its real window (table from Anthropic's
+#    catalog as of 2026-06: current models are 1M, except Haiku 4.5 at 200k;
+#    the [1m] tag catches any 1M session whose exact id is not listed);
+# 3) UNKNOWN model => leave LIMIT empty and drop to RAW-COUNT mode below. We do
+#    NOT fall back to a guessed size: assuming 200k (or any number) is the
+#    silent fallback fail-loud forbids -- a model relevio cannot identify gets
+#    raw token counts, and the agent applies its own window knowledge.
+LIMIT="${CLAUDE_CONTEXT_LIMIT:-}"
+if [ -z "$LIMIT" ]; then
   MODEL=$(grep -o '"model":"[^"]*"' "$TRANSCRIPT" 2>/dev/null | tail -1)
   case "$MODEL" in
     *haiku*)  LIMIT=200000 ;;
@@ -76,6 +70,33 @@ if [ -z "${CLAUDE_CONTEXT_LIMIT:-}" ]; then
               LIMIT=1000000 ;;
   esac
 fi
+
+# RAW-COUNT mode: unknown window. Report the current 100k mark once. Only the
+# mark just crossed speaks; usage climbs, so lower marks are already behind us.
+# No percentage, no close-out thresholds, no STOP LAW: the decision is the
+# agent's, since it -- not this hook -- knows the model's real window size.
+if [ -z "$LIMIT" ]; then
+  HUNDREDS=$(( USED / 100000 ))
+  [ "$HUNDREDS" -lt 1 ] && exit 0
+  once "k${HUNDREDS}" || exit 0
+  emit "CONTEXT: ${USED} tokens used so far (past the $(( HUNDREDS * 100 ))k mark). relevio does not recognize this session's model, so it will NOT guess the context-window size or compute a percentage (guessing would be a silent fallback), and NO close-out or STOP-LAW warnings will fire. You know your own context window: use this running token count to decide when to close out -- write the handoff, commit and push, then a fresh session -- and keep the user informed of where things stand. To switch this session to percentage warnings, set \"env\": {\"CLAUDE_CONTEXT_LIMIT\": \"<tokens>\"} in .claude/settings.local.json."
+  exit 0
+fi
+
+# --- PERCENTAGE mode (window size known) ---
+WARN="${CLAUDE_CONTEXT_WARN:-70,80}"
+SOFT="${WARN%%,*}"
+HARD="${WARN##*,}"
+if ! [[ "$SOFT" =~ ^[0-9]+$ && "$HARD" =~ ^[0-9]+$ ]] || [ "$SOFT" -ge "$HARD" ]; then
+  # Loud, but once: a misconfigured hook must not fake-work silently.
+  once config && emit "relevio: CLAUDE_CONTEXT_WARN is invalid (\"$WARN\"). Expected two increasing percentages like \"70,80\". Context warnings are DISABLED until it is fixed; tell the user."
+  exit 0
+fi
+
+# Backstop: if USED exceeds LIMIT the limit is PROVABLY wrong (a real window
+# cannot be over 100% full). Correct it to 1M and say so once, loudly, instead
+# of firing false alarms (evidence beats config, including a wrong explicit
+# CLAUDE_CONTEXT_LIMIT).
 if [ "$USED" -gt "$LIMIT" ]; then
   if [ "$USED" -le 1000000 ]; then
     once limitfix && emit "relevio: measured usage (${USED} tokens) exceeds the assumed context window of ${LIMIT} tokens, which is impossible in a real window; this session clearly runs a 1M-token window${CLAUDE_CONTEXT_LIMIT:+ (your explicit CLAUDE_CONTEXT_LIMIT=${CLAUDE_CONTEXT_LIMIT} looks wrong)}. Percentages now use 1,000,000 for this session. Tell the user to make it permanent with \"env\": {\"CLAUDE_CONTEXT_LIMIT\": \"1000000\"} in .claude/settings.local.json." && exit 0
