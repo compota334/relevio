@@ -71,9 +71,13 @@ ritual):**
    <handoff-commit> origin/main`), then ASK the user which branch to work on,
    explaining the situation ("last session was on `feat-x`, not yet on main;
    you are on `main`"). Never switch branches on your own: switch only on the
-   user's confirmation, never over uncommitted changes, and if the target
-   branch is checked out in another git worktree, tell the user to open the
-   session in that worktree instead. If the branch is unclear, ASK first.
+   user's confirmation, never over uncommitted changes. If the target branch
+   is checked out in another git worktree (`git worktree list`), ask whether
+   that worktree's session is still alive: if it is, the user should open the
+   session in that worktree; if it closed, free the branch with `git worktree
+   remove <path>` (only if clean; never `--force` without the user's explicit
+   OK). Offer to prune detached-HEAD worktrees left by closed sessions. If
+   the branch is unclear, ASK first.
 3. Remind the user of the cycle in two lines: a hook warns at 70% and 80% of
    the context window (defaults; configurable via `CLAUDE_CONTEXT_WARN`), at
    the first warning the session starts closing, and at the end there will be
@@ -121,7 +125,16 @@ arrives, act on your own, without waiting to be asked:
    delete old rows).
 2. Commit and push everything verified (this is what makes the handoff visible
    to the next session; it must happen before the close-out below).
-3. Give the user the close-out with LITERAL, copy-ready instructions (assume an
+3. If the session runs inside a git worktree (the path from `git rev-parse
+   --git-dir` contains `/worktrees/`), release the branch AFTER the push:
+   `git switch --detach`. A branch can be checked out in only one worktree,
+   so without this it stays locked for future sessions; detaching frees it
+   while the worktree stays alive at this session's final commit (the
+   conversation remains revisitable). After the close-out, if the user asks
+   for more code in this same session, do NOT commit on the detached HEAD
+   (those commits belong to no branch and get lost): re-establish a branch
+   first (fresh worktree, or ask) and point new work to a new session.
+4. Give the user the close-out with LITERAL, copy-ready instructions (assume an
    inexperienced user; this applies to every manual instruction you give):
    (a) "Copy and paste this into this same chat and press Enter:
    `/rename DD-MM-YY <short title of what was done>`" (the agent builds the

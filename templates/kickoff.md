@@ -31,11 +31,19 @@ CLAUDE.md: you are picking up the baton from the previous session.
      e.g. "the last session worked on `feat-x`, which is NOT yet on main; you
      are on `main`. Continue on `feat-x`, or start a new branch from here?"
    - Do NOT switch branches on your own. Switch only after the user confirms,
-     and only safely: never `git checkout` over uncommitted changes, and if the
+     and only safely: never `git checkout` over uncommitted changes. If the
      target branch is checked out in another git worktree (`git worktree
-     list`), you CANNOT switch to it here — tell the user to open the session
-     in that worktree's directory instead. If anything about the branch is
-     unclear, ASK before touching code.
+     list`), you CANNOT switch to it here; ask the user whether that
+     worktree's session is still ALIVE. If it is, tell them to open the
+     session in that worktree's directory instead. If it already closed, free
+     the branch from the main repo with `git worktree remove <path>`; but
+     only if that worktree is clean; NEVER use `--force` without the user's
+     explicit OK (a dirty worktree may hold uncommitted work). If anything
+     about the branch is unclear, ASK before touching code.
+   - Housekeeping: if `git worktree list` shows worktrees in detached HEAD
+     left behind by closed sessions, mention them and offer to prune
+     (`git worktree remove <path>`): safe when clean, since their code lives
+     in the branches.
 3. Give the user a short opening summary: where the project stands according
    to the handoff, the pending work in order, and any operational state the
    handoff recorded (running services, which environment is the source of

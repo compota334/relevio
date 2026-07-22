@@ -218,6 +218,22 @@ worktree it tells you to open the session there. Two things make this reliable:
 the handoff always records its `Branch:`, and the close-out always commits and
 pushes before handing over.
 
+### Worktrees and parallel sessions
+
+Running parallel sessions in git worktrees is fully supported, with one rule:
+git allows a branch to be checked out in only ONE worktree, so a finished
+session must not keep its branch hostage. The close-out handles it: after the
+final commit and push, a session running in a worktree runs `git switch
+--detach`. That frees the branch instantly for future sessions, while the
+worktree directory stays alive, pinned at the session's final commit, so the
+closed conversation can still be revisited with its exact code state. If a
+closed session is later asked to write more code anyway, it must not commit on
+that detached HEAD (such commits belong to no branch): it creates a fresh
+worktree or asks first. On the opening side, when `/kickoff` finds the target
+branch held by another worktree it asks whether that session is still alive
+(open the session there) or finished (free the branch with `git worktree
+remove`, never forced), and offers to prune detached leftovers.
+
 ## How the hook works
 
 Claude Code emits a JSONL transcript per session that includes per-message

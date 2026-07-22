@@ -1,7 +1,7 @@
 {
   "name": "relevio",
   "displayName": "Relevio",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "Pass the baton between Claude Code sessions: context-usage warnings for the agent, the /kickoff and /handoff cycle, and a navigable archive of never-compacted conversations.",
   "author": {
     "name": "compota334",

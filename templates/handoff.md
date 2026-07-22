@@ -64,13 +64,26 @@ inexperienced user):
 1. Commit and push all verified work (if the machine has more than one GitHub
    account, check first that the active one is correct for this repo). This is
    what makes the handoff visible to the next session, so it MUST happen before
-   step 3. Say which branch you pushed to.
-2. Tell the user, word for word: "Copy and paste this into this same chat and
+   the later steps. Say which branch you pushed to.
+2. If this session runs inside a git worktree (check: the path from
+   `git rev-parse --git-dir` contains `/worktrees/`), release the branch NOW,
+   AFTER the push succeeded: run `git switch --detach`. Git allows a branch to
+   be checked out in only one worktree, so without this the branch stays
+   locked for every future session. Detaching frees it instantly while the
+   worktree directory stays alive, pinned at this session's final commit, so
+   this conversation remains revisitable. Tell the user you did it.
+3. Tell the user, word for word: "Copy and paste this into this same chat and
    press Enter: `/rename <the exact Session name from the header>`" (only the
    human can rename).
-3. Tell the user: "Then close this conversation, open a NEW one, and make your
+4. Tell the user: "Then close this conversation, open a NEW one, and make your
    first message: `/kickoff`." State, in that same message, the branch this
    session worked on and the handoff file, so the next session can reconcile
    the branch even if it opens on a different one: e.g. "This session worked on
    branch `<branch>` (handoff `docs/handoff/<file just created>`); /kickoff
    will read it and confirm the branch with you before continuing."
+
+After this close-out, if the user asks you to write or edit MORE code in this
+same session: do NOT code in place. If you detached in step 2 you are on a
+detached HEAD, where new commits belong to no branch and get silently lost.
+Re-establish a branch first (a fresh worktree, or ask the user where to work),
+and remind them that new work belongs in a new session started with /kickoff.
