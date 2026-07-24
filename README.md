@@ -152,6 +152,22 @@ Working solo, or don't want the methodology in the repo? Add `--private`:
 it also writes a marked block to `.gitignore` so `CLAUDE.md`, `.claude/` and
 `docs/handoff/` stay local.
 
+### Installing into a project that already has a CLAUDE.md
+
+Your existing `CLAUDE.md` is never overwritten: relevio's section is **appended**
+inside `<!-- relevio:start -->` / `<!-- relevio:end -->` markers, and everything
+you already wrote stays exactly where it was. Re-running the installer touches
+only what is between those markers, so your own instructions are safe across
+upgrades.
+
+The one case that needs a human decision is a project whose `CLAUDE.md` already
+describes a session/handoff methodology **written by hand** (no markers).
+Appending there would leave the agent with two conflicting sets of rules (two
+handoff naming schemes, two cycles) and no way to tell which one wins, so the
+installer stops **before writing anything** and asks you to pick: wrap your own
+section in the markers to keep it as the source of truth, delete it to adopt
+relevio's, or pass `--force` if it is a false positive.
+
 ### After installing
 
 - Restart Claude Code in the project (hooks load when a session starts).

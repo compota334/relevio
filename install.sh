@@ -4,7 +4,7 @@
 # (your project root).
 set -euo pipefail
 
-VERSION="0.13.0"
+VERSION="0.14.0"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh handoff.md kickoff.md revisit.md CLAUDE.md.section INDEX.md)
 MARK_START="<!-- relevio:start -->"
@@ -24,6 +24,8 @@ Usage (from YOUR project root, which must be a git repository):
 Options:
   --force    Overwrite installed files you have edited locally (refuses
              otherwise). Never touches docs/handoff/ content or INDEX.md.
+             Also overrides the safety check that stops the install when your
+             CLAUDE.md already describes a session methodology of its own.
   --private  Also add CLAUDE.md, .claude/ and docs/handoff/ to .gitignore
              (solo mode: the methodology stays local, out of the repo).
              Without it, the files are left for you to commit (team mode).
@@ -58,6 +60,33 @@ command -v jq >/dev/null 2>&1 || fail "jq is required (the context hook parses t
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "this directory is not a git repository.
        The methodology relies on commits, pushes and handoff history.
        cd into your project, or run 'git init' first."
+
+# An existing CLAUDE.md is never overwritten: the section is APPENDED, so your
+# own instructions always survive. But appending on top of a session
+# methodology someone already wrote BY HAND leaves the agent with two
+# conflicting sets of rules (two handoff naming schemes, two cycles), and the
+# agent cannot tell which one wins. Detect that here, before anything is
+# written, so the human resolves it instead of discovering it later.
+if [ "$FORCE" -ne 1 ] && [ -f CLAUDE.md ] && ! grep -qF "$MARK_START" CLAUDE.md \
+   && grep -qEi 'docs/handoff|/kickoff|/handoff' CLAUDE.md; then
+  fail "CLAUDE.md already describes a session/handoff methodology, and it is not
+       wrapped in relevio markers, so relevio cannot tell which part is its own.
+       Appending would leave your agent with TWO conflicting sets of rules.
+       Nothing has been installed. Pick one:
+
+       (a) KEEP YOURS as the source of truth: wrap your section in
+             $MARK_START
+             ...your methodology...
+             $MARK_END
+           and re-run. The installer will then leave that block alone (only
+           --force ever rewrites it), and still install the hook and commands.
+
+       (b) REPLACE yours with relevio's: delete your methodology section from
+           CLAUDE.md, then re-run.
+
+       (c) FALSE POSITIVE (your CLAUDE.md mentions handoffs for unrelated
+           reasons): re-run with --force to append anyway."
+fi
 
 # --- Locate templates: local clone, or fetch from GitHub --------------------
 SRC="${BASH_SOURCE[0]:-}"
