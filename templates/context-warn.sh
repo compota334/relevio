@@ -55,7 +55,7 @@ USED=$(grep '"input_tokens"' "$TRANSCRIPT" 2>/dev/null | tail -1 | jq -r '
 # Resolve the context-window size, in precedence order:
 # 1) explicit CLAUDE_CONTEXT_LIMIT always wins (forces PERCENTAGE mode);
 # 2) else map the session's model to its real window (table from Anthropic's
-#    catalog as of 2026-06: current models are 1M, except Haiku 4.5 at 200k;
+#    catalog as of 2026-07: current models are 1M, except Haiku 4.5 at 200k;
 #    the [1m] tag catches any 1M session whose exact id is not listed);
 # 3) UNKNOWN model => leave LIMIT empty and drop to RAW-COUNT mode below. We do
 #    NOT fall back to a guessed size: assuming 200k (or any number) is the
@@ -66,7 +66,7 @@ if [ -z "$LIMIT" ]; then
   MODEL=$(grep -o '"model":"[^"]*"' "$TRANSCRIPT" 2>/dev/null | tail -1)
   case "$MODEL" in
     *haiku*)  LIMIT=200000 ;;
-    *\[1m\]*|*fable*|*mythos*|*opus-4-6*|*opus-4-7*|*opus-4-8*|*sonnet-5*|*sonnet-4-6*)
+    *\[1m\]*|*fable*|*mythos*|*opus-5*|*sonnet-5*|*opus-4-6*|*opus-4-7*|*opus-4-8*|*sonnet-4-6*)
               LIMIT=1000000 ;;
   esac
 fi
