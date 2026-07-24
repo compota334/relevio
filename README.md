@@ -180,7 +180,9 @@ new session, first message: /kickoff
      and ASKS whether to continue there or start a new branch (never switches
      on its own)
   -> work
-  -> hook warns at 70%: finish what is open, no new large tasks
+  -> hook warns at 70%: harvest. No new work; among what is already open,
+     close first what depends on understanding the agent DERIVED (and so
+     cannot hand over cheaply), leaving the re-readable parts for the handoff
   -> hook warns at 80%: write the handoff NOW
   -> agent writes docs/handoff/YYYY-MM-DD_<short-title>.md (same title as the
      session name; metadata header: Session, Date, Dev, Branch, Commits,
@@ -197,6 +199,16 @@ Handoff rules (the agent gets them from CLAUDE.md and `/handoff`):
   hashes), files touched, lessons learned (only real ones), pending work in
   order, and any operational state git does not capture (running services,
   which environment is the source of truth, resumable long jobs).
+- **The 70% mark is a harvest, not just a brake**: at that point the agent has
+  read a lot and still has room to act, which is exactly when its loaded
+  context is worth most. What the close destroys is not the tokens it read but
+  the understanding it DERIVED: the next session can re-read a file cheaply,
+  but re-deriving "why the obvious fix fails" or "these three approaches are
+  already ruled out" costs it half a window. So the rule is a priority filter
+  over work that is ALREADY open (never a licence to start more): close what
+  depends on derived context, hand off what only depends on re-readable facts,
+  and take only items that fit complete, verification and commit included.
+  Whatever does not fit goes into the handoff with its reasoning attached.
 - **Handoffs accumulate**: never delete or overwrite old ones; that is why
   they carry dates. The newest is the starting point, the rest is history.
 - **Close-out is literal**: the agent ends every session with copy-paste

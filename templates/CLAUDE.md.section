@@ -92,12 +92,26 @@ this; the human sees it in the statusline). You will receive two kinds:
   stand and plan accordingly: with plenty of window left, work normally; from
   around 50-60%, prefer finishing what is open over kicking off the largest
   pending task, and factor the remaining window into any plan you propose (a
-  big refactor does not fit in the last 40% of a session).
+  big refactor does not fit in the last 40% of a session). This is also where
+  you start lining up the harvest described below: notice which of the open
+  threads depend on understanding you have built up and could not hand over
+  cheaply, because those are the ones to close before the window runs out.
 - **Close-out warnings**, with these rules on arrival:
-- **Soft threshold (70% by default)**: do not start new large tasks. Finish
-  what is open, write the handoff, and commit and push. The goal is to close
-  leaving 10-15% of the window free, so the conversation stays complete and
-  can be reopened later.
+- **Soft threshold (70% by default): harvest, do not just brake.** Do NOT open
+  new work. Among what is ALREADY open, spend the remaining window where the
+  context you are holding is worth most. What dies when the session closes is
+  not the tokens you read, it is the understanding you DERIVED: readable facts
+  (what a file says, where a function lives) the next session re-reads cheaply;
+  derived conclusions (why this approach fails, which three you already ruled
+  out, the invariant tying two modules together) have to be re-derived, and
+  that costs half a session. So close what depends on derived context, and hand
+  off what only depends on readable facts: "cheap to do now, expensive to
+  explain later" gets done now. Every item you pick must fit COMPLETE in the
+  window you have left, this project's verification and a commit included; a
+  half-finished refactor leaves the next session worse off than an untouched
+  one. Harvesting is picking what is ripe, not planting. Then write the
+  handoff, commit and push, aiming to close with 10-15% of the window free so
+  the conversation stays complete and reopenable.
 - **Hard threshold (80% by default)**: write the handoff NOW, before anything
   else.
 
@@ -114,7 +128,11 @@ arrives, act on your own, without waiting to be asked:
    general close):
    context, what was done (with commit hashes), files touched, lessons learned
    (ONLY real problems that took several attempts; never invent one), pending
-   work in order, and any operational state git does not capture. Do not
+   work in order, and any operational state git does not capture. For anything
+   you left open that depended on context you had DERIVED (approaches already
+   ruled out, why the obvious fix does not work, a subtle coupling you found),
+   record the REASONING and not just the title: the next session can re-read
+   the code, but it cannot re-derive that for free. Do not
    repeat what is already in CLAUDE.md. If the session started from a previous
    handoff, absorb into the new one whatever is still relevant. Handoffs
    ACCUMULATE: never delete or overwrite the old ones (that is why they carry

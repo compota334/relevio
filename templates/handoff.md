@@ -38,7 +38,11 @@ Then write the body: general context, what we have done (with commit hashes),
 the main files touched, and the lessons learned. Pay attention to any problem
 that was hard to solve (several tries and errors) and could teach something
 for similar future situations, but only if such a problem actually existed; do
-not invent one. Do not repeat what is already in CLAUDE.md: the next agent
+not invent one. For anything you are leaving OPEN that depended on context you
+had derived (approaches already ruled out, why the obvious fix does not work, a
+coupling you only noticed after reading several files), write down that
+reasoning and not just the title: the next agent can re-read the code, but it
+cannot re-derive that for free. Do not repeat what is already in CLAUDE.md: the next agent
 reads it too. Be thorough: we need a long, good handoff. Structure it as a
 funnel, from general to specific, closing with the full picture. If you
 received a previous handoff, fold in whatever is still relevant so the next
