@@ -164,6 +164,13 @@ block between them is REPLACED wholesale when you upgrade with
 where the installer never touches them; never move your text inside the block
 hoping to shield it, because that is precisely what gets overwritten.
 
+The replacement happens **in place**: the block stays exactly where you put it,
+so text you wrote after it does not get reordered above it. Everything outside
+the markers keeps both its content and its position, which is also why re-running
+the installer leaves a clean `git diff`. If the markers are ever unbalanced (one
+missing, or duplicated), the installer cannot tell where relevio's block ends,
+so it **refuses to touch the file** rather than risk swallowing your text.
+
 The one case that needs a human decision is a project whose `CLAUDE.md` already
 describes a session/handoff methodology **written by hand** (no markers).
 Appending there would leave the agent with two conflicting sets of rules (two

@@ -60,21 +60,51 @@ check "the user's own rule survived" \
   "$(grep -c 'A rule of my own' "$d/CLAUDE.md")" "1"
 rm -rf "$d"
 
-# --- Case 2: user text on BOTH sides of the block ---------------------------
+# --- Case 2: user text on BOTH sides keeps its content AND its position -----
+# The block must be replaced where it stands. Relocating it to the end would
+# preserve every byte and still reorder the user's file around it.
 d="$(fixture '# My project
 
 - Rule above.
 ')"
 (cd "$d" && bash "$INSTALLER" >/dev/null 2>&1)
 printf '\n## Rules below\n- Never deploy on a Friday.\n' >> "$d/CLAUDE.md"
-(cd "$d" && bash "$INSTALLER" --update >/dev/null 2>&1)   # settle
 git -C "$d" add -A >/dev/null 2>&1
-git -C "$d" commit -qm settled
+git -C "$d" commit -qm before-update
+(cd "$d" && bash "$INSTALLER" --update >/dev/null 2>&1)
+check "text above the block survived" "$(grep -c 'Rule above' "$d/CLAUDE.md")" "1"
+check "text below the block survived" \
+  "$(grep -c 'Never deploy on a Friday' "$d/CLAUDE.md")" "1"
+# Order must still be: rule above < block < rule below.
+above=$(grep -n 'Rule above' "$d/CLAUDE.md" | cut -d: -f1)
+block=$(grep -nF '<!-- relevio:start -->' "$d/CLAUDE.md" | cut -d: -f1)
+below=$(grep -n 'Never deploy on a Friday' "$d/CLAUDE.md" | cut -d: -f1)
+if [ "$above" -lt "$block" ] && [ "$block" -lt "$below" ]; then
+  pass "the block was replaced in place, not relocated"
+else
+  failed "the block moved (above=$above block=$block below=$below)"
+fi
 (cd "$d" && bash "$INSTALLER" --update >/dev/null 2>&1)
 check "text on both sides: repeated --update is stable" \
   "$(diff_is_empty "$d" CLAUDE.md)" "empty"
-check "text above the block survived" "$(grep -c 'Rule above' "$d/CLAUDE.md")" "1"
-check "text below the block survived" \
+rm -rf "$d"
+
+# --- Case 2b: malformed markers must abort, not eat the user's text ---------
+d="$(fixture '# My project
+- Rule above.
+')"
+(cd "$d" && bash "$INSTALLER" >/dev/null 2>&1)
+printf '\n## Rules below\n- Never deploy on a Friday.\n' >> "$d/CLAUDE.md"
+# Delete the END marker: relevio can no longer tell where its block stops.
+grep -vF '<!-- relevio:end -->' "$d/CLAUDE.md" > "$d/tmp" && mv "$d/tmp" "$d/CLAUDE.md"
+git -C "$d" add -A >/dev/null 2>&1
+git -C "$d" commit -qm broken-markers
+(cd "$d" && bash "$INSTALLER" --update >/dev/null 2>&1)
+rc=$?
+check "unbalanced markers: installer exits non-zero" "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
+check "unbalanced markers: CLAUDE.md left untouched" \
+  "$(diff_is_empty "$d" CLAUDE.md)" "empty"
+check "unbalanced markers: user text below still there" \
   "$(grep -c 'Never deploy on a Friday' "$d/CLAUDE.md")" "1"
 rm -rf "$d"
 

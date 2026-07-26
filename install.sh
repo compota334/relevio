@@ -4,7 +4,7 @@
 # (your project root).
 set -euo pipefail
 
-VERSION="0.15.1"
+VERSION="0.16.0"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh handoff.md kickoff.md revisit.md CLAUDE.md.section INDEX.md)
 MARK_START="<!-- relevio:start -->"
@@ -193,23 +193,41 @@ if [ ! -f CLAUDE.md ]; then
   info "installed: CLAUDE.md"
 elif grep -qF "$MARK_START" CLAUDE.md; then
   if [ "$UPDATE" -eq 1 ]; then
-    # Everything between the markers is relevio's and gets REPLACED; everything
-    # outside them is the user's and is copied through untouched.
-    # Trailing blank lines are dropped before the separator is appended below.
-    # Without that the run is not idempotent: the blank line this run emits as a
-    # separator survives the next run's strip (it sits BEFORE the start marker),
-    # which then adds one of its own, so the block would drift one line further
-    # down on every single re-run and CLAUDE.md would never show a clean diff.
-    awk -v s="$MARK_START" -v e="$MARK_END" '
-      index($0,s){skip=1}
-      !skip{ line[++n]=$0; if (NF) last=n }
-      index($0,e){skip=0}
-      END{ for (i=1; i<=last; i++) print line[i] }' CLAUDE.md > CLAUDE.md.tmp
-    { echo; cat "$TPL/CLAUDE.md.section"; } >> CLAUDE.md.tmp
+    # The block is replaced exactly WHERE IT IS. Everything outside the markers
+    # keeps both its content and its position, so a block someone deliberately
+    # placed in the middle of their CLAUDE.md stays in the middle.
+    #
+    # Balanced markers are a precondition, not an assumption: with a missing or
+    # duplicated marker there is no way to tell where relevio's block ends, and
+    # replacing blind would silently swallow whatever follows. Check first and
+    # refuse, because that failure would eat the user's own instructions.
+    n_start=$(grep -cF "$MARK_START" CLAUDE.md || true)
+    n_end=$(grep -cF "$MARK_END" CLAUDE.md || true)
+    if [ "$n_start" -ne 1 ] || [ "$n_end" -ne 1 ]; then
+      fail "CLAUDE.md contains $n_start start marker(s) and $n_end end marker(s).
+       relevio needs exactly one balanced pair to know where its own block ends;
+       with anything else, replacing it could delete your text. Nothing was
+       changed. Fix the markers by hand, then re-run:
+         $MARK_START  ...relevio's block...  $MARK_END"
+    fi
+    l_start=$(grep -nF "$MARK_START" CLAUDE.md | cut -d: -f1)
+    l_end=$(grep -nF "$MARK_END" CLAUDE.md | cut -d: -f1)
+    if [ "$l_start" -ge "$l_end" ]; then
+      fail "in CLAUDE.md the relevio end marker (line $l_end) comes before the
+       start marker (line $l_start). Nothing was changed. Fix the order by hand,
+       then re-run."
+    fi
+    # The section file carries its own markers, so printing it replaces the old
+    # block markers and all. No separator is emitted, which is also why re-runs
+    # cannot drift: nothing outside the block is added or removed.
+    awk -v s="$MARK_START" -v e="$MARK_END" -v sec="$TPL/CLAUDE.md.section" '
+      index($0,s){ inblock=1; while ((getline l < sec) > 0) print l; close(sec); next }
+      index($0,e){ inblock=0; next }
+      !inblock' CLAUDE.md > CLAUDE.md.tmp
     mv CLAUDE.md.tmp CLAUDE.md
-    info "updated: CLAUDE.md (the block between the relevio markers was REPLACED
-        with v${VERSION}; everything outside the markers was left untouched, and
-        the new block now sits at the end of the file)"
+    info "updated: CLAUDE.md (the relevio block was replaced in place with
+        v${VERSION}; everything outside the markers kept its content and its
+        position)"
   else
     info "unchanged: CLAUDE.md (relevio section already present; --update refreshes it)"
   fi
