@@ -51,12 +51,29 @@ CLAUDE.md: you are picking up the baton from the previous session.
    cycle: a hook warns at 70% and 80% of the context window (or the custom
    CLAUDE_CONTEXT_WARN thresholds if configured); at the first warning the
    session starts closing, and it will end with a handoff plus a new session.
-   Also report the installed relevio version, which is stamped in the artifacts
-   (`grep -m1 'relevio v' .claude/hooks/context-warn.sh`, and the heading of
-   the relevio block in CLAUDE.md). If there is no stamp at all, the install
-   predates version stamping and is several versions old. Say so plainly: a
-   stale install runs stale rules, and an out-of-date model table is how the
-   hook ends up reporting a context percentage that is simply wrong.
-4. Then propose starting with the first pending item from the handoff and wait
+4. Check whether this project's relevio is out of date, and report the result
+   in one line. Read the installed version from the stamp, and the published one
+   from the repo:
+
+       grep -m1 'relevio v' .claude/hooks/context-warn.sh
+       curl -fsSL --max-time 5 https://raw.githubusercontent.com/compota334/relevio/main/VERSION
+
+   Then say which of these is true, and nothing more elaborate:
+   - **Same version**: one line confirming it is current. Do not belabour it.
+   - **Behind by a little**: mention it as information, not an alarm. Being one
+     version behind is not an emergency. Give the upgrade command
+     (`bash <relevio>/install.sh --update`, run from this project root) and move
+     on. It refreshes only relevio's own files and the block between the markers
+     in CLAUDE.md; anything written outside those markers is left alone.
+   - **Behind by several versions, or NO stamp at all** (an install predating
+     version stamping): say so clearly and recommend upgrading before real work.
+     This is the case worth insisting on: a stale model table makes the hook
+     report a context percentage that is simply wrong, so the session gets told
+     to close at "80%" while it is really at 17%, and nobody can tell from the
+     inside that the number is a lie.
+   - **Could not check** (no network, curl missing, request timed out): say that
+     explicitly, along with the installed version. Never let a failed check pass
+     as "up to date": silence would be indistinguishable from a clean result.
+5. Then propose starting with the first pending item from the handoff and wait
    for the user's confirmation or their own direction. Do not start coding
    before that confirmation.

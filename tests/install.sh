@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# relevio: regression guard for install.sh idempotency.
+# relevio: regression guards for install.sh.
 #
 # The property asserted here is idempotency itself, not any particular
 # formatting detail: running the installer twice in a row must leave the second
@@ -10,7 +10,7 @@
 # stop reading, which is corrosive for a tool whose whole promise is that you
 # can trust what it does and does not touch.
 #
-# Usage:  bash tests/install-idempotency.sh
+# Usage:  bash tests/install.sh
 # Exit 0 = all cases pass. Exit 1 = a regression.
 set -uo pipefail
 
@@ -36,7 +36,7 @@ fixture() {
 # Is the working tree clean for the given path?
 diff_is_empty() { [ -z "$(git -C "$1" diff -- "$2")" ] && echo empty || echo dirty; }
 
-echo "relevio install idempotency"
+echo "relevio install guards"
 
 # --- Case 1: repeated --update leaves a clean diff --------------------------
 d="$(fixture '# My project
@@ -137,6 +137,25 @@ git -C "$d" commit -qm installed
 check "hook and commands leave no diff on re-update" \
   "$(diff_is_empty "$d" .claude)" "empty"
 rm -rf "$d"
+
+# --- Case 5: a VERSION file that disagrees with the installer must abort -----
+# VERSION is what other projects read to decide whether they are out of date.
+# A wrong value there would tell every install "you are current" while they rot,
+# which is the exact failure the version stamp exists to prevent.
+copy="$(mktemp -d)"
+cp -r "$REPO/templates" "$copy/"
+cp "$REPO/install.sh" "$copy/install.sh"
+printf '0.0.1\n' > "$copy/VERSION"
+d="$(fixture '# My project
+- A rule.
+')"
+(cd "$d" && bash "$copy/install.sh" >/dev/null 2>&1)
+rc=$?
+check "stale VERSION file: installer exits non-zero" \
+  "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
+check "stale VERSION file: nothing was installed" \
+  "$([ -d "$d/.claude" ] && echo yes || echo no)" "no"
+rm -rf "$d" "$copy"
 
 echo
 if [ "$FAILURES" -eq 0 ]; then

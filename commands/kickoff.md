@@ -69,12 +69,27 @@ to keep working, not to close.
    cycle: the hook warns at 70% and 80% of the context window; at the first
    warning the session starts closing (no new large tasks), and it will end
    with a handoff (`/relevio:handoff`) plus a new session.
-   If this project ALSO has a script-installed relevio (`.claude/hooks/
-   context-warn.sh`), report its stamped version
-   (`grep -m1 'relevio v' .claude/hooks/context-warn.sh`) and flag it when it
-   is older than this plugin: a stale install runs stale rules, and an
-   out-of-date model table is how the hook ends up reporting a context
-   percentage that is simply wrong.
-4. Then propose starting with the first pending item from the handoff and wait
+4. If this project ALSO has a script-installed relevio
+   (`.claude/hooks/context-warn.sh`), check whether it is out of date and report
+   the result in one line. The plugin itself updates through Claude Code's
+   `/plugin` interface, but a script install sitting beside it does not, so it
+   is the one that silently rots:
+
+       grep -m1 'relevio v' .claude/hooks/context-warn.sh
+       curl -fsSL --max-time 5 https://raw.githubusercontent.com/compota334/relevio/main/VERSION
+
+   Say which of these is true, and no more:
+   - **Same version**: one line confirming it is current.
+   - **Behind by a little**: information, not an alarm. Give the upgrade command
+     (`bash <relevio>/install.sh --update` from this project root) and move on.
+   - **Behind by several versions, or NO stamp** (an install predating version
+     stamping): say so clearly and recommend upgrading before real work. A stale
+     model table makes the hook report a context percentage that is simply
+     wrong, so a session gets told to close at "80%" while it is really at 17%,
+     and nobody can tell from the inside that the number is a lie.
+   - **Could not check** (no network, curl missing, timeout): say so explicitly
+     alongside the installed version. Never let a failed check pass as "up to
+     date": silence would be indistinguishable from a clean result.
+5. Then propose starting with the first pending item from the handoff and wait
    for the user's confirmation or their own direction. Do not start coding
    before that confirmation.

@@ -4,7 +4,7 @@
 # (your project root).
 set -euo pipefail
 
-VERSION="0.16.0"
+VERSION="0.17.0"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh handoff.md kickoff.md revisit.md CLAUDE.md.section INDEX.md)
 MARK_START="<!-- relevio:start -->"
@@ -141,6 +141,19 @@ for stamped in context-warn.sh CLAUDE.md.section; do
        version recorded in your project would be wrong. Nothing was installed.
        Re-download a matching pair (installer + templates) and try again."
 done
+
+# The VERSION file at the repo root is what installed projects query to find out
+# whether they are behind ("is there a newer relevio?"). If it disagreed with
+# this installer it would tell every project the wrong answer, so it is checked
+# with the same suspicion as the stamps. Only present in a local clone.
+if [ -f "$(dirname "$TPL")/VERSION" ]; then
+  published="$(tr -d '[:space:]' < "$(dirname "$TPL")/VERSION")"
+  [ "$published" = "$VERSION" ] \
+    || fail "the VERSION file says '$published' but this installer is v${VERSION}.
+       VERSION is what other projects read to decide whether they are out of
+       date, so a wrong value there misinforms every install. Nothing was
+       installed. Make them match, then re-run."
+fi
 echo
 
 # --- Helper: copy a template, refusing to clobber local edits ---------------

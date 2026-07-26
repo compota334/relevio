@@ -139,12 +139,18 @@ cd /path/to/your/project
 bash /path/to/relevio/install.sh
 ```
 
-The installer is idempotent: re-run it any time to update. It never overwrites
-a file you have edited unless you pass `--force`:
+The installer is idempotent: re-running it changes nothing unless something is
+actually out of date, so a re-run leaves a clean `git diff`. To upgrade an
+existing install to a newer relevio, pass `--update`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/compota334/relevio/main/install.sh | bash -s -- --force
+curl -fsSL https://raw.githubusercontent.com/compota334/relevio/main/install.sh | bash -s -- --update
 ```
+
+`/kickoff` tells you when that is needed: it compares the version stamped in
+your install against the published one and reports the result at session start
+(including when it could not check, so a failed lookup never passes as
+"up to date").
 
 By default the installed files are left for you to commit (team mode:
 every dev's agent follows the same rules and the handoff history is shared).
@@ -386,7 +392,7 @@ user). The cycle is unchanged; the operator plays the human role:
 ## Tests
 
 ```
-bash tests/install-idempotency.sh
+bash tests/install.sh
 ```
 
 Asserts the property the installer promises: running it twice in a row must
