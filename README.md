@@ -156,17 +156,37 @@ it also writes a marked block to `.gitignore` so `CLAUDE.md`, `.claude/` and
 
 Your existing `CLAUDE.md` is never overwritten: relevio's section is **appended**
 inside `<!-- relevio:start -->` / `<!-- relevio:end -->` markers, and everything
-you already wrote stays exactly where it was. Re-running the installer touches
-only what is between those markers, so your own instructions are safe across
-upgrades.
+you already wrote stays exactly where it was.
+
+**The markers mean "this belongs to relevio", not "this is protected".** The
+block between them is REPLACED wholesale when you upgrade with
+`install.sh --update`. So keep your own instructions **outside** the markers,
+where the installer never touches them; never move your text inside the block
+hoping to shield it, because that is precisely what gets overwritten.
 
 The one case that needs a human decision is a project whose `CLAUDE.md` already
 describes a session/handoff methodology **written by hand** (no markers).
 Appending there would leave the agent with two conflicting sets of rules (two
 handoff naming schemes, two cycles) and no way to tell which one wins, so the
-installer stops **before writing anything** and asks you to pick: wrap your own
-section in the markers to keep it as the source of truth, delete it to adopt
-relevio's, or pass `--force` if it is a false positive.
+installer stops **before writing anything** and asks you to pick: keep yours and
+install only the hook and commands by hand, delete yours to adopt relevio's, or
+pass `--force` if it is a false positive.
+
+### Upgrading an existing install
+
+Run the installer again with `--update`. It refreshes the hook, the slash
+commands and the marked block in `CLAUDE.md` to the new version, with every
+safety check still on. `--force` is `--update` plus overriding the check above,
+so reach for it only when you know that check is a false positive.
+
+**Which version am I on?** The installed files carry a stamp: the first lines of
+`.claude/hooks/context-warn.sh` and the heading of the relevio block in
+`CLAUDE.md` both read `relevio vX.Y.Z`, so `/kickoff` reports it and you can
+check offline with `grep -m1 'relevio v' .claude/hooks/context-warn.sh`. No
+stamp at all means the install predates version stamping and is well behind.
+This matters more than it looks: a stale install runs stale rules, and an
+out-of-date model table is how the hook ends up reporting a context percentage
+that is simply wrong.
 
 ### After installing
 
@@ -266,6 +286,16 @@ branch held by another worktree it asks whether that session is still alive
 remove`, never forced), and offers to prune detached leftovers.
 
 ## How the hook works
+
+> **The design rule that protects you: relevio never guesses a window size.**
+> The model table is a convenience, and a table always lags the next model
+> launch. What does not age is the fallback: a model relevio cannot identify
+> gets a plain running token count, never an invented percentage. That matters
+> because a wrong window is worse than no window at all. It does not fail
+> visibly; it quietly reports a number that looks right, and a session running
+> a 1M model against an assumed 200k will announce "80%, start closing" at a
+> real 17% and end hours early for no reason. A raw token count can never lie
+> that way, which is why an unknown model gets one.
 
 Claude Code emits a JSONL transcript per session that includes per-message
 token usage. On every tool call (PostToolUse, matcher `*`), the hook reads the

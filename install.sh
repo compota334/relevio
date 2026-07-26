@@ -4,7 +4,7 @@
 # (your project root).
 set -euo pipefail
 
-VERSION="0.14.0"
+VERSION="0.15.0"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh handoff.md kickoff.md revisit.md CLAUDE.md.section INDEX.md)
 MARK_START="<!-- relevio:start -->"
@@ -18,18 +18,28 @@ relevio v${VERSION} installer
 
 Usage (from YOUR project root, which must be a git repository):
   curl -fsSL ${REPO_RAW}/install.sh | bash
-  curl -fsSL ${REPO_RAW}/install.sh | bash -s -- --force --private
-  bash /path/to/relevio/install.sh [--force] [--private]
+  curl -fsSL ${REPO_RAW}/install.sh | bash -s -- --update
+  bash /path/to/relevio/install.sh [--update|--force] [--private]
 
 Options:
-  --force    Overwrite installed files you have edited locally (refuses
-             otherwise). Never touches docs/handoff/ content or INDEX.md.
-             Also overrides the safety check that stops the install when your
-             CLAUDE.md already describes a session methodology of its own.
+  --update   Upgrade an existing install to this version: refreshes the hook,
+             the slash commands, and the block between the relevio markers in
+             CLAUDE.md. This is what you want to move from an older relevio to
+             this one. All safety checks stay ON. Anything you wrote OUTSIDE
+             the markers is never touched.
+  --force    Everything --update does, PLUS it overrides the safety check that
+             stops the install when your CLAUDE.md already describes a session
+             methodology of its own. Use only when you know that check is a
+             false positive. Neither flag ever touches docs/handoff/ or
+             INDEX.md.
   --private  Also add CLAUDE.md, .claude/ and docs/handoff/ to .gitignore
              (solo mode: the methodology stays local, out of the repo).
              Without it, the files are left for you to commit (team mode).
   --help     This text.
+
+WARNING about the markers: everything BETWEEN $MARK_START and
+$MARK_END belongs to relevio and is REPLACED on --update/--force.
+Keep your own instructions outside that block; they are then never touched.
 
 Uninstall:
   curl -fsSL ${REPO_RAW}/uninstall.sh | bash
@@ -37,10 +47,12 @@ EOF
 }
 
 FORCE=0
+UPDATE=0
 PRIVATE=0
 for arg in "$@"; do
   case "$arg" in
-    --force) FORCE=1 ;;
+    --force) FORCE=1; UPDATE=1 ;;   # --force is --update plus bypassing the guard
+    --update) UPDATE=1 ;;
     --private) PRIVATE=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "ERROR: unknown argument: $arg (see --help)" >&2; exit 1 ;;
@@ -72,17 +84,28 @@ if [ "$FORCE" -ne 1 ] && [ -f CLAUDE.md ] && ! grep -qF "$MARK_START" CLAUDE.md 
   fail "CLAUDE.md already describes a session/handoff methodology, and it is not
        wrapped in relevio markers, so relevio cannot tell which part is its own.
        Appending would leave your agent with TWO conflicting sets of rules.
-       Nothing has been installed. Pick one:
+       Nothing has been installed.
 
-       (a) KEEP YOURS as the source of truth: wrap your section in
-             $MARK_START
-             ...your methodology...
-             $MARK_END
-           and re-run. The installer will then leave that block alone (only
-           --force ever rewrites it), and still install the hook and commands.
+       Do NOT wrap your own text in the relevio markers to protect it: the
+       block BETWEEN those markers is exactly what --update and --force
+       REPLACE. Putting your methodology there would get it overwritten the
+       next time you upgrade. Your text is safe anywhere OUTSIDE the markers.
+
+       Pick one:
+
+       (a) KEEP YOURS as the source of truth: leave your methodology where it
+           is and do NOT install relevio's CLAUDE.md section at all. Install
+           only the hook and the slash commands, by copying them yourself:
+             mkdir -p .claude/hooks .claude/commands
+             cp <relevio>/templates/context-warn.sh .claude/hooks/
+             cp <relevio>/templates/{kickoff,handoff,revisit}.md .claude/commands/
+           then register the hook in .claude/settings.json. Adapt your own
+           section by hand when you want relevio's newer ideas.
 
        (b) REPLACE yours with relevio's: delete your methodology section from
-           CLAUDE.md, then re-run.
+           CLAUDE.md, then re-run. relevio's section arrives between the
+           markers, and from then on --update refreshes just that block while
+           everything you write outside it stays untouched.
 
        (c) FALSE POSITIVE (your CLAUDE.md mentions handoffs for unrelated
            reasons): re-run with --force to append anyway."
@@ -105,6 +128,19 @@ else
   done
   info "downloaded templates from GitHub"
 fi
+
+# The installed artifacts carry a version stamp so anyone can tell, offline and
+# at a glance, which relevio a repo is running (a repo silently four versions
+# behind is how a stale model table ends up lying about the context window).
+# The stamps are the only copy the user ever sees, so a stamp that disagrees
+# with this installer is a packaging bug: fail loud instead of stamping a lie.
+for stamped in context-warn.sh CLAUDE.md.section; do
+  grep -qF "relevio v${VERSION}" "$TPL/$stamped" \
+    || fail "template $stamped is not stamped 'relevio v${VERSION}'.
+       This installer and its templates come from different versions, so the
+       version recorded in your project would be wrong. Nothing was installed.
+       Re-download a matching pair (installer + templates) and try again."
+done
 echo
 
 # --- Helper: copy a template, refusing to clobber local edits ---------------
@@ -114,9 +150,11 @@ install_file() {
     info "unchanged: $dest"
     return 0
   fi
-  if [ -f "$dest" ] && [ "$FORCE" -ne 1 ]; then
+  if [ -f "$dest" ] && [ "$UPDATE" -ne 1 ]; then
     fail "$dest already exists and differs from the template.
-       Re-run with --force to overwrite it (your local edits will be lost)."
+       Re-run with --update to refresh it to this version (any local edits you
+       made to THIS file will be lost; your CLAUDE.md text outside the relevio
+       markers is not affected)."
   fi
   cp "$src" "$dest"
   chmod "$mode" "$dest"
@@ -154,14 +192,18 @@ if [ ! -f CLAUDE.md ]; then
   { echo "# Instructions for agents"; echo; cat "$TPL/CLAUDE.md.section"; } > CLAUDE.md
   info "installed: CLAUDE.md"
 elif grep -qF "$MARK_START" CLAUDE.md; then
-  if [ "$FORCE" -eq 1 ]; then
+  if [ "$UPDATE" -eq 1 ]; then
+    # Everything between the markers is relevio's and gets REPLACED; everything
+    # outside them is the user's and is copied through untouched.
     awk -v s="$MARK_START" -v e="$MARK_END" \
       'index($0,s){skip=1} !skip{print} index($0,e){skip=0}' CLAUDE.md > CLAUDE.md.tmp
     { echo; cat "$TPL/CLAUDE.md.section"; } >> CLAUDE.md.tmp
     mv CLAUDE.md.tmp CLAUDE.md
-    info "updated: CLAUDE.md (relevio section refreshed, moved to the end)"
+    info "updated: CLAUDE.md (the block between the relevio markers was REPLACED
+        with v${VERSION}; everything outside the markers was left untouched, and
+        the new block now sits at the end of the file)"
   else
-    info "unchanged: CLAUDE.md (relevio section already present; --force refreshes it)"
+    info "unchanged: CLAUDE.md (relevio section already present; --update refreshes it)"
   fi
 else
   { echo; cat "$TPL/CLAUDE.md.section"; } >> CLAUDE.md

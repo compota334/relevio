@@ -51,6 +51,12 @@ CLAUDE.md: you are picking up the baton from the previous session.
    cycle: a hook warns at 70% and 80% of the context window (or the custom
    CLAUDE_CONTEXT_WARN thresholds if configured); at the first warning the
    session starts closing, and it will end with a handoff plus a new session.
+   Also report the installed relevio version, which is stamped in the artifacts
+   (`grep -m1 'relevio v' .claude/hooks/context-warn.sh`, and the heading of
+   the relevio block in CLAUDE.md). If there is no stamp at all, the install
+   predates version stamping and is several versions old. Say so plainly: a
+   stale install runs stale rules, and an out-of-date model table is how the
+   hook ends up reporting a context percentage that is simply wrong.
 4. Then propose starting with the first pending item from the handoff and wait
    for the user's confirmation or their own direction. Do not start coding
    before that confirmation.

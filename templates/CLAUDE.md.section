@@ -1,9 +1,16 @@
 <!-- relevio:start -->
-# Working methodology (relevio)
+# Working methodology (relevio v0.15.0)
 
 Installed by [relevio](https://github.com/compota334/relevio). These
 rules govern how the agent works in this repo: how it codes, how it verifies,
 how it handles errors, and how sessions open and close.
+
+Everything between the `relevio:start` and `relevio:end` markers belongs to
+relevio and is REPLACED when someone upgrades with `install.sh --update`.
+Project-specific instructions must live OUTSIDE those markers, where the
+installer never touches them. The version above is the installed version: if
+the agent reports it at session start, a repo that has drifted behind is
+visible immediately instead of silently running old rules.
 
 ## How to work
 

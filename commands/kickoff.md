@@ -69,6 +69,12 @@ to keep working, not to close.
    cycle: the hook warns at 70% and 80% of the context window; at the first
    warning the session starts closing (no new large tasks), and it will end
    with a handoff (`/relevio:handoff`) plus a new session.
+   If this project ALSO has a script-installed relevio (`.claude/hooks/
+   context-warn.sh`), report its stamped version
+   (`grep -m1 'relevio v' .claude/hooks/context-warn.sh`) and flag it when it
+   is older than this plugin: a stale install runs stale rules, and an
+   out-of-date model table is how the hook ends up reporting a context
+   percentage that is simply wrong.
 4. Then propose starting with the first pending item from the handoff and wait
    for the user's confirmation or their own direction. Do not start coding
    before that confirmation.
