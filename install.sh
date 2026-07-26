@@ -4,7 +4,7 @@
 # (your project root).
 set -euo pipefail
 
-VERSION="0.15.0"
+VERSION="0.15.1"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh handoff.md kickoff.md revisit.md CLAUDE.md.section INDEX.md)
 MARK_START="<!-- relevio:start -->"
@@ -195,8 +195,16 @@ elif grep -qF "$MARK_START" CLAUDE.md; then
   if [ "$UPDATE" -eq 1 ]; then
     # Everything between the markers is relevio's and gets REPLACED; everything
     # outside them is the user's and is copied through untouched.
-    awk -v s="$MARK_START" -v e="$MARK_END" \
-      'index($0,s){skip=1} !skip{print} index($0,e){skip=0}' CLAUDE.md > CLAUDE.md.tmp
+    # Trailing blank lines are dropped before the separator is appended below.
+    # Without that the run is not idempotent: the blank line this run emits as a
+    # separator survives the next run's strip (it sits BEFORE the start marker),
+    # which then adds one of its own, so the block would drift one line further
+    # down on every single re-run and CLAUDE.md would never show a clean diff.
+    awk -v s="$MARK_START" -v e="$MARK_END" '
+      index($0,s){skip=1}
+      !skip{ line[++n]=$0; if (NF) last=n }
+      index($0,e){skip=0}
+      END{ for (i=1; i<=last; i++) print line[i] }' CLAUDE.md > CLAUDE.md.tmp
     { echo; cat "$TPL/CLAUDE.md.section"; } >> CLAUDE.md.tmp
     mv CLAUDE.md.tmp CLAUDE.md
     info "updated: CLAUDE.md (the block between the relevio markers was REPLACED

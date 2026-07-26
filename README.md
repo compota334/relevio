@@ -376,6 +376,20 @@ user). The cycle is unchanged; the operator plays the human role:
   state) exactly as a human would; if it cannot answer, it should stop and
   escalate to its own owner rather than guess.
 
+## Tests
+
+```
+bash tests/install-idempotency.sh
+```
+
+Asserts the property the installer promises: running it twice in a row must
+leave the second run with an **empty git diff**. It covers a plain re-update,
+user text on both sides of the marker block, a `CLAUDE.md` ending in blank
+lines, and the hook and commands. It exists because `CLAUDE.md` once drifted by
+one blank line on every single re-run, so `--update` always reported a change
+even when nothing had changed, and a diff that is always dirty is a diff people
+stop reading.
+
 ## Uninstall
 
 ```bash
