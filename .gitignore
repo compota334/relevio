@@ -1,5 +1,7 @@
 # Local per-dev agent config (this repo does not ship its own)
 .claude/
 CLAUDE.md
-relevio.md
+# Only the copy at the repo root is the local install; templates/relevio.md is
+# the source and MUST be committed (an unanchored pattern would ignore both).
+/relevio.md
 *.bak
