@@ -191,26 +191,43 @@ check "stale VERSION file: nothing was installed" \
   "$(yesno "$([ -d "$d/.claude" ]; echo $?)")" "no"
 rm -rf "$d" "$copy"
 
-# --- Case 9: the session-start hook fails LOUDLY without relevio.md ---------
-# This is the failure mode that killed the @import design: a methodology that
-# silently is not there. The hook must say so, in words the agent will repeat.
+# --- Case 9: what the session-start hook injects ----------------------------
+# Two properties, and the second one is the reason this case exists at all.
+#
+# Claude Code caps how much a hook may inject. Past the cap the agent gets a
+# ~2 KB preview and a file path instead of the text, with NO error visible from
+# inside the session: the methodology just quietly is not there. That is
+# exactly how the first attempt at v0.18 broke, piping the full 11 KB
+# relevio.md through this hook and delivering its first sixth. Measured
+# ceiling: ~8 KB arrives, ~12 KB does not. So every branch stays well under it,
+# and this test fails if anyone grows one past the budget.
+INJECT_BUDGET=6000
+inject() {
+  printf '{"source":"%s"}' "$2" | CLAUDE_PROJECT_DIR="$1" bash "$1/.claude/hooks/session-start.sh" \
+    | jq -r '.hookSpecificOutput.additionalContext'
+}
 d="$(fixture '')"
 (cd "$d" && bash "$INSTALLER" >/dev/null 2>&1)
-out=$(printf '{"source":"startup"}' | CLAUDE_PROJECT_DIR="$d" bash "$d/.claude/hooks/session-start.sh" \
-      | jq -r '.hookSpecificOutput.additionalContext')
-check "session-start: injects the methodology" \
-  "$(printf '%s' "$out" | grep -c 'Sessions and handoffs')" "1"
+out="$(inject "$d" startup)"
+check "session-start: injects the session cycle" \
+  "$(printf '%s' "$out" | grep -c 'relevio session cycle')" "1"
+check "session-start: points at relevio.md for the full text" \
+  "$(printf '%s' "$out" | grep -c 'relevio.md')" "1"
+for src in startup resume compact; do
+  n=$(printf '%s' "$(inject "$d" "$src")" | wc -c)
+  check "session-start: $src payload fits the injection budget ($n <= $INJECT_BUDGET)" \
+    "$([ "$n" -le "$INJECT_BUDGET" ] && echo yes || echo no)" "yes"
+done
+# The loudest branch is also the longest one: it must fit too.
 rm "$d/relevio.md"
-out=$(printf '{"source":"startup"}' | CLAUDE_PROJECT_DIR="$d" bash "$d/.claude/hooks/session-start.sh" \
-      | jq -r '.hookSpecificOutput.additionalContext')
+out="$(inject "$d" startup)"
 check "session-start: missing relevio.md is reported as an ERROR" \
   "$(printf '%s' "$out" | grep -c 'relevio ERROR')" "1"
-check "session-start: missing relevio.md does not fake a methodology" \
-  "$(printf '%s' "$out" | grep -c 'Sessions and handoffs')" "0"
-# A reopened session must NOT get the whole file dumped into its nearly-full
+check "session-start: the error branch fits the budget" \
+  "$([ "$(printf '%s' "$out" | wc -c)" -le "$INJECT_BUDGET" ] && echo yes || echo no)" "yes"
+# A reopened session must NOT get the cycle rules dumped into its nearly-full
 # window: it gets the short revisit rules instead.
-out=$(printf '{"source":"resume"}' | CLAUDE_PROJECT_DIR="$d" bash "$d/.claude/hooks/session-start.sh" \
-      | jq -r '.hookSpecificOutput.additionalContext')
+out="$(inject "$d" resume)"
 check "session-start: resume gets the short revisit rules" \
   "$(printf '%s' "$out" | grep -c 'REOPENED conversation')" "1"
 rm -rf "$d"

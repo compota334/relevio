@@ -1,8 +1,13 @@
 # Session methodology (relevio v0.18.0)
 
-Installed by [relevio](https://github.com/compota334/relevio). This file is
-injected into the agent's context at the start of every session by
-`.claude/hooks/session-start.sh`.
+Installed by [relevio](https://github.com/compota334/relevio). This is the full
+methodology. At every session start `.claude/hooks/session-start.sh` puts its
+operational core into the agent's context (the cycle, the pacing thresholds,
+the STOP LAW) and points here for the rest, because Claude Code caps how much
+a hook may inject and a file this size would arrive cut in a third of the way
+through, with no error. So: the agent always knows the cycle, and reads this
+file when it needs the detail. `/kickoff` and `/handoff` carry their own
+step-by-step rituals.
 
 **This file belongs to relevio and is REPLACED whole by `install.sh --update`.**
 Do not write your own instructions here: they would be lost on the next

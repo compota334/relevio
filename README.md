@@ -58,8 +58,8 @@ Nothing is ever lost to compaction again.
 | `.claude/commands/kickoff.md` | The `/kickoff` slash command: opens a session (reads the index and the latest handoff, checks git state, summarizes where things stand). |
 | `.claude/commands/handoff.md` | The `/handoff` slash command: closes a session (writes the dated handoff with its metadata header, appends the index row, hands over the literal close-out steps). |
 | `.claude/commands/revisit.md` | The `/revisit` slash command: finds an old session in the library and returns the `claude --resume <session-id>` command to reopen its conversation. |
-| `relevio.md` | The session methodology itself, injected into the agent's context at every session start. This file is relevio's and is replaced whole on upgrade. |
-| `.claude/hooks/session-start.sh` | SessionStart hook: delivers `relevio.md` to the agent. A fresh session gets the full methodology; a REOPENED conversation gets only the revisit rules (it starts near the top of its window, so dumping the file into it would waste the little room it has left); a session that just auto-compacted is told to salvage what remains into a handoff. |
+| `relevio.md` | The methodology in full: the reference the agent reads when it needs the detail, and the version-stamped record of which relevio this project runs. It is relevio's file and is replaced whole on upgrade. |
+| `.claude/hooks/session-start.sh` | SessionStart hook: puts the operational core of the methodology into context at every session start (the cycle, the pacing thresholds, the STOP LAW), and points at `relevio.md` for the rest. A REOPENED conversation gets only the revisit rules instead, since it starts near the top of its window; a session that just auto-compacted is told to salvage what remains into a handoff. |
 | `docs/handoff/` | Where handoffs live. They accumulate; the newest one is the next session's starting point. |
 | `docs/handoff/INDEX.md` | The library index: one append-only row per session (date, conversation name, handoff file, commit range, topics, summary). Never overwritten, not even with `--force`. |
 
