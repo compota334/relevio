@@ -213,6 +213,12 @@ check "session-start: injects the session cycle" \
   "$(printf '%s' "$out" | grep -c 'relevio session cycle')" "1"
 check "session-start: points at relevio.md for the full text" \
   "$(printf '%s' "$out" | grep -c 'relevio.md')" "1"
+# The version travels INSIDE the injected text, so the agent can report it at
+# session start and a repo running stale rules is visible immediately. It is a
+# second copy of the number (the file header carries the stamp the installer
+# checks), and two copies drift: this pins them together.
+check "session-start: the injected core carries the current version" \
+  "$(printf '%s' "$out" | grep -c "relevio v$(tr -d '[:space:]' < "$REPO/VERSION")")" "1"
 for src in startup resume compact; do
   n=$(printf '%s' "$(inject "$d" "$src")" | wc -c)
   check "session-start: $src payload fits the injection budget ($n <= $INJECT_BUDGET)" \

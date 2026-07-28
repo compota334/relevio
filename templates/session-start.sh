@@ -29,7 +29,7 @@ emit() {
 
 SUBAGENT_LINE="If you are a SUBAGENT (spawned via the Task tool), ignore this methodology entirely and simply return your result."
 
-CORE="relevio: this project runs the relevio session cycle. It governs sessions ONLY (how they open, are paced against the context window, and close). How this project codes, verifies and handles errors is in CLAUDE.md, which relevio never touches. Full text in relevio.md at the project root: read it when you need the detail.
+CORE="relevio v0.18.0: this project runs the relevio session cycle. It governs sessions ONLY (how they open, are paced against the context window, and close). How this project codes, verifies and handles errors is in CLAUDE.md, which relevio never touches. Full text in relevio.md at the project root: read it when you need the detail.
 
 OPEN: sessions start with /kickoff, which reads docs/handoff/INDEX.md and the LATEST handoff before any code (it may live on another branch) and settles with the user which branch to work on. If the user skipped it and docs/handoff/ exists, suggest it.
 
