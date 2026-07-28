@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 # relevio installer
-# Installs the working methodology for Claude Code into the CURRENT directory
+# Installs the session methodology for Claude Code into the CURRENT directory
 # (your project root).
+#
+# relevio does NOT write to your CLAUDE.md. Its methodology lives in its own
+# file, relevio.md, and reaches the agent through a SessionStart hook. CLAUDE.md
+# is yours: relevio never reads it, never edits it and never depends on it. The
+# one exception is a one-time MIGRATION: installs from v0.17 and earlier kept
+# the methodology inside CLAUDE.md between markers, and --update removes that
+# old block so you are not left running two copies of the rules.
 set -euo pipefail
 
-VERSION="0.17.0"
+VERSION="0.18.0"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
-TEMPLATES=(context-warn.sh handoff.md kickoff.md revisit.md CLAUDE.md.section INDEX.md)
+TEMPLATES=(context-warn.sh session-start.sh handoff.md kickoff.md revisit.md relevio.md INDEX.md)
+STAMPED=(context-warn.sh session-start.sh relevio.md)
+# Legacy markers: only ever used to REMOVE the pre-v0.18 block from CLAUDE.md.
 MARK_START="<!-- relevio:start -->"
 MARK_END="<!-- relevio:end -->"
 GI_START="# >>> relevio private mode >>>"
@@ -22,24 +31,24 @@ Usage (from YOUR project root, which must be a git repository):
   bash /path/to/relevio/install.sh [--update|--force] [--private]
 
 Options:
-  --update   Upgrade an existing install to this version: refreshes the hook,
-             the slash commands, and the block between the relevio markers in
-             CLAUDE.md. This is what you want to move from an older relevio to
-             this one. All safety checks stay ON. Anything you wrote OUTSIDE
-             the markers is never touched.
+  --update   Upgrade an existing install to this version: refreshes relevio.md,
+             the hooks and the slash commands. This is what you want to move
+             from an older relevio to this one. All safety checks stay ON.
+             Coming from v0.17 or earlier, it also removes relevio's old block
+             from your CLAUDE.md; nothing else in that file is touched.
   --force    Everything --update does, PLUS it overrides the safety check that
              stops the install when your CLAUDE.md already describes a session
              methodology of its own. Use only when you know that check is a
              false positive. Neither flag ever touches docs/handoff/ or
              INDEX.md.
-  --private  Also add CLAUDE.md, .claude/ and docs/handoff/ to .gitignore
+  --private  Also add relevio.md, .claude/ and docs/handoff/ to .gitignore
              (solo mode: the methodology stays local, out of the repo).
              Without it, the files are left for you to commit (team mode).
   --help     This text.
 
-WARNING about the markers: everything BETWEEN $MARK_START and
-$MARK_END belongs to relevio and is REPLACED on --update/--force.
-Keep your own instructions outside that block; they are then never touched.
+WHAT BELONGS TO WHOM: relevio.md is relevio's and is REPLACED whole on
+--update, so never write your own instructions in it. CLAUDE.md is yours and
+relevio does not touch it.
 
 Uninstall:
   curl -fsSL ${REPO_RAW}/uninstall.sh | bash
@@ -67,48 +76,43 @@ echo "Target project: $(pwd)"
 echo
 
 # --- Preconditions (fail loud, never install half-broken) -------------------
-command -v jq >/dev/null 2>&1 || fail "jq is required (the context hook parses transcripts with it).
+command -v jq >/dev/null 2>&1 || fail "jq is required (the hooks parse their input with it).
        Install it first: sudo apt install jq   |   brew install jq"
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "this directory is not a git repository.
        The methodology relies on commits, pushes and handoff history.
        cd into your project, or run 'git init' first."
 
-# An existing CLAUDE.md is never overwritten: the section is APPENDED, so your
-# own instructions always survive. But appending on top of a session
-# methodology someone already wrote BY HAND leaves the agent with two
-# conflicting sets of rules (two handoff naming schemes, two cycles), and the
-# agent cannot tell which one wins. Detect that here, before anything is
-# written, so the human resolves it instead of discovering it later.
+# relevio no longer writes into CLAUDE.md, so it can no longer overwrite what
+# you wrote there. But a CLAUDE.md that already defines a session methodology
+# BY HAND still collides with the one relevio injects at session start: the
+# agent ends up with two cycles and two handoff schemes and cannot tell which
+# wins. Nothing is destroyed in that scenario, yet the agent is left
+# incoherent, which is worse than not installing. Detect it before writing
+# anything, and let the human resolve it.
 if [ "$FORCE" -ne 1 ] && [ -f CLAUDE.md ] && ! grep -qF "$MARK_START" CLAUDE.md \
    && grep -qEi 'docs/handoff|/kickoff|/handoff' CLAUDE.md; then
-  fail "CLAUDE.md already describes a session/handoff methodology, and it is not
-       wrapped in relevio markers, so relevio cannot tell which part is its own.
-       Appending would leave your agent with TWO conflicting sets of rules.
+  fail "CLAUDE.md already describes a session/handoff methodology of its own.
+       relevio would inject a SECOND one at every session start, leaving your
+       agent with two conflicting cycles and no way to tell which one wins.
        Nothing has been installed.
-
-       Do NOT wrap your own text in the relevio markers to protect it: the
-       block BETWEEN those markers is exactly what --update and --force
-       REPLACE. Putting your methodology there would get it overwritten the
-       next time you upgrade. Your text is safe anywhere OUTSIDE the markers.
 
        Pick one:
 
-       (a) KEEP YOURS as the source of truth: leave your methodology where it
-           is and do NOT install relevio's CLAUDE.md section at all. Install
-           only the hook and the slash commands, by copying them yourself:
-             mkdir -p .claude/hooks .claude/commands
+       (a) KEEP YOURS as the source of truth: do not install relevio's
+           methodology at all. If you only want the context-window hook, copy
+           it yourself and register it:
+             mkdir -p .claude/hooks
              cp <relevio>/templates/context-warn.sh .claude/hooks/
-             cp <relevio>/templates/{kickoff,handoff,revisit}.md .claude/commands/
-           then register the hook in .claude/settings.json. Adapt your own
-           section by hand when you want relevio's newer ideas.
+           then add it as a PostToolUse hook in .claude/settings.json. Port
+           relevio's newer ideas into your own text by hand.
 
-       (b) REPLACE yours with relevio's: delete your methodology section from
-           CLAUDE.md, then re-run. relevio's section arrives between the
-           markers, and from then on --update refreshes just that block while
-           everything you write outside it stays untouched.
+       (b) REPLACE yours with relevio's: delete the session methodology from
+           CLAUDE.md, then re-run. It arrives as relevio.md, a separate file,
+           and from then on --update refreshes that file alone while CLAUDE.md
+           stays entirely yours.
 
        (c) FALSE POSITIVE (your CLAUDE.md mentions handoffs for unrelated
-           reasons): re-run with --force to append anyway."
+           reasons): re-run with --force to install anyway."
 fi
 
 # --- Locate templates: local clone, or fetch from GitHub --------------------
@@ -134,7 +138,7 @@ fi
 # behind is how a stale model table ends up lying about the context window).
 # The stamps are the only copy the user ever sees, so a stamp that disagrees
 # with this installer is a packaging bug: fail loud instead of stamping a lie.
-for stamped in context-warn.sh CLAUDE.md.section; do
+for stamped in "${STAMPED[@]}"; do
   grep -qF "relevio v${VERSION}" "$TPL/$stamped" \
     || fail "template $stamped is not stamped 'relevio v${VERSION}'.
        This installer and its templates come from different versions, so the
@@ -166,87 +170,106 @@ install_file() {
   if [ -f "$dest" ] && [ "$UPDATE" -ne 1 ]; then
     fail "$dest already exists and differs from the template.
        Re-run with --update to refresh it to this version (any local edits you
-       made to THIS file will be lost; your CLAUDE.md text outside the relevio
-       markers is not affected)."
+       made to THIS file will be lost; your CLAUDE.md is not affected)."
   fi
   cp "$src" "$dest"
   chmod "$mode" "$dest"
   info "installed: $dest"
 }
 
-# --- 1. Hook + slash commands -----------------------------------------------
+# --- 1. The methodology, hooks and slash commands ---------------------------
+install_file "$TPL/relevio.md" relevio.md 644
 mkdir -p .claude/hooks .claude/commands
 install_file "$TPL/context-warn.sh" .claude/hooks/context-warn.sh 755
+install_file "$TPL/session-start.sh" .claude/hooks/session-start.sh 755
 install_file "$TPL/handoff.md" .claude/commands/handoff.md 644
 install_file "$TPL/kickoff.md" .claude/commands/kickoff.md 644
 install_file "$TPL/revisit.md" .claude/commands/revisit.md 644
 
-# --- 2. Register the hook in .claude/settings.json (merge, don't clobber) ---
+# --- 2. Register both hooks in .claude/settings.json (merge, don't clobber) --
+# PostToolUse/context-warn.sh keeps the agent aware of its context window;
+# SessionStart/session-start.sh is what delivers relevio.md into the session.
+# Without the second one relevio.md is just a file nobody reads.
 SETTINGS=".claude/settings.json"
-HOOK_ENTRY='{"matcher":"*","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/context-warn.sh"}]}'
-if [ ! -f "$SETTINGS" ]; then
-  jq -n --argjson e "$HOOK_ENTRY" '{"hooks":{"PostToolUse":[$e]}}' > "$SETTINGS"
-  info "installed: $SETTINGS"
-elif jq -e '.hooks.PostToolUse[]?.hooks[]?.command // empty | select(contains("context-warn.sh"))' \
-       "$SETTINGS" >/dev/null 2>&1; then
-  info "unchanged: $SETTINGS (hook already registered)"
-else
+register_hook() {
+  local event="$1" script="$2"
+  local entry
+  entry=$(jq -nc --arg cmd "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/$script" \
+    '{"matcher":"*","hooks":[{"type":"command","command":$cmd}]}')
+  if [ ! -f "$SETTINGS" ]; then
+    jq -n --arg ev "$event" --argjson e "$entry" '{"hooks":{($ev):[$e]}}' > "$SETTINGS"
+    info "installed: $SETTINGS ($event registered)"
+    return 0
+  fi
   jq -e . "$SETTINGS" >/dev/null 2>&1 || fail "$SETTINGS exists but is not valid JSON. Fix it, then re-run."
-  TMP="$(mktemp)"
-  jq --argjson e "$HOOK_ENTRY" \
-     '.hooks.PostToolUse = ((.hooks.PostToolUse // []) + [$e])' \
-     "$SETTINGS" > "$TMP"
-  mv "$TMP" "$SETTINGS"
-  info "updated: $SETTINGS (hook registered, existing settings preserved)"
-fi
+  if jq -e --arg ev "$event" --arg s "$script" \
+       '.hooks[$ev][]?.hooks[]?.command // empty | select(contains($s))' \
+       "$SETTINGS" >/dev/null 2>&1; then
+    info "unchanged: $SETTINGS ($event already registered)"
+    return 0
+  fi
+  local tmp; tmp="$(mktemp)"
+  jq --arg ev "$event" --argjson e "$entry" \
+     '.hooks[$ev] = ((.hooks[$ev] // []) + [$e])' "$SETTINGS" > "$tmp"
+  mv "$tmp" "$SETTINGS"
+  info "updated: $SETTINGS ($event registered, existing settings preserved)"
+}
+register_hook PostToolUse context-warn.sh
+register_hook SessionStart session-start.sh
 
-# --- 3. CLAUDE.md methodology section (marker-delimited, idempotent) --------
-if [ ! -f CLAUDE.md ]; then
-  { echo "# Instructions for agents"; echo; cat "$TPL/CLAUDE.md.section"; } > CLAUDE.md
-  info "installed: CLAUDE.md"
-elif grep -qF "$MARK_START" CLAUDE.md; then
+# --- 3. Migration: drop the pre-v0.18 block from CLAUDE.md ------------------
+# Up to v0.17 the methodology lived inside CLAUDE.md between markers. Leaving
+# that block behind would mean two copies of the rules in context, one of them
+# frozen at whatever version it was installed at. It is removed rather than
+# refreshed, because from now on CLAUDE.md belongs to the user alone.
+#
+# Balanced markers are a precondition, not an assumption: with a missing or
+# duplicated marker there is no way to tell where the old block ends, and
+# cutting blind would swallow whatever follows. Check first and refuse.
+if [ -f CLAUDE.md ] && grep -qF "$MARK_START" CLAUDE.md; then
   if [ "$UPDATE" -eq 1 ]; then
-    # The block is replaced exactly WHERE IT IS. Everything outside the markers
-    # keeps both its content and its position, so a block someone deliberately
-    # placed in the middle of their CLAUDE.md stays in the middle.
-    #
-    # Balanced markers are a precondition, not an assumption: with a missing or
-    # duplicated marker there is no way to tell where relevio's block ends, and
-    # replacing blind would silently swallow whatever follows. Check first and
-    # refuse, because that failure would eat the user's own instructions.
     n_start=$(grep -cF "$MARK_START" CLAUDE.md || true)
     n_end=$(grep -cF "$MARK_END" CLAUDE.md || true)
     if [ "$n_start" -ne 1 ] || [ "$n_end" -ne 1 ]; then
-      fail "CLAUDE.md contains $n_start start marker(s) and $n_end end marker(s).
-       relevio needs exactly one balanced pair to know where its own block ends;
-       with anything else, replacing it could delete your text. Nothing was
-       changed. Fix the markers by hand, then re-run:
-         $MARK_START  ...relevio's block...  $MARK_END"
+      fail "CLAUDE.md contains $n_start relevio start marker(s) and $n_end end
+       marker(s). Exactly one balanced pair is needed to know where the old
+       block ends; with anything else, cutting it could delete your text.
+       Nothing was changed in CLAUDE.md. Remove the leftover block by hand
+       (everything from $MARK_START to $MARK_END), then re-run."
     fi
     l_start=$(grep -nF "$MARK_START" CLAUDE.md | cut -d: -f1)
     l_end=$(grep -nF "$MARK_END" CLAUDE.md | cut -d: -f1)
     if [ "$l_start" -ge "$l_end" ]; then
       fail "in CLAUDE.md the relevio end marker (line $l_end) comes before the
-       start marker (line $l_start). Nothing was changed. Fix the order by hand,
-       then re-run."
+       start marker (line $l_start). Nothing was changed in CLAUDE.md. Fix the
+       order by hand, then re-run."
     fi
-    # The section file carries its own markers, so printing it replaces the old
-    # block markers and all. No separator is emitted, which is also why re-runs
-    # cannot drift: nothing outside the block is added or removed.
-    awk -v s="$MARK_START" -v e="$MARK_END" -v sec="$TPL/CLAUDE.md.section" '
-      index($0,s){ inblock=1; while ((getline l < sec) > 0) print l; close(sec); next }
-      index($0,e){ inblock=0; next }
-      !inblock' CLAUDE.md > CLAUDE.md.tmp
-    mv CLAUDE.md.tmp CLAUDE.md
-    info "updated: CLAUDE.md (the relevio block was replaced in place with
-        v${VERSION}; everything outside the markers kept its content and its
-        position)"
+    awk -v s="$MARK_START" -v e="$MARK_END" \
+      'index($0,s){skip=1} !skip{print} index($0,e){skip=0}' CLAUDE.md > CLAUDE.md.tmp
+    # If nothing but relevio's own scaffolding is left, the file IS relevio's
+    # leftover (the installer created it in the first place) and an empty
+    # "Instructions for agents" heading with no instructions under it would be
+    # a lie. Anything the user wrote survives this test and keeps the file.
+    # || true: under pipefail a grep matching no lines exits 1.
+    LEFT="$(grep -v '^[[:space:]]*$' CLAUDE.md.tmp | grep -vx '# Instructions for agents' | wc -l)" || true
+    if [ "$LEFT" -eq 0 ]; then
+      rm CLAUDE.md CLAUDE.md.tmp
+      info "removed: CLAUDE.md (it held nothing but relevio's old block; the
+        methodology now lives in relevio.md, and CLAUDE.md is yours to create
+        if and when you want project instructions of your own)"
+    else
+      # The cut can leave a blank line where the block used to be. It is left
+      # alone: those lines are now OUTSIDE anything relevio owns, and tidying
+      # them would mean editing the user's file for cosmetics. This cannot
+      # accumulate either, since the markers are gone after this single pass.
+      mv CLAUDE.md.tmp CLAUDE.md
+      info "updated: CLAUDE.md (relevio's old block removed; everything you
+        wrote is untouched, and relevio will not write here again)"
+    fi
   else
-    info "unchanged: CLAUDE.md (relevio section already present; --update refreshes it)"
+    info "NOTE: CLAUDE.md still holds relevio's pre-v0.18 block. Re-run with
+        --update to remove it; until then the agent sees the rules twice."
   fi
-else
-  { echo; cat "$TPL/CLAUDE.md.section"; } >> CLAUDE.md
-  info "updated: CLAUDE.md (relevio section appended)"
 fi
 
 # --- 4. Handoff folder + library index --------------------------------------
@@ -260,24 +283,26 @@ else
 fi
 
 # --- 5. Private mode (optional): keep the methodology out of the repo -------
+# CLAUDE.md is deliberately NOT listed: it is yours, and whether it belongs in
+# the repo is your call, not relevio's.
 if [ "$PRIVATE" -eq 1 ]; then
   if [ -f .gitignore ] && grep -qF "$GI_START" .gitignore; then
     info "unchanged: .gitignore (private-mode block already present)"
   else
     { [ -f .gitignore ] && [ -s .gitignore ] && echo; cat <<EOF
 $GI_START
-CLAUDE.md
+relevio.md
 .claude/
 docs/handoff/
 $GI_END
 EOF
     } >> .gitignore
-    info "updated: .gitignore (private mode: CLAUDE.md, .claude/, docs/handoff/ ignored)"
+    info "updated: .gitignore (private mode: relevio.md, .claude/, docs/handoff/ ignored)"
   fi
-  TRACKED="$(git ls-files CLAUDE.md .claude docs/handoff 2>/dev/null | head -1 || true)"
+  TRACKED="$(git ls-files relevio.md .claude docs/handoff 2>/dev/null | head -1 || true)"
   [ -n "$TRACKED" ] && info "NOTE: some of these files are already tracked by git; .gitignore does
         not untrack them. To untrack (keeping them on disk):
-        git rm -r --cached CLAUDE.md .claude docs/handoff"
+        git rm -r --cached relevio.md .claude docs/handoff"
 fi
 
 # --- Done -------------------------------------------------------------------
@@ -285,19 +310,21 @@ cat <<'EOF'
 
 Done. Next steps:
 
-  1. The hook loads when a session STARTS: restart Claude Code (or open a new
+  1. The hooks load when a session STARTS: restart Claude Code (or open a new
      session) in this project.
   2. Per dev, once:
-       - claude update            (old versions do not support the hook)
+       - claude update            (old versions do not support the hooks)
        - /statusline              (see your own context % as the human)
        - window auto-detected per model (1M current, 200k Haiku) for the
          percentage; an unrecognized model gets a raw token count every 100k
          instead. Force percentage with "env": {"CLAUDE_CONTEXT_LIMIT": "..."}
        - custom warning thresholds? "CLAUDE_CONTEXT_WARN": "60,75"
-  3. Team mode (default): commit CLAUDE.md, .claude/settings.json,
+  3. Team mode (default): commit relevio.md, .claude/settings.json,
      .claude/commands/, .claude/hooks/ and docs/handoff/ so every dev's agent
      follows the same rules and shares the session history. Solo/private mode:
      re-run with --private to gitignore all of it instead.
+  4. relevio.md is relevio's file and --update replaces it whole: put your own
+     project instructions in CLAUDE.md, which relevio never touches.
 
 Daily cycle: start every session with /kickoff, close it with /handoff (the
 agent will also do it on its own when the context hook warns). The first

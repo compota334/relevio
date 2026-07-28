@@ -69,13 +69,19 @@ to keep working, not to close.
    cycle: the hook warns at 70% and 80% of the context window; at the first
    warning the session starts closing (no new large tasks), and it will end
    with a handoff (`/relevio:handoff`) plus a new session.
-4. If this project ALSO has a script-installed relevio
-   (`.claude/hooks/context-warn.sh`), check whether it is out of date and report
-   the result in one line. The plugin itself updates through Claude Code's
+4. If this project ALSO has a script-installed relevio (a `relevio.md` at the
+   project root), say so FIRST, because two installs is a problem before it is
+   a version question: the plugin and the script install each inject the
+   methodology at session start, so the agent receives it TWICE, and if their
+   versions differ it receives two different sets of rules. Tell the user to
+   keep one: either remove the script install (`bash <relevio>/uninstall.sh`
+   from the project root, which keeps `docs/handoff/`) or disable the plugin
+   through `/plugin`. Then check whether that script install is out of date and
+   report the result in one line. The plugin updates through Claude Code's
    `/plugin` interface, but a script install sitting beside it does not, so it
    is the one that silently rots:
 
-       grep -m1 'relevio v' .claude/hooks/context-warn.sh
+       grep -m1 'relevio v' relevio.md
        curl -fsSL --max-time 5 https://raw.githubusercontent.com/compota334/relevio/main/VERSION
 
    Say which of these is true, and no more:

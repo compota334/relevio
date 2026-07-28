@@ -1,5 +1,5 @@
 Open this session following the "Sessions and handoffs" convention in
-CLAUDE.md: you are picking up the baton from the previous session.
+relevio.md: you are picking up the baton from the previous session.
 
 1. Find and read the LATEST handoff, and do NOT assume it lives on your
    current branch. The previous session may have committed it on a feature
@@ -52,10 +52,15 @@ CLAUDE.md: you are picking up the baton from the previous session.
    CLAUDE_CONTEXT_WARN thresholds if configured); at the first warning the
    session starts closing, and it will end with a handoff plus a new session.
 4. Check whether this project's relevio is out of date, and report the result
-   in one line. Read the installed version from the stamp, and the published one
-   from the repo:
+   in one line. If you also received the methodology from the relevio PLUGIN
+   this session (its injected text names the `/relevio:` commands), say so
+   first: two installs means the rules arrive twice, in possibly different
+   versions. Tell the user to keep one, either by disabling the plugin through
+   `/plugin` or by removing this install with `bash <relevio>/uninstall.sh`
+   (which keeps `docs/handoff/`). Read the installed version from the stamp,
+   and the published one from the repo:
 
-       grep -m1 'relevio v' .claude/hooks/context-warn.sh
+       grep -m1 'relevio v' relevio.md
        curl -fsSL --max-time 5 https://raw.githubusercontent.com/compota334/relevio/main/VERSION
 
    Then say which of these is true, and nothing more elaborate:
@@ -63,8 +68,8 @@ CLAUDE.md: you are picking up the baton from the previous session.
    - **Behind by a little**: mention it as information, not an alarm. Being one
      version behind is not an emergency. Give the upgrade command
      (`bash <relevio>/install.sh --update`, run from this project root) and move
-     on. It refreshes only relevio's own files and the block between the markers
-     in CLAUDE.md; anything written outside those markers is left alone.
+     on. It refreshes only relevio's own files (`relevio.md`, the hooks, the
+     commands) and never touches `CLAUDE.md`, which is yours.
    - **Behind by several versions, or NO stamp at all** (an install predating
      version stamping): say so clearly and recommend upgrading before real work.
      This is the case worth insisting on: a stale model table makes the hook

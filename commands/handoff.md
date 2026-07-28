@@ -47,7 +47,7 @@ not invent one. For anything you are leaving OPEN that depended on context you
 had derived (approaches already ruled out, why the obvious fix does not work, a
 coupling you only noticed after reading several files), write down that
 reasoning and not just the title: the next agent can re-read the code, but it
-cannot re-derive that for free. Do not repeat what the project's CLAUDE.md already says: the
+cannot re-derive that for free. Do not repeat what relevio's methodology or the project's CLAUDE.md already says: the
 next agent reads it too. Be thorough: we need a long, good handoff. Structure
 it as a funnel, from general to specific, closing with the full picture. If
 you received a previous handoff, fold in whatever is still relevant so the

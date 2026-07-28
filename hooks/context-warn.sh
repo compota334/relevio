@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.17.0
+# relevio v0.18.0
 # relevio: context warning for the agent (sessions methodology in CLAUDE.md).
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
