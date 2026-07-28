@@ -173,3 +173,17 @@ empezar: tests, versionado visible, un installer que no puede mentir sobre lo qu
 toca, y un hook que prefiere no decir nada antes que decir un número inventado.
 Lo único abierto de verdad es la aprobación de Anthropic, que no depende de
 nosotros. La próxima sesión abre con /kickoff desde /home/no/VIBE/claude-baton.
+
+---
+
+## Addendum (2026-07-28, sesion v0.18)
+
+El pendiente 1 (submission a Anthropic) quedo RESUELTO en su parte incierta:
+existe un panel de estado en https://platform.claude.com/plugins/submissions
+(cuenta compota334 en Console). Ahi se ve que la submission del 22/07 SI llego
+y sigue "Submitted and pending review". El 28/07 el usuario envio una segunda
+submission con la descripcion de v0.18.0 y tres use cases; ambas apuntan al
+mismo repo. Chequeo de aceptacion: buscar "relevio" en
+anthropics/claude-plugins-community/.claude-plugin/marketplace.json (el
+catalogo sincroniza de noche tras la aprobacion; el pin de commit lo actualiza
+un bot solo, asi que los pushes nuevos se toman automaticamente).
