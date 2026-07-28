@@ -1,10 +1,12 @@
 # relevio
 
 Pass the baton between Claude Code sessions instead of running them into the
-ground. One command installs a complete working methodology into any project:
-ordered, named, never-compacted sessions with written handoffs, plus the
-engineering rules that keep an agent honest (fail loud, phased work, mandatory
-verification).
+ground. One command gives any project ordered, named, never-compacted sessions
+with written handoffs, and an agent that knows how full its context window is
+before it walks into the wall.
+
+relevio governs sessions and nothing else. How your project codes, verifies and
+handles errors stays in your `CLAUDE.md`, which relevio never touches.
 
 ## The core idea: never lose context again
 
@@ -56,36 +58,53 @@ Nothing is ever lost to compaction again.
 | `.claude/commands/kickoff.md` | The `/kickoff` slash command: opens a session (reads the index and the latest handoff, checks git state, summarizes where things stand). |
 | `.claude/commands/handoff.md` | The `/handoff` slash command: closes a session (writes the dated handoff with its metadata header, appends the index row, hands over the literal close-out steps). |
 | `.claude/commands/revisit.md` | The `/revisit` slash command: finds an old session in the library and returns the `claude --resume <session-id>` command to reopen its conversation. |
-| `CLAUDE.md` | The full working methodology (see below), appended between markers if you already have a CLAUDE.md. |
+| `relevio.md` | The session methodology itself, injected into the agent's context at every session start. This file is relevio's and is replaced whole on upgrade. |
+| `.claude/hooks/session-start.sh` | SessionStart hook: delivers `relevio.md` to the agent. A fresh session gets the full methodology; a REOPENED conversation gets only the revisit rules (it starts near the top of its window, so dumping the file into it would waste the little room it has left); a session that just auto-compacted is told to salvage what remains into a handoff. |
 | `docs/handoff/` | Where handoffs live. They accumulate; the newest one is the next session's starting point. |
 | `docs/handoff/INDEX.md` | The library index: one append-only row per session (date, conversation name, handoff file, commit range, topics, summary). Never overwritten, not even with `--force`. |
 
-## What the CLAUDE.md section makes your agent do
+## relevio does not touch your CLAUDE.md
 
-The installed section is not only about sessions; it sets the working rules
-that make agent output trustworthy:
+`CLAUDE.md` is yours. relevio does not create it, does not write to it, does
+not read it and does not depend on it. Its own rules live in `relevio.md` and
+reach the agent through the SessionStart hook.
 
-- **Fail loud, never fake success.** The agent must prefer a visible failure
-  over any silent fallback: no placeholder data, no cached defaults, no
-  "compatibility" code paths, no swallowed exceptions. If something cannot
-  work, it raises a clear error and says why. This matters because silent
-  fallbacks are how agents hide bugs: everything looks green until production.
-- **Mandatory verification.** Nothing is reported as "done" until the
-  project's own checks (type-check, lint, build, tests) ran clean on what was
-  touched. If the project has no checks, the agent must say so instead of
-  claiming success.
-- **Phased work.** No multi-file refactors in one pass: explicit phases of 5
-  files or fewer, verified one by one. Dead-code cleanup goes in its own
-  commit before any structural refactor.
-- **Senior-level standards.** Wrong architecture or duplicated state gets a
-  structural fix, not a patch on top.
-- **Grep-discipline for renames.** Direct calls, type references, string
-  literals, dynamic imports, tests: searched separately, because one grep
-  never catches everything.
-- **Re-read before editing** in long conversations, instead of trusting stale
-  context memory.
-- **The session cycle** (open with the handoff, close before the window fills,
-  leave literal copy-paste instructions for the human).
+This is deliberate. Every project already has opinions about how to code, and
+every dev has their own: how to phase a refactor, when to run the linter, how
+to treat errors, whether to use tabs. None of that is relevio's business, and
+earlier versions were wrong to ship it. **relevio governs exactly one thing:
+how sessions open, how they are paced against the context window, and how they
+close.** Everything else is yours to write in `CLAUDE.md`, where relevio will
+never reach.
+
+The practical consequence: upgrading relevio can never disturb your
+instructions, because the two files never meet.
+
+> Coming from v0.17 or earlier? Back then the methodology lived inside
+> `CLAUDE.md` between markers. Running `install.sh --update` removes that old
+> block, cutting nothing else: everything you wrote around it stays byte for
+> byte. If the file held nothing but relevio's block (relevio created it in the
+> first place), it is removed rather than left as an empty heading.
+
+## What the methodology makes your agent do
+
+- **Open with the baton.** `/kickoff` reads the session index and the latest
+  handoff before touching code, finds it even when the previous session left it
+  on another branch, and reconciles which branch to work on with you instead of
+  guessing.
+- **Stay aware of the window.** The agent cannot see its own context
+  percentage; the hook tells it. Checkpoints every 10% keep it pacing, so it
+  does not start a large refactor at 85%.
+- **Harvest at 70%, not just brake.** When the close-out warning lands, the
+  agent finishes what depends on understanding it *derived* (dead ends already
+  ruled out, why the obvious fix fails) and hands off what the next session can
+  simply re-read. Facts are cheap to recover; conclusions are not.
+- **Close before the wall.** A dated handoff with commit range, lessons and
+  pending work in order, an append-only index row, and literal copy-paste
+  instructions for the human.
+- **Never work in a reopened session.** Old conversations are an archive to ask
+  questions of. Guards fire at 85/90/95%, and at 99% a STOP LAW halts the agent
+  until you confirm.
 
 ## Install
 
@@ -107,19 +126,23 @@ open. Plugin commands are namespaced: use `/relevio:kickoff`,
 `/relevio:handoff` and `/relevio:revisit`. `docs/handoff/` is
 created in each project the first time you close a session there.
 
-The plugin also ships a SessionStart hook that arms the agent with the
-methodology at the start of EVERY session, kickoff or not (plugins cannot
-auto-load a CLAUDE.md, so this hook plays that role). The injected message
-adapts to how the session started: a fresh session gets the cycle summary, a
-REOPENED conversation gets the revisit rules automatically (ask, don't work),
-and a session that just auto-compacted is told to salvage what remains into a
-handoff.
+The plugin carries the same methodology as the script installer, from the same
+file, delivered by the same kind of SessionStart hook. The difference is where
+it lives: the plugin keeps it inside itself and writes nothing into your
+project, so there is no `relevio.md` and no `.claude/` to commit.
 
-What the plugin does NOT carry: the CLAUDE.md methodology section (plugins
-cannot auto-load CLAUDE.md content). The session cycle works fully; if you
-also want the engineering rules (fail loud, phased work, mandatory
-verification) written into a repo for every dev's agent, use the script
-installer below (both can coexist: the hook warns only once per session).
+Which one to pick:
+
+- **Plugin**: you work alone, or across many repos, and want relevio to follow
+  you everywhere with no files in any project. Updates through `/plugin`.
+- **Script installer**: your team should share one methodology and one handoff
+  history, committed with the code. Then everybody's agent behaves the same,
+  including agents run by people who never installed anything.
+
+**Do not run both in the same project.** Each injects the methodology at
+session start, so the agent would receive it twice, and if the two are at
+different versions it receives two different sets of rules. `/kickoff` detects
+this and tells you to drop one.
 
 ### Option 2: script installer (per-repo, team mode)
 
@@ -155,48 +178,38 @@ your install against the published one and reports the result at session start
 By default the installed files are left for you to commit (team mode:
 every dev's agent follows the same rules and the handoff history is shared).
 Working solo, or don't want the methodology in the repo? Add `--private`:
-it also writes a marked block to `.gitignore` so `CLAUDE.md`, `.claude/` and
-`docs/handoff/` stay local.
+it also writes a marked block to `.gitignore` so `relevio.md`, `.claude/` and
+`docs/handoff/` stay local. `CLAUDE.md` is deliberately not on that list:
+whether your own instructions belong in the repo is your call, not relevio's.
 
 ### Installing into a project that already has a CLAUDE.md
 
-Your existing `CLAUDE.md` is never overwritten: relevio's section is **appended**
-inside `<!-- relevio:start -->` / `<!-- relevio:end -->` markers, and everything
-you already wrote stays exactly where it was.
-
-**The markers mean "this belongs to relevio", not "this is protected".** The
-block between them is REPLACED wholesale when you upgrade with
-`install.sh --update`. So keep your own instructions **outside** the markers,
-where the installer never touches them; never move your text inside the block
-hoping to shield it, because that is precisely what gets overwritten.
-
-The replacement happens **in place**: the block stays exactly where you put it,
-so text you wrote after it does not get reordered above it. Everything outside
-the markers keeps both its content and its position, which is also why re-running
-the installer leaves a clean `git diff`. If the markers are ever unbalanced (one
-missing, or duplicated), the installer cannot tell where relevio's block ends,
-so it **refuses to touch the file** rather than risk swallowing your text.
+Nothing happens to it. relevio installs `relevio.md` alongside it and leaves
+your file exactly as it was, down to the byte. There are no markers to respect
+and no block to keep your text out of.
 
 The one case that needs a human decision is a project whose `CLAUDE.md` already
-describes a session/handoff methodology **written by hand** (no markers).
-Appending there would leave the agent with two conflicting sets of rules (two
-handoff naming schemes, two cycles) and no way to tell which one wins, so the
-installer stops **before writing anything** and asks you to pick: keep yours and
-install only the hook and commands by hand, delete yours to adopt relevio's, or
-pass `--force` if it is a false positive.
+describes a session/handoff methodology **written by hand**. Nothing would be
+destroyed, but the agent would then receive two cycles and two handoff schemes
+with no way to tell which one wins, so the installer stops **before writing
+anything** and asks you to pick: keep yours (install only the context hook by
+hand), delete yours to adopt relevio's, or pass `--force` if it is a false
+positive.
 
 ### Upgrading an existing install
 
-Run the installer again with `--update`. It refreshes the hook, the slash
-commands and the marked block in `CLAUDE.md` to the new version, with every
-safety check still on. `--force` is `--update` plus overriding the check above,
-so reach for it only when you know that check is a false positive.
+Run the installer again with `--update`. It refreshes `relevio.md`, the hooks
+and the slash commands to the new version, with every safety check still on.
+Coming from v0.17 or earlier it also removes relevio's old block from
+`CLAUDE.md`, so you are not left running two copies of the rules; nothing else
+in that file is touched. `--force` is `--update` plus overriding the check
+above, so reach for it only when you know that check is a false positive.
 
 **Which version am I on?** The installed files carry a stamp: the first lines of
-`.claude/hooks/context-warn.sh` and the heading of the relevio block in
-`CLAUDE.md` both read `relevio vX.Y.Z`, so `/kickoff` reports it and you can
-check offline with `grep -m1 'relevio v' .claude/hooks/context-warn.sh`. No
-stamp at all means the install predates version stamping and is well behind.
+`.claude/hooks/context-warn.sh` and the heading of `relevio.md` both read
+`relevio vX.Y.Z`, so `/kickoff` reports it and you can check offline with
+`grep -m1 'relevio v' relevio.md`. No stamp at all means the install predates
+version stamping and is well behind.
 This matters more than it looks: a stale install runs stale rules, and an
 out-of-date model table is how the hook ends up reporting a context percentage
 that is simply wrong.
@@ -242,7 +255,7 @@ new session, first message: /kickoff
   -> repeat
 ```
 
-Handoff rules (the agent gets them from CLAUDE.md and `/handoff`):
+Handoff rules (the agent gets them from `relevio.md` and `/handoff`):
 
 - **Funnel structure**: general context, then what was done (with commit
   hashes), files touched, lessons learned (only real ones), pending work in
@@ -350,7 +363,7 @@ by running `claude --resume <session-id>`.
 
 A revisited session is for asking, not for working: it reopens near the top
 of its context window. The hook fires guard warnings at 85, 90, 95 and 99%,
-and the installed CLAUDE.md contains a STOP LAW: at 99% the agent must not
+and `relevio.md` contains a STOP LAW: at 99% the agent must not
 answer; it must warn (in the user's language) that one more exchange may
 trigger auto-compact and ask for explicit confirmation to continue.
 
@@ -381,8 +394,8 @@ user). The cycle is unchanged; the operator plays the human role:
   hook itself also fires in non-interactive runs.
 - The close-out instructions the inner agent produces are for the operator to
   EXECUTE, not display: send `/rename <Session name>`, close the session,
-  open a new one, send `/kickoff`. The installed CLAUDE.md says this
-  explicitly, so the inner agent knows its "user" may be an operator.
+  open a new one, send `/kickoff`. `relevio.md` says this explicitly, so the
+  inner agent knows its "user" may be an operator.
 - The operator's uppercase name (e.g. `HERMES`) is the `Dev:` in handoff
   headers, which keeps human and agent sessions distinguishable in the index.
 - The operator answers the inner agent's questions (branch choice, unclear
@@ -395,13 +408,15 @@ user). The cycle is unchanged; the operator plays the human role:
 bash tests/install.sh
 ```
 
-Asserts the property the installer promises: running it twice in a row must
-leave the second run with an **empty git diff**. It covers a plain re-update,
-user text on both sides of the marker block, a `CLAUDE.md` ending in blank
-lines, and the hook and commands. It exists because `CLAUDE.md` once drifted by
-one blank line on every single re-run, so `--update` always reported a change
-even when nothing had changed, and a diff that is always dirty is a diff people
-stop reading.
+Asserts the two properties relevio promises out loud. First, that a normal
+install neither creates nor modifies `CLAUDE.md`, with the one-time v0.17
+migration as the only exception, and that the user's text around the removed
+block survives it. Second, idempotency: running the installer again leaves an
+empty `git diff`. It also checks that the SessionStart hook fails LOUDLY when
+`relevio.md` is missing rather than leaving a session silently without a
+methodology, that a reopened session gets the short revisit rules instead of
+the whole file, and that uninstalling removes relevio while leaving your
+`CLAUDE.md` and `docs/handoff/` intact.
 
 ## Uninstall
 
@@ -410,10 +425,11 @@ cd /path/to/your/project
 curl -fsSL https://raw.githubusercontent.com/compota334/relevio/main/uninstall.sh | bash
 ```
 
-Removes the hook, the commands, the settings entry, the CLAUDE.md section
-and the private-mode `.gitignore` block, preserving everything else you had
-in those files. `docs/handoff/` is always KEPT: it is your project's
-history.
+Removes `relevio.md`, both hooks, the commands, the settings entries and the
+private-mode `.gitignore` block, preserving everything else you had in those
+files. Your `CLAUDE.md` is left alone, except that an old pre-v0.18 relevio
+block inside it is cleaned out too. `docs/handoff/` is always KEPT: it is your
+project's history.
 
 ## License
 
