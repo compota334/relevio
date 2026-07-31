@@ -219,6 +219,26 @@ check "session-start: points at relevio.md for the full text" \
 # checks), and two copies drift: this pins them together.
 check "session-start: the injected core carries the current version" \
   "$(printf '%s' "$out" | grep -c "relevio v$(tr -d '[:space:]' < "$REPO/VERSION")")" "1"
+# The close-out thresholds must NOT be announced to the agent in advance. An
+# agent that knows the warning fires at 70% anchors on the number and starts
+# closing at 60%, before the warning, wasting the very window the thresholds
+# protect (observed in real sessions). The instruction travels WITH the
+# warning, so nothing before it may name the percentages.
+check "session-start: the core does not pre-announce the close-out thresholds" \
+  "$(printf '%s' "$out" | grep -cE '70%|80%|at 70|at 80')" "0"
+# Same rule for the context hook's informational checkpoints: they fire six
+# times per session, so a threshold named there is the strongest anchor of all.
+fake="$d/fake-transcript.jsonl"
+printf '{"model":"claude-opus-5","message":{"usage":{"input_tokens":150000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}\n' > "$fake"
+cw_out=$(printf '{"transcript_path":"%s","session_id":"relevio-test-%s"}' "$fake" "$$" \
+  | bash "$d/.claude/hooks/context-warn.sh" | jq -r '.hookSpecificOutput.additionalContext // ""')
+rm -f /tmp/claude-ctx-warn-relevio-test-$$-*
+check "context-warn: checkpoint speaks at 15%" \
+  "$(printf '%s' "$cw_out" | grep -c 'CONTEXT INFO')" "1"
+check "context-warn: checkpoint does not name the close-out thresholds" \
+  "$(printf '%s' "$cw_out" | grep -cE '70|80')" "0"
+check "context-warn: checkpoint says it is not a close signal" \
+  "$(printf '%s' "$cw_out" | grep -c 'NOT a signal')" "1"
 for src in startup resume compact; do
   n=$(printf '%s' "$(inject "$d" "$src")" | wc -c)
   check "session-start: $src payload fits the injection budget ($n <= $INJECT_BUDGET)" \

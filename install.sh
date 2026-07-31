@@ -11,7 +11,7 @@
 # old block so you are not left running two copies of the rules.
 set -euo pipefail
 
-VERSION="0.18.0"
+VERSION="0.19.0"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh session-start.sh handoff.md kickoff.md revisit.md relevio.md INDEX.md)
 STAMPED=(context-warn.sh session-start.sh relevio.md)

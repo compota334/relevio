@@ -5,9 +5,10 @@ description: Open a session - read the latest handoff, check git state, summariz
 Open this session following the relevio cycle: a session is NEVER
 stretched until auto-compact (that is where the conversation's detail gets
 lost). Each session opens from the previous session's handoff and will close
-with its own; a hook warns you at 70% and 80% of the context window (or the
-custom CLAUDE_CONTEXT_WARN thresholds if configured). You are picking up the
-baton from the previous session.
+with its own; a hook watches the context window and will tell you, explicitly
+and in the moment, when to start closing. Act on its warnings when they
+arrive, never in anticipation. You are picking up the baton from the previous
+session.
 
 The hook also sends you informational checkpoints at 10, 20, 30, 40, 50 and
 60% of the window: no action required and nothing to say to the user; use
@@ -66,9 +67,11 @@ to keep working, not to close.
    to the handoff, the pending work in order, and any operational state the
    handoff recorded (running services, which environment is the source of
    truth, resumable jobs). Close the summary with the two-line reminder of the
-   cycle: the hook warns at 70% and 80% of the context window; at the first
-   warning the session starts closing (no new large tasks), and it will end
-   with a handoff (`/relevio:handoff`) plus a new session.
+   cycle: a hook watches the context window and will say, explicitly and in
+   the moment, when to start closing and when to write the handoff; the
+   session will end with a handoff (`/relevio:handoff`) plus a new session.
+   Do not name the exact warning percentages: knowing the number makes an
+   agent anchor on it and start closing before the warning arrives.
 4. If this project ALSO has a script-installed relevio (a `relevio.md` at the
    project root), say so FIRST, because two installs is a problem before it is
    a version question: the plugin and the script install each inject the

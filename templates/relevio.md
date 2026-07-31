@@ -1,4 +1,4 @@
-# Session methodology (relevio v0.18.0)
+# Session methodology (relevio v0.19.0)
 
 Installed by [relevio](https://github.com/compota334/relevio). This is the full
 methodology. At every session start `.claude/hooks/session-start.sh` puts its
@@ -55,26 +55,29 @@ ritual):**
    remove <path>` (only if clean; never `--force` without the user's explicit
    OK). Offer to prune detached-HEAD worktrees left by closed sessions. If
    the branch is unclear, ASK first.
-3. Remind the user of the cycle in two lines: a hook warns at 70% and 80% of
-   the context window (defaults; configurable via `CLAUDE_CONTEXT_WARN`), at
-   the first warning the session starts closing, and at the end there will be
-   a handoff plus a new session.
+3. Remind the user of the cycle in two lines: a hook watches the context
+   window and will tell the agent, explicitly and in the moment, when to start
+   closing and when to write the handoff; the session ends with a handoff plus
+   a new session. Do NOT name the exact warning percentages in this reminder
+   (or anywhere else): an agent that knows the number anchors on it and starts
+   closing before the warning arrives, which wastes the window the thresholds
+   exist to protect.
 
 **During the session:** the repo hook (`.claude/hooks/context-warn.sh`) injects
 context notices to the agent (the agent CANNOT see its own percentage without
 this; the human sees it in the statusline). You will receive two kinds:
 
-- **Informational checkpoints (10, 20, 30, 40, 50, 60%)**: no action required
-  and nothing to say to the user; use them to PACE the session. Know where you
-  stand and plan accordingly: with plenty of window left, work normally; from
-  around 50-60%, prefer finishing what is open over kicking off the largest
-  pending task, and factor the remaining window into any plan you propose (a
-  big refactor does not fit in the last 40% of a session). This is also where
-  you start lining up the harvest described below: notice which of the open
-  threads depend on understanding you have built up and could not hand over
-  cheaply, because those are the ones to close before the window runs out.
+- **Informational checkpoints (every 10%)**: no action required and nothing to
+  say to the user; use them to PACE the session, never to close it. Know where
+  you stand and plan accordingly: with plenty of window left, work normally;
+  from around 50-60%, prefer finishing what is open over kicking off the
+  largest pending task, and factor the remaining window into any plan you
+  propose (a big refactor does not fit in the last 40% of a session). A
+  checkpoint is NOT a close signal, and the close-out must never start in
+  anticipation of a warning that has not arrived: the warnings carry their own
+  instructions and the moment to act on them is when they land, not before.
 - **Close-out warnings**, with these rules on arrival:
-- **Soft threshold (70% by default): harvest, do not just brake.** Do NOT open
+- **Soft warning: harvest, do not just brake.** Do NOT open
   new work. Among what is ALREADY open, spend the remaining window where the
   context you are holding is worth most. What dies when the session closes is
   not the tokens you read, it is the understanding you DERIVED: readable facts
@@ -89,8 +92,7 @@ this; the human sees it in the statusline). You will receive two kinds:
   one. Harvesting is picking what is ripe, not planting. Then write the
   handoff, commit and push, aiming to close with 10-15% of the window free so
   the conversation stays complete and reopenable.
-- **Hard threshold (80% by default)**: write the handoff NOW, before anything
-  else.
+- **Hard warning**: write the handoff NOW, before anything else.
 
 **When closing the session (also via `/handoff`):** the close-out is
 triggered ONLY by the hook's soft/hard warning or by the user asking for it.
@@ -173,4 +175,7 @@ size, and you decide when to hand off. Force percentage warnings (or fix a
 mis-detected known model) with
 `"env": {"CLAUDE_CONTEXT_LIMIT": "1000000"}` in `.claude/settings.local.json`.
 To change the warning thresholds, set
-`CLAUDE_CONTEXT_WARN` (e.g. `"60,75"`; default `"70,80"`) the same way.
+`CLAUDE_CONTEXT_WARN` (e.g. `"60,75"`) the same way; the default pair is
+documented in the hook script itself. It is deliberately not written here:
+this file reaches the agent, and an agent that knows the exact percentages
+anchors on them and starts closing before the warning arrives.

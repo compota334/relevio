@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.18.0
+# relevio v0.19.0
 # relevio: context warning for the agent (sessions methodology in CLAUDE.md).
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
@@ -122,12 +122,12 @@ done
 
 case "$TOP" in
   i10|i20|i30|i40|i50|i60)
-        emit "CONTEXT INFO: ${PCT}% of the context window used (${USED}/${LIMIT} tokens). Informational checkpoint, no action needed: the session close-out thresholds are at ${SOFT}% (soft) and ${HARD}% (hard)." ;;
-  soft) emit "CONTEXT WARNING: ${PCT}% of the window used (${USED}/${LIMIT} tokens, soft threshold ${SOFT}%). Start closing the session: do NOT start new large tasks; finish what is open, write the handoff, and commit and push. The goal is to close leaving 10-15% of the window free so this conversation stays reopenable with full context." ;;
-  hard) emit "CONTEXT WARNING: ${PCT}% of the window used (${USED}/${LIMIT} tokens, hard threshold ${HARD}%). CRITICAL: write the handoff NOW (CLAUDE.md convention, docs/handoff/, update INDEX.md), commit and push the verified work, and tell the user to rename this session (/rename DD-MM-YY short-title) and open a new one that starts with /kickoff." ;;
+        emit "CONTEXT INFO: ${PCT}% of the context window used (${USED}/${LIMIT} tokens). Informational checkpoint: no action needed, and this is NOT a signal to close, wrap up or hold back. Keep working normally; if the session ever needs closing, a separate warning will say so explicitly, with instructions, when the moment actually arrives." ;;
+  soft) emit "CONTEXT WARNING: ${PCT}% of the window used (${USED}/${LIMIT} tokens, soft threshold ${SOFT}%). Start the close-out NOW, and HARVEST rather than just brake: open no new work, and among what is ALREADY open, finish first whatever depends on understanding you DERIVED this session (why an approach fails, what you already ruled out, a subtle coupling you found), because that dies with the session, while plain facts the next session can cheaply re-read. Every item you pick must fit COMPLETE in the remaining window, verification and commit included. Then write the handoff, commit and push, aiming to close with 10-15% of the window still free so this conversation stays reopenable with full context." ;;
+  hard) emit "CONTEXT WARNING: ${PCT}% of the window used (${USED}/${LIMIT} tokens, hard threshold ${HARD}%). CRITICAL: write the handoff NOW (relevio.md convention, docs/handoff/, update INDEX.md), commit and push the verified work, and tell the user to rename this session (/rename DD-MM-YY short-title) and open a new one that starts with /kickoff." ;;
   g85)  emit "CONTEXT GUARD: ${PCT}% of the window used. If this is a REOPENED session (its handoff already written), keep answers short and do no new work: auto-compact is getting close. If this session has NO handoff yet, write it immediately." ;;
   g90)  emit "CONTEXT GUARD: ${PCT}% of the window used. Auto-compact is near. Answer briefly, avoid reading files or starting anything new, and remind the user in your reply that this conversation is almost full." ;;
   g95)  emit "CONTEXT GUARD: ${PCT}% of the window used. CRITICAL: from now on give only short answers, and warn the user in EVERY reply that auto-compact is imminent." ;;
-  g99)  emit "STOP LAW (relevio, CLAUDE.md): ${PCT}% of the context window is used. Do NOT answer the user's pending request. Reply ONLY, in the user's language, that you reached 99% of context, that continuing will trigger auto-compact and destroy this conversation's remaining detail, and ask if they are SURE they want to continue. Then wait for their explicit confirmation." ;;
+  g99)  emit "STOP LAW (relevio.md): ${PCT}% of the context window is used. Do NOT answer the user's pending request. Reply ONLY, in the user's language, that you reached 99% of context, that continuing will trigger auto-compact and destroy this conversation's remaining detail, and ask if they are SURE they want to continue. Then wait for their explicit confirmation." ;;
 esac
 exit 0

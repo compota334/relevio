@@ -48,9 +48,11 @@ relevio.md: you are picking up the baton from the previous session.
    to the handoff, the pending work in order, and any operational state the
    handoff recorded (running services, which environment is the source of
    truth, resumable jobs). Close the summary with the two-line reminder of the
-   cycle: a hook warns at 70% and 80% of the context window (or the custom
-   CLAUDE_CONTEXT_WARN thresholds if configured); at the first warning the
-   session starts closing, and it will end with a handoff plus a new session.
+   cycle: a hook watches the context window and will say, explicitly and in
+   the moment, when to start closing and when to write the handoff; the
+   session will end with a handoff plus a new session. Do not name the exact
+   warning percentages: knowing the number makes an agent anchor on it and
+   start closing before the warning arrives.
 4. Check whether this project's relevio is out of date, and report the result
    in one line. If you also received the methodology from the relevio PLUGIN
    this session (its injected text names the `/relevio:` commands), say so

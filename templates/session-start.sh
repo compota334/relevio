@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.18.0
+# relevio v0.19.0
 # relevio: inject the session methodology at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology lives in its own
@@ -29,13 +29,13 @@ emit() {
 
 SUBAGENT_LINE="If you are a SUBAGENT (spawned via the Task tool), ignore this methodology entirely and simply return your result."
 
-CORE="relevio v0.18.0: this project runs the relevio session cycle. It governs sessions ONLY (how they open, are paced against the context window, and close). How this project codes, verifies and handles errors is in CLAUDE.md, which relevio never touches. Full text in relevio.md at the project root: read it when you need the detail.
+CORE="relevio v0.19.0: this project runs the relevio session cycle. It governs sessions ONLY (how they open, are paced against the context window, and close). How this project codes, verifies and handles errors is in CLAUDE.md, which relevio never touches. Full text in relevio.md at the project root: read it when you need the detail.
 
 OPEN: sessions start with /kickoff, which reads docs/handoff/INDEX.md and the LATEST handoff before any code (it may live on another branch) and settles with the user which branch to work on. If the user skipped it and docs/handoff/ exists, suggest it.
 
-PACE: a PostToolUse hook reports your context usage; you cannot see it otherwise. Checkpoints at 10-60% need no action, but use them to pace: from 50-60% prefer finishing what is open over starting the largest pending task. At 70% HARVEST rather than brake: open no new work, and among what is already open finish first whatever depends on understanding you DERIVED (why an approach fails, what you already ruled out) rather than facts the next session can cheaply re-read; each item must fit complete, verification and commit included.
+PACE: a PostToolUse hook reports your context usage; you cannot see it otherwise. Its informational checkpoints require no action and are NOT close signals: keep working normally, and from 50-60% simply prefer finishing what is open over starting the largest pending task. When the hook needs something from you, its message will SAY so explicitly and carry its own instructions: act on them when they arrive, exactly as written, and NEVER in anticipation. Do not wrap up, brake or start closing on your own because you suspect a warning is near: a session closes only when a hook message instructs it or the user asks.
 
-CLOSE: at 80%, or on the user's request, write the handoff NOW: docs/handoff/YYYY-MM-DD_<short-title>.md with what was done (commit hashes), lessons that cost real effort, pending work in order, and the REASONING behind anything left open; append a row to INDEX.md; commit and push. A finished phase with window left is a reason to keep working, not to close. Never stretch a session into auto-compact.
+CLOSE: when a hook message calls for the close-out, or the user asks, write the handoff: docs/handoff/YYYY-MM-DD_<short-title>.md with what was done (commit hashes), lessons that cost real effort, pending work in order, and the REASONING behind anything left open; append a row to INDEX.md; commit and push. A finished phase with window left is a reason to keep working, not to close. Never stretch a session into auto-compact.
 
 REVISIT: a reopened session is for ASKING, not working. Guards fire at 85/90/95%, and at 99% the STOP LAW applies: do not answer the pending request, tell the user auto-compact is imminent, and wait for explicit confirmation.
 
