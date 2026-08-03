@@ -1,22 +1,30 @@
 #!/bin/bash
-# relevio v0.19.0
-# relevio: inject the session methodology at session start (plugin mode).
+# relevio v0.20.0
+# relevio: inject the session cycle at session start.
 #
-# Same job as templates/session-start.sh, with two differences forced by how
-# plugins work: the methodology is read from the PLUGIN (a plugin installs no
-# files into the user's repo, so there is no relevio.md there; the single
-# source of truth is templates/relevio.md inside the plugin, which is also
-# what the installer ships), and the slash commands are namespaced.
+# relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
+# through this hook and through the slash commands; CLAUDE.md is yours alone:
+# relevio never reads it, never edits it, never depends on it.
 #
 # The message depends on why the session started (the "source" field of the
 # SessionStart input):
-#   startup|clear  -> the operational core of the methodology (see below)
+#   startup|clear  -> the operational core of the cycle (see below)
 #   resume         -> revisited-session rules only. A reopened conversation
 #                     starts near the TOP of its window, so the cycle rules
 #                     would spend the little room it has left on things it is
 #                     not going to do: a revisited session asks, it does not
 #                     work.
 #   compact        -> auto-compact just destroyed detail; salvage what remains
+#
+# DESIGN RULE: the core says NOTHING about closing, handoffs, thresholds or
+# percentages. An agent that learns the close-out rules at minute zero starts
+# anticipating them long before they apply (observed in real sessions: agents
+# "wrapping up" at 60% because they knew a warning existed at 70%). Every
+# instruction travels WITH the event that triggers it: the PostToolUse hook
+# (context-warn.sh) carries the full close-out instructions inside the very
+# message that asks for the close-out, and the /relevio:kickoff and /relevio:handoff commands
+# carry their own step-by-step rituals. Nothing here may pre-announce any of
+# it, negations included ("this is not X" still plants X).
 #
 # Subagents are untouched: SessionStart fires for the main session only
 # (subagent spawns emit SubagentStart, which relevio does not hook), and the
@@ -31,57 +39,25 @@ emit() {
 
 SUBAGENT_LINE="If you are a SUBAGENT (spawned via the Task tool), ignore this methodology entirely and simply return your result."
 
-CORE="relevio v0.19.0: this project runs the relevio session cycle. It governs sessions ONLY (how they open, are paced against the context window, and close). How this project codes, verifies and handles errors is in CLAUDE.md, which relevio never touches. Full text in templates/relevio.md inside the relevio plugin: read it when you need the detail.
-
-OPEN: sessions start with /relevio:kickoff, which reads docs/handoff/INDEX.md and the LATEST handoff before any code (it may live on another branch) and settles with the user which branch to work on. If the user skipped it and docs/handoff/ exists, suggest it.
-
-PACE: a PostToolUse hook reports your context usage; you cannot see it otherwise. Its informational checkpoints require no action and are NOT close signals: keep working normally, and from 50-60% simply prefer finishing what is open over starting the largest pending task. When the hook needs something from you, its message will SAY so explicitly and carry its own instructions: act on them when they arrive, exactly as written, and NEVER in anticipation. Do not wrap up, brake or start closing on your own because you suspect a warning is near: a session closes only when a hook message instructs it or the user asks.
-
-CLOSE: when a hook message calls for the close-out, or the user asks, write the handoff: docs/handoff/YYYY-MM-DD_<short-title>.md with what was done (commit hashes), lessons that cost real effort, pending work in order, and the REASONING behind anything left open; append a row to INDEX.md; commit and push. A finished phase with window left is a reason to keep working, not to close. Never stretch a session into auto-compact.
-
-REVISIT: a reopened session is for ASKING, not working. Guards fire at 85/90/95%, and at 99% the STOP LAW applies: do not answer the pending request, tell the user auto-compact is imminent, and wait for explicit confirmation.
-
-$SUBAGENT_LINE"
-
+# KEEP EVERY EMITTED MESSAGE WELL UNDER 8000 CHARACTERS. Claude Code caps how
+# much a hook may inject: past the cap the agent receives a ~2 KB preview plus
+# a file path, with no visible error (measured 2026-07 on Claude Code 2.1.207:
+# ~8 KB arrives intact, ~12 KB does not). tests/install.sh asserts the size.
 case "$SOURCE" in
   resume)
-    emit "relevio: this is a REOPENED conversation, part of the session archive. It is for ASKING, not for working: it sits near the top of its context window, and auto-compact would destroy the detail that makes it valuable. Answer briefly, avoid reading files or starting new work, and send new work to a fresh session opened with /relevio:kickoff. Context guards fire at 85, 90, 95 and 99%; at 99% the STOP LAW applies: do not answer the pending request, warn the user (in their language) that one more exchange may trigger auto-compact, and wait for their explicit confirmation. $SUBAGENT_LINE"
-    exit 0 ;;
+    emit "relevio: this is a REOPENED conversation, part of the session archive. Its purpose is answering questions about what happened here, not doing new work: it sits near the top of its context window, and auto-compact would destroy the detail that makes it valuable. Keep answers brief, avoid reading files or starting tasks that consume significant context, and if the user wants new work done, suggest opening a fresh session with /relevio:kickoff. $SUBAGENT_LINE"
+    ;;
   compact)
-    emit "relevio: auto-compact JUST HAPPENED in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If this session has no handoff written yet, write it NOW (docs/handoff/, append the INDEX.md row) with whatever detail remains, then recommend closing this session and opening a fresh one with /relevio:kickoff. $SUBAGENT_LINE"
-    exit 0 ;;
+    emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, append a row to docs/handoff/INDEX.md) with whatever detail remains, then recommend closing this session and opening a fresh one with /relevio:kickoff. $SUBAGENT_LINE"
+    ;;
+  *)
+    emit "relevio v0.20.0: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+
+OPEN: sessions start with /relevio:kickoff, which reads docs/handoff/INDEX.md and the LATEST handoff before any code (it may live on another branch) and settles with the user which branch to work on. If the user skipped /relevio:kickoff and docs/handoff/ exists, suggest it.
+
+WORK: a PostToolUse hook tracks your context-window usage and reports it to you periodically; you cannot see your own context percentage without it. Most of its messages are plain status updates that need no response and no change in behavior: just a number so you know where you stand. When the hook needs you to do something, the message itself will say so clearly and carry complete instructions. Follow them when they arrive.
+
+$SUBAGENT_LINE"
+    ;;
 esac
-
-# --- startup | clear: inject the operational core ---------------------------
-# What follows is a COMPACT core, not the whole of relevio.md, and the reason
-# is a hard limit rather than a preference. Claude Code caps how much a hook
-# may inject: past the cap the agent receives only a ~2 KB preview plus the
-# path of a file it would have to go and read. Measured on 2026-07 against
-# Claude Code 2.1.207: ~8 KB arrives intact, ~12 KB does not, so the cutoff
-# sits between them. Piping the full 11 KB methodology through here delivered
-# its first sixth and dropped the close-out thresholds, the STOP LAW and the
-# handoff structure: exactly the parts that matter, lost with no error anyone
-# could see from inside the session. It was a poor trade on its own terms too,
-# since every session paid 11 KB of window for rules it needs at two moments.
-#
-# So the split is: this core carries what the agent must know at ALL times,
-# the plugin's templates/relevio.md holds the full text for when it needs the detail, and the
-# /relevio:kickoff and /relevio:handoff commands carry their own step-by-step rituals (a slash
-# command is read in full when invoked, so it has no such limit).
-#
-# KEEP THE EMITTED MESSAGE WELL UNDER 8000 CHARACTERS, error branches included.
-# tests/install.sh asserts the size, because exceeding it fails silently.
-if [ -z "${CLAUDE_PLUGIN_ROOT:-}" ]; then
-  emit "relevio ERROR: the session-start hook ran without CLAUDE_PLUGIN_ROOT set, so it cannot find its methodology file. Tell the user: relevio is installed but cannot confirm its own methodology file is there. It is likely registered with a hand-edited command in .claude/settings.json; reinstalling the plugin from its marketplace should restore it."
-  exit 0
-fi
-METHODOLOGY="$CLAUDE_PLUGIN_ROOT/templates/relevio.md"
-if [ ! -r "$METHODOLOGY" ] || [ ! -s "$METHODOLOGY" ]; then
-  emit "relevio ERROR: $METHODOLOGY is missing, unreadable or empty. The session cycle below still applies, but the full methodology it points to is NOT available, so /relevio:kickoff and /relevio:handoff will be working without their reference text. Tell the user rather than pretending everything is in place. Fix: reinstall the relevio plugin from its marketplace.
-
-$CORE"
-  exit 0
-fi
-
-emit "$CORE"
 exit 0
