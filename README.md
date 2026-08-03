@@ -54,8 +54,7 @@ Nothing is ever lost to compaction again.
 | `.claude/commands/kickoff.md` | The `/kickoff` slash command: opens a session (reads the index and the latest handoff, checks git state, summarizes where things stand). |
 | `.claude/commands/handoff.md` | The `/handoff` slash command: closes a session (writes the dated handoff with its metadata header, appends the index row, hands over the literal close-out steps). |
 | `.claude/commands/revisit.md` | The `/revisit` slash command: finds an old session in the library and returns the `claude --resume <session-id>` command to reopen its conversation. |
-| `relevio.md` | The full methodology (see below): the reference the agent reads when it needs the detail, and the version stamp of which relevio this project runs. |
-| `.claude/hooks/session-start.sh` | SessionStart hook: puts the operational core of the methodology into context at the start of every session (the cycle, the pacing thresholds, the STOP LAW), and points at `relevio.md` for the rest. A REOPENED conversation gets the revisit rules instead; one that just auto-compacted is told to salvage what remains into a handoff. |
+| `.claude/hooks/session-start.sh` | SessionStart hook: tells the agent the session cycle at the start of every session (open with `/kickoff`; a hook will speak when it needs something). It deliberately says NOTHING about closing: every close-out instruction travels inside the warning that triggers it, so the agent cannot anticipate it. A REOPENED conversation gets the revisit rules instead; one that just auto-compacted is told to salvage what remains into a handoff. |
 | `docs/handoff/` | Where handoffs live. They accumulate; the newest one is the next session's starting point. |
 | `docs/handoff/INDEX.md` | The library index: one append-only row per session (date, conversation name, handoff file, commit range, topics, summary). Never overwritten, not even with `--force`. |
 
@@ -65,15 +64,16 @@ Nothing is ever lost to compaction again.
   before touching code, finds it even when the previous session left it on
   another branch, and settles with you which branch to work on.
 - **Stay aware of the window.** The agent cannot see its own context
-  percentage; the hook tells it. Checkpoints every 10% keep it pacing, so it
-  does not start a large refactor at 85%.
-- **Harvest at 70%, not just brake.** When the close-out warning lands, it
-  finishes what depends on understanding it *derived* (dead ends already ruled
-  out, why the obvious fix fails) and hands off what the next session can
-  simply re-read. Facts are cheap to recover; conclusions are not.
-- **Close before the wall.** A dated handoff with commit range, lessons and
-  pending work in order, an append-only index row, and literal copy-paste
-  instructions for the human.
+  percentage; the hook tells it. The checkpoints are a bare number on purpose
+  (no instructions attached), so knowing where it stands never turns into
+  acting early.
+- **Ease toward the close at 70%.** The soft warning steers, it does not
+  brake: finish what is open, keep taking small user requests, avoid starting
+  large work. Writing the handoff is explicitly NOT asked for yet.
+- **Close before the wall.** At 80% the full close-out checklist arrives (its
+  first appearance: nothing before it teaches the close-out): a dated handoff
+  with commit range, lessons and pending work in order, an append-only index
+  row, and literal copy-paste instructions for the human.
 - **Never work in a reopened session.** Old conversations are an archive to ask
   questions of. Guards fire at 85/90/95%, and at 99% a STOP LAW halts the agent
   until you confirm.
@@ -107,7 +107,7 @@ what remains into a handoff.
 
 The difference from the script installer is only where the methodology lives:
 the plugin keeps it inside itself and writes nothing into your project, so
-there is no `relevio.md` and no `.claude/` to commit. Use the installer below
+there is no `.claude/` to commit. Use the installer below
 when a team should share one methodology and one handoff history, committed
 with the code. **Do not run both in the same project**: each injects the
 methodology at session start, so the agent would receive it twice, in possibly
@@ -147,13 +147,14 @@ your install against the published one and reports the result at session start
 By default the installed files are left for you to commit (team mode:
 every dev's agent follows the same rules and the handoff history is shared).
 Working solo, or don't want the methodology in the repo? Add `--private`:
-it also writes a marked block to `.gitignore` so `relevio.md`, `.claude/` and
+it also writes a marked block to `.gitignore` so `.claude/` and
 `docs/handoff/` stay local.
 
 ### Installing into a project that already has its own instructions
 
-The methodology is installed as `relevio.md`, its own file. Whatever
-instructions the project already carries are left exactly as they were.
+The methodology lives in relevio's own hooks and slash commands under
+`.claude/`. Whatever instructions the project already carries are left
+exactly as they were.
 
 The one case that needs a human decision is a project that already describes a
 session/handoff methodology **written by hand**. The agent would then receive
@@ -165,19 +166,22 @@ pass `--force` if it is a false positive.
 > Upgrading from v0.17 or earlier? Back then the methodology was appended into
 > `CLAUDE.md` between markers. `install.sh --update` removes that old block and
 > cuts nothing else, so everything you wrote around it stays byte for byte.
+> From v0.18-0.19? Those versions shipped a `relevio.md` at the project root;
+> `--update` removes it too (the hooks now carry the methodology themselves),
+> and only when its title line proves it is relevio's file.
 
 ### Upgrading an existing install
 
-Run the installer again with `--update`. It refreshes `relevio.md`, the hooks
+Run the installer again with `--update`. It refreshes the hooks
 and the slash commands to the new version, with every safety check still on.
 `--force` is `--update` plus overriding the check above, so reach for it only
 when you know that check is a false positive.
 
 **Which version am I on?** The installed files carry a stamp: the first lines of
-`.claude/hooks/context-warn.sh` and the heading of `relevio.md` both read
+`.claude/hooks/context-warn.sh` and `.claude/hooks/session-start.sh` both read
 `relevio vX.Y.Z`, so `/kickoff` reports it at session start and you can check
-offline with `grep -m1 'relevio v' relevio.md`. No stamp at all means the
-install predates version stamping and is well behind.
+offline with `grep -m1 'relevio v' .claude/hooks/context-warn.sh`. No stamp at
+all means the install predates version stamping and is well behind.
 This matters more than it looks: a stale install runs stale rules, and an
 out-of-date model table is how the hook ends up reporting a context percentage
 that is simply wrong.
@@ -209,11 +213,13 @@ new session, first message: /kickoff
      you where the last session worked and whether that work is on main yet,
      and ASKS whether to continue there or start a new branch (never switches
      on its own)
-  -> work
-  -> hook warns at 70%: harvest. No new work; among what is already open,
-     close first what depends on understanding the agent DERIVED (and so
-     cannot hand over cheaply), leaving the re-readable parts for the handoff
-  -> hook warns at 80%: write the handoff NOW
+  -> work (checkpoints every 10% keep the agent aware: a bare number, no
+     instructions attached)
+  -> hook at 70%: steer toward completion. Finish what is open, keep taking
+     small user requests, start nothing large; the handoff is explicitly
+     NOT asked for yet
+  -> hook at 80%: the full close-out checklist arrives, its first appearance;
+     there is still ~20% of window left, so it says "do not rush"
   -> agent writes docs/handoff/YYYY-MM-DD_<short-title>.md (same title as the
      session name; metadata header: Session, Date, Dev, Branch, Commits,
      Resume, Topics, Summary), appends the INDEX.md row, commits, pushes
@@ -223,22 +229,24 @@ new session, first message: /kickoff
   -> repeat
 ```
 
-Handoff rules (the agent gets them from `relevio.md` and `/handoff`):
+Handoff rules (the agent gets them from the 80% warning and `/handoff`):
 
 - **Funnel structure**: general context, then what was done (with commit
   hashes), files touched, lessons learned (only real ones), pending work in
   order, and any operational state git does not capture (running services,
   which environment is the source of truth, resumable long jobs).
-- **The 70% mark is a harvest, not just a brake**: at that point the agent has
-  read a lot and still has room to act, which is exactly when its loaded
-  context is worth most. What the close destroys is not the tokens it read but
-  the understanding it DERIVED: the next session can re-read a file cheaply,
-  but re-deriving "why the obvious fix fails" or "these three approaches are
-  already ruled out" costs it half a window. So the rule is a priority filter
-  over work that is ALREADY open (never a licence to start more): close what
-  depends on derived context, hand off what only depends on re-readable facts,
-  and take only items that fit complete, verification and commit included.
-  Whatever does not fit goes into the handoff with its reasoning attached.
+- **Instructions travel with the event, never before** (the anti-anticipation
+  rule): an agent that learns the close-out rules, or the threshold numbers,
+  at minute zero anchors on them and starts closing before any warning
+  arrives, wasting the very window the thresholds protect (observed in real
+  sessions: agents "wrapping up" at 60%). So the session-start core says
+  nothing about closing, the checkpoints are a bare number, and each warning
+  carries its own complete instructions the first time they are needed.
+- **What the close preserves is the DERIVED understanding**: the next session
+  can re-read a file cheaply, but re-deriving "why the obvious fix fails" or
+  "these three approaches are already ruled out" costs it half a window.
+  That is why the handoff records the reasoning behind anything left open,
+  not just its title.
 - **Handoffs accumulate**: never delete or overwrite old ones; that is why
   they carry dates. The newest is the starting point, the rest is history.
 - **Close-out is literal**: the agent ends every session with copy-paste
@@ -319,6 +327,31 @@ A marker file in `/tmp` guarantees each band fires only once per session, and
 if one tool call jumps several bands at once, only the most serious one
 speaks, so the agent is nudged, not spammed.
 
+## What relevio says to the agent (and when)
+
+Every message relevio injects, in firing order. The exact texts live in the
+two hook scripts (`.claude/hooks/session-start.sh` and
+`.claude/hooks/context-warn.sh`): they are plain shell files, open them to
+read or audit every word the agent receives.
+
+| When | Message (gist) |
+|------|----------------|
+| Session start (new) | The cycle in three lines: open with `/kickoff`; a hook reports your context usage; when it needs something, its message will say so and carry complete instructions. Nothing about closing, handoffs to write, thresholds or percentages. |
+| Session start (reopened) | This conversation is an archive: answer questions, avoid new work, send new work to a fresh session. |
+| Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |
+| 10-60% (every 10%) | A bare status line: the percentage and token count, "no action needed". Nothing else, on purpose: these fire six times, so anything they said would be the strongest anchor of all. |
+| 70% (soft, configurable) | Steer toward completion: finish what is open, keep taking small user requests, start nothing large, begin thinking about what the next session will need. Explicitly: nothing needs writing yet, a later message will say when. |
+| 80% (hard, configurable) | The complete close-out checklist, first time it appears: finish and commit the current edit, write the handoff (structure included), run the project's checks, commit and push, hand the user the two close-out commands. Explicitly: there is room to do it well, do not rush. |
+| 85 / 90 / 95% | Escalating guards: short answers, no new work, remind the user the window is nearly full. |
+| 99% | Full STOP: do not answer the pending request; warn that one more exchange may trigger auto-compact and wait for explicit confirmation. |
+| Unknown model | The raw token count every 100k, with the reasoning spelled out (relevio refuses to guess a window size) and the close-out decision left to the agent. |
+| Errors | A misconfigured threshold variable, an impossible measured usage or a broken context math are each reported loudly, once, with warnings disabled rather than silently wrong. |
+
+The design rule behind the dosing: **an instruction travels inside the
+message that triggers it, never earlier**. The agent cannot anticipate a
+close-out it has never heard of, so it works at full speed until the moment
+the hook actually asks for something.
+
 ## Revisiting old conversations
 
 Every handoff header records a `Resume:` line with the literal command to
@@ -330,10 +363,10 @@ resume command. An operator agent (see below) reopens sessions the same way,
 by running `claude --resume <session-id>`.
 
 A revisited session is for asking, not for working: it reopens near the top
-of its context window. The hook fires guard warnings at 85, 90, 95 and 99%,
-and `relevio.md` contains a STOP LAW: at 99% the agent must not
-answer; it must warn (in the user's language) that one more exchange may
-trigger auto-compact and ask for explicit confirmation to continue.
+of its context window. The hook fires guard warnings at 85, 90, 95 and 99%;
+the 99% one is a full STOP: the agent must not answer, must warn (in the
+user's language) that one more exchange may trigger auto-compact, and must
+wait for explicit confirmation to continue.
 
 ## Subagents
 
@@ -362,7 +395,7 @@ user). The cycle is unchanged; the operator plays the human role:
   hook itself also fires in non-interactive runs.
 - The close-out instructions the inner agent produces are for the operator to
   EXECUTE, not display: send `/rename <Session name>`, close the session,
-  open a new one, send `/kickoff`. `relevio.md` says this explicitly, so the
+  open a new one, send `/kickoff`. `/handoff` says this explicitly, so the
   inner agent knows its "user" may be an operator.
 - The operator's uppercase name (e.g. `HERMES`) is the `Dev:` in handoff
   headers, which keeps human and agent sessions distinguishable in the index.
@@ -381,9 +414,9 @@ twice in a row must leave the second run with an **empty git diff**. It exists
 because the installed section once drifted by one blank line on every single
 re-run, so `--update` always reported a change even when nothing had changed,
 and a diff that is always dirty is a diff people stop reading. It also checks
-that the v0.17 migration keeps the surrounding text intact, that the
-SessionStart hook reports a missing `relevio.md` loudly instead of leaving a
-session quietly without a methodology, and that every injected message stays
+that the migrations keep the user's text intact, that nothing the agent
+receives before a close-out warning names the thresholds or teaches the
+close-out (the anti-anticipation rule), and that every injected message stays
 under the size Claude Code will deliver (past that cap the tail is dropped with
 no error).
 
@@ -394,10 +427,11 @@ cd /path/to/your/project
 curl -fsSL https://raw.githubusercontent.com/compota334/relevio/main/uninstall.sh | bash
 ```
 
-Removes `relevio.md`, the hooks, the commands, the settings entries and the
-private-mode `.gitignore` block, preserving everything else you had in those
-files. `docs/handoff/` is always KEPT: it is your project's
-history.
+Removes the hooks, the commands, the settings entries and the private-mode
+`.gitignore` block, preserving everything else you had in those files (plus
+the legacy `relevio.md` of v0.18-0.19 installs, removed only when its title
+line proves it is relevio's). `docs/handoff/` is always KEPT: it is your
+project's history.
 
 ## License
 
