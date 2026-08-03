@@ -3,18 +3,19 @@
 # Installs the session methodology for Claude Code into the CURRENT directory
 # (your project root).
 #
-# relevio does NOT write to your CLAUDE.md. Its methodology lives in its own
-# file, relevio.md, and reaches the agent through a SessionStart hook. CLAUDE.md
-# is yours: relevio never reads it, never edits it and never depends on it. The
-# one exception is a one-time MIGRATION: installs from v0.17 and earlier kept
-# the methodology inside CLAUDE.md between markers, and --update removes that
-# old block so you are not left running two copies of the rules.
+# relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
+# through two hooks and three slash commands, and nothing else is installed.
+# CLAUDE.md is yours: relevio never reads it, never edits it and never depends
+# on it. The exceptions are one-time MIGRATIONS: installs from v0.17 and
+# earlier kept the methodology inside CLAUDE.md between markers, and v0.18-0.19
+# installs shipped a relevio.md at the project root; --update removes both
+# leftovers so you are not left running two copies of the rules.
 set -euo pipefail
 
-VERSION="0.19.0"
+VERSION="0.20.0"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
-TEMPLATES=(context-warn.sh session-start.sh handoff.md kickoff.md revisit.md relevio.md INDEX.md)
-STAMPED=(context-warn.sh session-start.sh relevio.md)
+TEMPLATES=(context-warn.sh session-start.sh handoff.md kickoff.md revisit.md INDEX.md)
+STAMPED=(context-warn.sh session-start.sh)
 # Legacy markers: only ever used to REMOVE the pre-v0.18 block from CLAUDE.md.
 MARK_START="<!-- relevio:start -->"
 MARK_END="<!-- relevio:end -->"
@@ -31,24 +32,26 @@ Usage (from YOUR project root, which must be a git repository):
   bash /path/to/relevio/install.sh [--update|--force] [--private]
 
 Options:
-  --update   Upgrade an existing install to this version: refreshes relevio.md,
-             the hooks and the slash commands. This is what you want to move
-             from an older relevio to this one. All safety checks stay ON.
-             Coming from v0.17 or earlier, it also removes relevio's old block
-             from your CLAUDE.md; nothing else in that file is touched.
+  --update   Upgrade an existing install to this version: refreshes the hooks
+             and the slash commands. This is what you want to move from an
+             older relevio to this one. All safety checks stay ON. It also
+             removes leftovers from older layouts: the pre-v0.18 block inside
+             CLAUDE.md (nothing else in that file is touched) and the
+             v0.18-0.19 relevio.md at the project root.
   --force    Everything --update does, PLUS it overrides the safety check that
              stops the install when your CLAUDE.md already describes a session
              methodology of its own. Use only when you know that check is a
              false positive. Neither flag ever touches docs/handoff/ or
              INDEX.md.
-  --private  Also add relevio.md, .claude/ and docs/handoff/ to .gitignore
-             (solo mode: the methodology stays local, out of the repo).
-             Without it, the files are left for you to commit (team mode).
+  --private  Also add .claude/ and docs/handoff/ to .gitignore (solo mode:
+             the methodology stays local, out of the repo). Without it, the
+             files are left for you to commit (team mode).
   --help     This text.
 
-WHAT BELONGS TO WHOM: relevio.md is relevio's and is REPLACED whole on
---update, so never write your own instructions in it. CLAUDE.md is yours and
-relevio does not touch it.
+WHAT BELONGS TO WHOM: the hooks in .claude/hooks/ and the slash commands in
+.claude/commands/ are relevio's and are REPLACED whole on --update, so never
+write your own instructions in them. CLAUDE.md is yours and relevio does not
+touch it.
 
 Uninstall:
   curl -fsSL ${REPO_RAW}/uninstall.sh | bash
@@ -107,9 +110,9 @@ if [ "$FORCE" -ne 1 ] && [ -f CLAUDE.md ] && ! grep -qF "$MARK_START" CLAUDE.md 
            relevio's newer ideas into your own text by hand.
 
        (b) REPLACE yours with relevio's: delete the session methodology from
-           CLAUDE.md, then re-run. It arrives as relevio.md, a separate file,
-           and from then on --update refreshes that file alone while CLAUDE.md
-           stays entirely yours.
+           CLAUDE.md, then re-run. relevio's rules live in its own hooks and
+           slash commands, and from then on --update refreshes those alone
+           while CLAUDE.md stays entirely yours.
 
        (c) FALSE POSITIVE (your CLAUDE.md mentions handoffs for unrelated
            reasons): re-run with --force to install anyway."
@@ -177,8 +180,7 @@ install_file() {
   info "installed: $dest"
 }
 
-# --- 1. The methodology, hooks and slash commands ---------------------------
-install_file "$TPL/relevio.md" relevio.md 644
+# --- 1. The hooks and slash commands ----------------------------------------
 mkdir -p .claude/hooks .claude/commands
 install_file "$TPL/context-warn.sh" .claude/hooks/context-warn.sh 755
 install_file "$TPL/session-start.sh" .claude/hooks/session-start.sh 755
@@ -188,8 +190,8 @@ install_file "$TPL/revisit.md" .claude/commands/revisit.md 644
 
 # --- 2. Register both hooks in .claude/settings.json (merge, don't clobber) --
 # PostToolUse/context-warn.sh keeps the agent aware of its context window;
-# SessionStart/session-start.sh is what delivers relevio.md into the session.
-# Without the second one relevio.md is just a file nobody reads.
+# SessionStart/session-start.sh delivers the session cycle at session start.
+# Without the second one the agent never learns the cycle exists.
 SETTINGS=".claude/settings.json"
 register_hook() {
   local event="$1" script="$2"
@@ -255,8 +257,9 @@ if [ -f CLAUDE.md ] && grep -qF "$MARK_START" CLAUDE.md; then
     if [ "$LEFT" -eq 0 ]; then
       rm CLAUDE.md CLAUDE.md.tmp
       info "removed: CLAUDE.md (it held nothing but relevio's old block; the
-        methodology now lives in relevio.md, and CLAUDE.md is yours to create
-        if and when you want project instructions of your own)"
+        methodology now lives in relevio's hooks and slash commands, and
+        CLAUDE.md is yours to create if and when you want project instructions
+        of your own)"
     else
       # The cut can leave a blank line where the block used to be. It is left
       # alone: those lines are now OUTSIDE anything relevio owns, and tidying
@@ -269,6 +272,32 @@ if [ -f CLAUDE.md ] && grep -qF "$MARK_START" CLAUDE.md; then
   else
     info "NOTE: CLAUDE.md still holds relevio's pre-v0.18 block. Re-run with
         --update to remove it; until then the agent sees the rules twice."
+  fi
+fi
+
+# --- 3b. Migration: drop the v0.18-0.19 relevio.md --------------------------
+# Between v0.18 and v0.19 the methodology shipped as a relevio.md at the
+# project root, injected at session start. Since v0.20 the hooks carry their
+# messages themselves and no methodology file is installed; a leftover
+# relevio.md would only mislead (an agent that reads it receives a second,
+# stale set of rules, thresholds included). It is removed only when it is
+# provably relevio's own file (its title line); a user file that happens to
+# share the name is left alone, loudly.
+if [ -f relevio.md ]; then
+  if grep -qF 'Session methodology (relevio v' relevio.md; then
+    if [ "$UPDATE" -eq 1 ]; then
+      rm relevio.md
+      info "removed: relevio.md (obsolete since v0.20: the hooks now carry the
+        methodology themselves, so no file at the project root is needed)"
+    else
+      info "NOTE: relevio.md is from an older relevio (v0.18-0.19) and is now
+        obsolete. Re-run with --update to remove it."
+    fi
+  else
+    info "NOTE: a relevio.md exists at the project root but it is NOT relevio's
+        file (its title line does not match), so it was left alone. Since
+        v0.20 relevio installs no such file; if it is yours, consider renaming
+        it so nobody mistakes it for relevio's."
   fi
 fi
 
@@ -291,18 +320,17 @@ if [ "$PRIVATE" -eq 1 ]; then
   else
     { [ -f .gitignore ] && [ -s .gitignore ] && echo; cat <<EOF
 $GI_START
-relevio.md
 .claude/
 docs/handoff/
 $GI_END
 EOF
     } >> .gitignore
-    info "updated: .gitignore (private mode: relevio.md, .claude/, docs/handoff/ ignored)"
+    info "updated: .gitignore (private mode: .claude/ and docs/handoff/ ignored)"
   fi
-  TRACKED="$(git ls-files relevio.md .claude docs/handoff 2>/dev/null | head -1 || true)"
+  TRACKED="$(git ls-files .claude docs/handoff 2>/dev/null | head -1 || true)"
   [ -n "$TRACKED" ] && info "NOTE: some of these files are already tracked by git; .gitignore does
         not untrack them. To untrack (keeping them on disk):
-        git rm -r --cached relevio.md .claude docs/handoff"
+        git rm -r --cached .claude docs/handoff"
 fi
 
 # --- Done -------------------------------------------------------------------
@@ -319,12 +347,14 @@ Done. Next steps:
          percentage; an unrecognized model gets a raw token count every 100k
          instead. Force percentage with "env": {"CLAUDE_CONTEXT_LIMIT": "..."}
        - custom warning thresholds? "CLAUDE_CONTEXT_WARN": "60,75"
-  3. Team mode (default): commit relevio.md, .claude/settings.json,
-     .claude/commands/, .claude/hooks/ and docs/handoff/ so every dev's agent
-     follows the same rules and shares the session history. Solo/private mode:
-     re-run with --private to gitignore all of it instead.
-  4. relevio.md is relevio's file and --update replaces it whole: put your own
-     project instructions in CLAUDE.md, which relevio never touches.
+  3. Team mode (default): commit .claude/settings.json, .claude/commands/,
+     .claude/hooks/ and docs/handoff/ so every dev's agent follows the same
+     rules and shares the session history. Solo/private mode: re-run with
+     --private to gitignore all of it instead.
+  4. The hooks and slash commands are relevio's files and --update replaces
+     them whole: put your own project instructions in CLAUDE.md, which relevio
+     never touches. The exact messages relevio sends the agent are readable in
+     .claude/hooks/*.sh (and documented in the README).
 
 Daily cycle: start every session with /kickoff, close it with /handoff (the
 agent will also do it on its own when the context hook warns). The first

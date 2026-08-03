@@ -24,13 +24,23 @@ echo "relevio uninstaller"
 echo "Target project: $(pwd)"
 echo
 
-# --- 1. Methodology, hooks and slash commands -------------------------------
-for f in relevio.md \
-         .claude/hooks/context-warn.sh .claude/hooks/session-start.sh \
+# --- 1. Hooks and slash commands ---------------------------------------------
+for f in .claude/hooks/context-warn.sh .claude/hooks/session-start.sh \
          .claude/commands/handoff.md .claude/commands/kickoff.md .claude/commands/revisit.md; do
   if [ -f "$f" ]; then rm "$f"; info "removed: $f"; fi
 done
 rmdir .claude/hooks .claude/commands 2>/dev/null || true
+
+# Legacy: v0.18-0.19 installs shipped a relevio.md at the project root. Remove
+# it only when it is provably relevio's (its title line); since v0.20 relevio
+# installs no such file, so a non-matching one is the user's and stays.
+if [ -f relevio.md ]; then
+  if grep -qF 'Session methodology (relevio v' relevio.md; then
+    rm relevio.md; info "removed: relevio.md (legacy v0.18-0.19 methodology file)"
+  else
+    info "unchanged: relevio.md (not relevio's file: its title line does not match)"
+  fi
+fi
 
 # --- 2. Hook registrations in .claude/settings.json -------------------------
 SETTINGS=".claude/settings.json"
