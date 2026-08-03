@@ -1,5 +1,8 @@
-Open this session following the "Sessions and handoffs" convention in
-relevio.md: you are picking up the baton from the previous session.
+Open this session following the relevio cycle: you are picking up the baton
+from the previous session. Each session opens from the previous session's
+handoff and will close with its own; a hook watches the context window and
+will tell you, explicitly and in the moment, if it needs anything from you.
+Act on its messages when they arrive, never in anticipation.
 
 1. Find and read the LATEST handoff, and do NOT assume it lives on your
    current branch. The previous session may have committed it on a feature
@@ -47,12 +50,11 @@ relevio.md: you are picking up the baton from the previous session.
 3. Give the user a short opening summary: where the project stands according
    to the handoff, the pending work in order, and any operational state the
    handoff recorded (running services, which environment is the source of
-   truth, resumable jobs). Close the summary with the two-line reminder of the
-   cycle: a hook watches the context window and will say, explicitly and in
-   the moment, when to start closing and when to write the handoff; the
-   session will end with a handoff plus a new session. Do not name the exact
-   warning percentages: knowing the number makes an agent anchor on it and
-   start closing before the warning arrives.
+   truth, resumable jobs). Close the summary with a one-line reminder of the
+   cycle: a hook watches the context window and will speak, explicitly and in
+   the moment, if it needs anything; the session will end with a handoff plus
+   a new session. Do not name any warning percentages or thresholds: an agent
+   that knows the numbers anchors on them and acts before the hook speaks.
 4. Check whether this project's relevio is out of date, and report the result
    in one line. If you also received the methodology from the relevio PLUGIN
    this session (its injected text names the `/relevio:` commands), say so
@@ -62,7 +64,7 @@ relevio.md: you are picking up the baton from the previous session.
    (which keeps `docs/handoff/`). Read the installed version from the stamp,
    and the published one from the repo:
 
-       grep -m1 'relevio v' relevio.md
+       grep -m1 'relevio v' .claude/hooks/context-warn.sh
        curl -fsSL --max-time 5 https://raw.githubusercontent.com/compota334/relevio/main/VERSION
 
    Then say which of these is true, and nothing more elaborate:
@@ -70,8 +72,8 @@ relevio.md: you are picking up the baton from the previous session.
    - **Behind by a little**: mention it as information, not an alarm. Being one
      version behind is not an emergency. Give the upgrade command
      (`bash <relevio>/install.sh --update`, run from this project root) and move
-     on. It refreshes only relevio's own files (`relevio.md`, the hooks, the
-     commands) and never touches `CLAUDE.md`, which is yours.
+     on. It refreshes only relevio's own files (the hooks and the commands)
+     and never touches `CLAUDE.md`, which is yours.
    - **Behind by several versions, or NO stamp at all** (an install predating
      version stamping): say so clearly and recommend upgrading before real work.
      This is the case worth insisting on: a stale model table makes the hook

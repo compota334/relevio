@@ -1,5 +1,5 @@
-Write a handoff for the next agent, following the "Sessions and handoffs"
-convention in relevio.md: you are passing the baton.
+Write a handoff for the next agent, following the relevio handoff
+convention: you are passing the baton.
 
 The folder is `docs/handoff/` (it exists; if it ever doesn't, create it).
 Naming: `YYYY-MM-DD_<short-title>.md`, where `<short-title>` is a short
@@ -42,8 +42,8 @@ not invent one. For anything you are leaving OPEN that depended on context you
 had derived (approaches already ruled out, why the obvious fix does not work, a
 coupling you only noticed after reading several files), write down that
 reasoning and not just the title: the next agent can re-read the code, but it
-cannot re-derive that for free. Do not repeat what is already in relevio.md or the project CLAUDE.md: the next agent
-reads it too. Be thorough: we need a long, good handoff. Structure it as a
+cannot re-derive that for free. Do not repeat what relevio's methodology or
+the project CLAUDE.md already says: the next agent reads it too. Be thorough: we need a long, good handoff. Structure it as a
 funnel, from general to specific, closing with the full picture. If you
 received a previous handoff, fold in whatever is still relevant so the next
 agent gets complete context. Handoffs ACCUMULATE: never delete or overwrite

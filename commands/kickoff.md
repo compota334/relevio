@@ -6,19 +6,9 @@ Open this session following the relevio cycle: a session is NEVER
 stretched until auto-compact (that is where the conversation's detail gets
 lost). Each session opens from the previous session's handoff and will close
 with its own; a hook watches the context window and will tell you, explicitly
-and in the moment, when to start closing. Act on its warnings when they
-arrive, never in anticipation. You are picking up the baton from the previous
-session.
-
-The hook also sends you informational checkpoints at 10, 20, 30, 40, 50 and
-60% of the window: no action required and nothing to say to the user; use
-them to PACE the session. With plenty of window left, work normally; from
-around 50-60%, prefer finishing what is open over kicking off the largest
-pending task, and factor the remaining window into any plan you propose (a
-big refactor does not fit in the last 40% of a session). Do NOT write the
-handoff early: closing is triggered only by the hook's close-out warnings or
-by the user asking; a finished phase with window still available is a reason
-to keep working, not to close.
+and in the moment, if it needs anything from you. Act on its messages when
+they arrive, never in anticipation. You are picking up the baton from the
+previous session.
 
 1. Find and read the LATEST handoff, and do NOT assume it lives on your
    current branch. The previous session may have committed it on a feature
@@ -66,25 +56,27 @@ to keep working, not to close.
 3. Give the user a short opening summary: where the project stands according
    to the handoff, the pending work in order, and any operational state the
    handoff recorded (running services, which environment is the source of
-   truth, resumable jobs). Close the summary with the two-line reminder of the
-   cycle: a hook watches the context window and will say, explicitly and in
-   the moment, when to start closing and when to write the handoff; the
-   session will end with a handoff (`/relevio:handoff`) plus a new session.
-   Do not name the exact warning percentages: knowing the number makes an
-   agent anchor on it and start closing before the warning arrives.
-4. If this project ALSO has a script-installed relevio (a `relevio.md` at the
-   project root), say so FIRST, because two installs is a problem before it is
-   a version question: the plugin and the script install each inject the
-   methodology at session start, so the agent receives it TWICE, and if their
-   versions differ it receives two different sets of rules. Tell the user to
-   keep one: either remove the script install (`bash <relevio>/uninstall.sh`
-   from the project root, which keeps `docs/handoff/`) or disable the plugin
-   through `/plugin`. Then check whether that script install is out of date and
-   report the result in one line. The plugin updates through Claude Code's
-   `/plugin` interface, but a script install sitting beside it does not, so it
-   is the one that silently rots:
+   truth, resumable jobs). Close the summary with a one-line reminder of the
+   cycle: a hook watches the context window and will speak, explicitly and in
+   the moment, if it needs anything; the session will end with a handoff
+   (`/relevio:handoff`) plus a new session. Do not name any warning
+   percentages or thresholds: an agent that knows the numbers anchors on them
+   and acts before the hook speaks.
+4. If this project ALSO has a script-installed relevio (its hooks at
+   `.claude/hooks/session-start.sh` and `.claude/hooks/context-warn.sh`, or a
+   legacy `relevio.md` at the project root), say so FIRST, because two
+   installs is a problem before it is a version question: the plugin and the
+   script install each inject the methodology at session start, so the agent
+   receives it TWICE, and if their versions differ it receives two different
+   sets of rules. Tell the user to keep one: either remove the script install
+   (`bash <relevio>/uninstall.sh` from the project root, which keeps
+   `docs/handoff/`) or disable the plugin through `/plugin`. Then check
+   whether that script install is out of date and report the result in one
+   line. The plugin updates through Claude Code's `/plugin` interface, but a
+   script install sitting beside it does not, so it is the one that silently
+   rots:
 
-       grep -m1 'relevio v' relevio.md
+       grep -m1 'relevio v' .claude/hooks/context-warn.sh
        curl -fsSL --max-time 5 https://raw.githubusercontent.com/compota334/relevio/main/VERSION
 
    Say which of these is true, and no more:
