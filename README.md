@@ -64,16 +64,22 @@ Nothing is ever lost to compaction again.
   before touching code, finds it even when the previous session left it on
   another branch, and settles with you which branch to work on.
 - **Stay aware of the window.** The agent cannot see its own context
-  percentage; the hook tells it. The checkpoints are a bare number on purpose
-  (no instructions attached), so knowing where it stands never turns into
-  acting early.
-- **Ease toward the close at 70%.** The soft warning steers, it does not
-  brake: finish what is open, keep taking small user requests, avoid starting
-  large work. Writing the handoff is explicitly NOT asked for yet.
+  percentage; the hook tells it, roughly every 10%, stating used AND free
+  tokens (a bare percentage reads as scarcer than it is). The checkpoints
+  carry numbers and nothing else (no instructions attached), and the agent
+  knows the cadence, so silence between reports means "the next mark is not
+  crossed yet" instead of room for anxious guessing.
+- **Use the sweet spot at 70%.** The soft warning reframes instead of
+  braking: maximum understanding loaded plus plenty of free window is the
+  most productive stretch of the session. Finish and polish what is open;
+  new user requests stay welcome at any size. Writing the handoff is
+  explicitly NOT asked for yet.
 - **Close before the wall.** At 80% the full close-out checklist arrives (its
-  first appearance: nothing before it teaches the close-out): a dated handoff
-  with commit range, lessons and pending work in order, an append-only index
-  row, and literal copy-paste instructions for the human.
+  first appearance: nothing before it teaches the close-out): bring the work
+  to a coherent stopping point, then a dated handoff with commit hashes,
+  lessons and pending work in order, an append-only index row, the commit and
+  push (after the handoff, never cutting work mid-change), and literal
+  copy-paste instructions for the human.
 - **Never work in a reopened session.** Old conversations are an archive to ask
   questions of. Guards fire at 85/90/95%, and at 99% a STOP LAW halts the agent
   until you confirm.
@@ -213,13 +219,15 @@ new session, first message: /kickoff
      you where the last session worked and whether that work is on main yet,
      and ASKS whether to continue there or start a new branch (never switches
      on its own)
-  -> work (checkpoints every 10% keep the agent aware: a bare number, no
-     instructions attached)
-  -> hook at 70%: steer toward completion. Finish what is open, keep taking
-     small user requests, start nothing large; the handoff is explicitly
-     NOT asked for yet
+  -> work (checkpoints every 10% keep the agent aware: used and free tokens,
+     no instructions attached; the agent knows the cadence, so silence
+     means the next mark is not crossed yet)
+  -> hook at 70%: the sweet spot. Max understanding loaded + plenty of free
+     window: finish and polish what is open, new requests welcome at any
+     size; the handoff is explicitly NOT asked for yet
   -> hook at 80%: the full close-out checklist arrives, its first appearance;
-     there is still ~20% of window left, so it says "do not rush"
+     there are still ~200k free tokens, so it says no rushing, and the
+     commit comes AFTER the handoff, never cutting work mid-change
   -> agent writes docs/handoff/YYYY-MM-DD_<short-title>.md (same title as the
      session name; metadata header: Session, Date, Dev, Branch, Commits,
      Resume, Topics, Summary), appends the INDEX.md row, commits, pushes
@@ -240,8 +248,12 @@ Handoff rules (the agent gets them from the 80% warning and `/handoff`):
   at minute zero anchors on them and starts closing before any warning
   arrives, wasting the very window the thresholds protect (observed in real
   sessions: agents "wrapping up" at 60%). So the session-start core says
-  nothing about closing, the checkpoints are a bare number, and each warning
-  carries its own complete instructions the first time they are needed.
+  nothing about closing, the checkpoints carry numbers and nothing else, and
+  each warning carries its own complete instructions the first time they are
+  needed. The one number the core DOES announce is the checkpoint cadence
+  (every 10%): it turns silence into information (no new report = the next
+  mark is not crossed), which stops the agent from guessing it is near the
+  limit when it is not.
 - **What the close preserves is the DERIVED understanding**: the next session
   can re-read a file cheaply, but re-deriving "why the obvious fix fails" or
   "these three approaches are already ruled out" costs it half a window.
@@ -336,12 +348,12 @@ read or audit every word the agent receives.
 
 | When | Message (gist) |
 |------|----------------|
-| Session start (new) | The cycle in three lines: open with `/kickoff`; a hook reports your context usage; when it needs something, its message will say so and carry complete instructions. Nothing about closing, handoffs to write, thresholds or percentages. |
+| Session start (new) | The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. Nothing about closing, handoffs to write, or close-out thresholds. |
 | Session start (reopened) | This conversation is an archive: answer questions, avoid new work, send new work to a fresh session. |
 | Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |
-| 10-60% (every 10%) | A bare status line: the percentage and token count, "no action needed". Nothing else, on purpose: these fire six times, so anything they said would be the strongest anchor of all. |
-| 70% (soft, configurable) | Steer toward completion: finish what is open, keep taking small user requests, start nothing large, begin thinking about what the next session will need. Explicitly: nothing needs writing yet, a later message will say when. |
-| 80% (hard, configurable) | The complete close-out checklist, first time it appears: finish and commit the current edit, write the handoff (structure included), run the project's checks, commit and push, hand the user the two close-out commands. Explicitly: there is room to do it well, do not rush. |
+| 10-60% (every 10%) | A bare status line: the percentage, used and free tokens, "no action needed". Nothing else, on purpose: these fire six times, so anything they said would be the strongest anchor of all. |
+| 70% (soft, configurable) | The sweet spot: maximum understanding loaded AND plenty of free tokens, so put that combination to work. Finish and polish what is open, new user requests welcome at any size, begin thinking about what the next session will need. Explicitly: nothing needs writing yet, a later message will say when. |
+| 80% (hard, configurable) | The complete close-out checklist, first time it appears: bring the work to a coherent stopping point (nothing abandoned mid-change), write the handoff while the understanding is still loaded (structure included), run the project's checks, then commit everything and push, hand the user the two close-out commands. Explicitly: the free tokens are enough to do it well, no rushing. |
 | 85 / 90 / 95% | Escalating guards: short answers, no new work, remind the user the window is nearly full. |
 | 99% | Full STOP: do not answer the pending request; warn that one more exchange may trigger auto-compact and wait for explicit confirmation. |
 | Unknown model | The raw token count every 100k, with the reasoning spelled out (relevio refuses to guess a window size) and the close-out decision left to the agent. |

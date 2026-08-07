@@ -263,20 +263,27 @@ cw() { # usage: cw <input_tokens> <band-tag> -> the injected message
 cw_out="$(cw 150000 info)"
 check "context-warn: checkpoint speaks at 15%" \
   "$(printf '%s' "$cw_out" | grep -c 'no action needed')" "1"
+# The message now carries token counts, so match the thresholds as
+# percentages ("70%"), not bare digits a token count could contain.
 check "context-warn: checkpoint does not name the close-out thresholds" \
-  "$(printf '%s' "$cw_out" | grep -cE '70|80')" "0"
+  "$(printf '%s' "$cw_out" | grep -cE '70%|80%')" "0"
 check "context-warn: checkpoint never speaks of closing or handoffs" \
   "$(printf '%s' "$cw_out" | grep -ciE 'close|handoff|wrap')" "0"
-# The soft warning steers toward finishing but must NOT ask for the handoff
-# yet (that instruction travels with the hard warning), and must keep serving
-# the user (the old text made agents refuse work after it).
+# Free tokens must be spelled out: a bare percentage reads as scarcer than it
+# is (observed: an agent at 30% recommending closure "to be safe").
+check "context-warn: checkpoint states the free tokens" \
+  "$(printf '%s' "$cw_out" | grep -c 'still free')" "1"
+# The soft warning frames the sweet spot (max understanding loaded, plenty of
+# room) but must NOT ask for the handoff yet (that instruction travels with
+# the hard warning), and must keep serving the user at any request size (the
+# old text made agents refuse or shrink work after it).
 cw_out="$(cw 720000 soft)"
-check "context-warn: soft steers toward completion" \
-  "$(printf '%s' "$cw_out" | grep -c 'steering toward completion')" "1"
+check "context-warn: soft frames the sweet spot" \
+  "$(printf '%s' "$cw_out" | grep -c 'sweet spot')" "1"
 check "context-warn: soft does not ask for the handoff yet" \
   "$(printf '%s' "$cw_out" | grep -c 'Nothing needs to be written down yet')" "1"
 check "context-warn: soft keeps serving the user" \
-  "$(printf '%s' "$cw_out" | grep -c 'do not refuse work')" "1"
+  "$(printf '%s' "$cw_out" | grep -c 'welcome at any size')" "1"
 check "context-warn: soft ends telling the agent to keep working" \
   "$(printf '%s' "$cw_out" | grep -c 'keep working')" "1"
 # The hard warning is the FIRST time the agent needs the close-out, so it must
@@ -287,7 +294,11 @@ check "context-warn: hard asks for the close" \
 check "context-warn: hard carries the full handoff instructions" \
   "$(printf '%s' "$cw_out" | grep -c 'docs/handoff/YYYY-MM-DD')" "1"
 check "context-warn: hard tells the agent not to rush" \
-  "$(printf '%s' "$cw_out" | grep -c 'do not rush or skip steps')" "1"
+  "$(printf '%s' "$cw_out" | grep -c 'no rushing, no skipped steps')" "1"
+# The commit comes AFTER the handoff (step 3), never in step 1: an early
+# commit order made agents cut work mid-change to obey it.
+check "context-warn: hard does not ask to commit before the handoff" \
+  "$(printf '%s' "$cw_out" | grep '^1\.' | grep -c 'commit')" "0"
 rm -f /tmp/claude-ctx-warn-relevio-test-$$-*
 for src in startup resume compact; do
   n=$(printf '%s' "$(inject "$d" "$src")" | wc -c)

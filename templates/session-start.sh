@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.20.0
+# relevio v0.20.1
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -16,8 +16,8 @@
 #                     work.
 #   compact        -> auto-compact just destroyed detail; salvage what remains
 #
-# DESIGN RULE: the core says NOTHING about closing, handoffs, thresholds or
-# percentages. An agent that learns the close-out rules at minute zero starts
+# DESIGN RULE: the core says NOTHING about closing, handoffs or close-out
+# thresholds. An agent that learns the close-out rules at minute zero starts
 # anticipating them long before they apply (observed in real sessions: agents
 # "wrapping up" at 60% because they knew a warning existed at 70%). Every
 # instruction travels WITH the event that triggers it: the PostToolUse hook
@@ -25,6 +25,14 @@
 # message that asks for the close-out, and the /kickoff and /handoff commands
 # carry their own step-by-step rituals. Nothing here may pre-announce any of
 # it, negations included ("this is not X" still plants X).
+#
+# The core DOES announce the checkpoint cadence (every 10%): that is the one
+# number that reduces anxiety instead of feeding it, because it turns silence
+# into information (no new report = the next 10% mark is not crossed yet).
+# Without it, agents fill the silence by guessing they are near the limit
+# (observed: an agent at 30% recommending closure "to be safe"). The close-out
+# thresholds stay unannounced: cadence tells the agent where it stands, never
+# when the session ends.
 #
 # Subagents are untouched: SessionStart fires for the main session only
 # (subagent spawns emit SubagentStart, which relevio does not hook), and the
@@ -51,11 +59,11 @@ case "$SOURCE" in
     emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, append a row to docs/handoff/INDEX.md) with whatever detail remains, then recommend closing this session and opening a fresh one with /kickoff. $SUBAGENT_LINE"
     ;;
   *)
-    emit "relevio v0.20.0: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+    emit "relevio v0.20.1: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 OPEN: sessions start with /kickoff, which reads docs/handoff/INDEX.md and the LATEST handoff before any code (it may live on another branch) and settles with the user which branch to work on. If the user skipped /kickoff and docs/handoff/ exists, suggest it.
 
-WORK: a PostToolUse hook tracks your context-window usage and reports it to you periodically; you cannot see your own context percentage without it. Most of its messages are plain status updates that need no response and no change in behavior: just a number so you know where you stand. When the hook needs you to do something, the message itself will say so clearly and carry complete instructions. Follow them when they arrive.
+DURING THE SESSION: a PostToolUse hook tracks your context-window usage and reports it to you; you cannot see your own usage without it. It posts a status update roughly every 10% of the window. That cadence is information you can use: silence means you have NOT crossed the next 10% mark, so never guess or assume your usage is higher than the last number you received. Most of its messages are plain status updates that need no response and no change in behavior: just a number so you know where you stand. When the hook needs you to do something, the message itself will say so clearly and carry complete instructions. Until such a message arrives, the window needs nothing from you and is never a reason to change course: let the user's request, not the window, decide what you do and when you are done.
 
 $SUBAGENT_LINE"
     ;;
