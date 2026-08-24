@@ -224,7 +224,15 @@ rm -rf "$d" "$copy"
 # ceiling: ~8 KB arrives, ~12 KB does not. So every branch stays well under it,
 # and this test fails if anyone grows one past the budget.
 INJECT_BUDGET=6000
+# Claude Code sends transcript_path on every hook event, so the helper does
+# too (the value just has to be non-empty; only its presence is checked). A
+# payload WITHOUT it simulates a foreign host (Devin et al.), tested below.
 inject() {
+  printf '{"source":"%s","transcript_path":"%s"}' "$2" "$1/.claude/hooks/session-start.sh" \
+    | CLAUDE_PROJECT_DIR="$1" bash "$1/.claude/hooks/session-start.sh" \
+    | jq -r '.hookSpecificOutput.additionalContext'
+}
+inject_foreign() {
   printf '{"source":"%s"}' "$2" | CLAUDE_PROJECT_DIR="$1" bash "$1/.claude/hooks/session-start.sh" \
     | jq -r '.hookSpecificOutput.additionalContext'
 }
@@ -252,6 +260,11 @@ check "session-start: the core never speaks of closing" \
   "$(printf '%s' "$out" | grep -ci 'close')" "0"
 check "session-start: the core does not point at relevio.md (gone since v0.20)" \
   "$(printf '%s' "$out" | grep -c 'relevio\.md')" "0"
+# The cadence promise is the one number the core MUST announce (silence is
+# only information if the agent knows reports flow every ~10%). Guards the
+# Claude Code path against the foreign-host variant leaking into it.
+check "session-start: the core promises the checkpoint cadence" \
+  "$(printf '%s' "$out" | grep -c 'every 10%')" "1"
 # The checkpoints fire six times per session, so anything they say is the
 # strongest anchor of all: they carry the bare number and nothing else.
 cw() { # usage: cw <input_tokens> <band-tag> -> the injected message
@@ -300,6 +313,51 @@ check "context-warn: hard tells the agent not to rush" \
 check "context-warn: hard does not ask to commit before the handoff" \
   "$(printf '%s' "$cw_out" | grep '^1\.' | grep -c 'commit')" "0"
 rm -f /tmp/claude-ctx-warn-relevio-test-$$-*
+
+# --- Case 9b: FOREIGN HOST (no transcript_path) fails LOUD, never silent ----
+# Devin (and other Claude-compatible harnesses) load .claude/ hooks by default
+# but send no transcript_path. Up to v0.20.1 context-warn exited silently
+# there, while the session-start core PROMISED a report every ~10%: the agent
+# was told to read silence as information, and the silence was structural.
+# These cases pin the fix: the core stops promising, the reporter says loudly
+# and exactly once that reporting is off.
+out="$(inject_foreign "$d" startup)"
+check "foreign host: core still injects the session cycle" \
+  "$(printf '%s' "$out" | grep -c 'relevio session cycle')" "1"
+check "foreign host: core does NOT promise the cadence" \
+  "$(printf '%s' "$out" | grep -c 'every 10%')" "0"
+check "foreign host: core says no reports will arrive" \
+  "$(printf '%s' "$out" | grep -c 'NO usage reports will arrive')" "1"
+check "foreign host: core forbids guessing usage" \
+  "$(printf '%s' "$out" | grep -c 'Never guess or invent a usage figure')" "1"
+# Anti-anticipation still holds in the foreign variant: no thresholds, no
+# talk of closing (anchor percentages to the % sign, never bare digits).
+check "foreign host: core does not pre-announce the close-out thresholds" \
+  "$(printf '%s' "$out" | grep -cE '70%|80%')" "0"
+check "foreign host: core never speaks of closing" \
+  "$(printf '%s' "$out" | grep -ci 'close')" "0"
+n=$(printf '%s' "$out" | wc -c)
+check "foreign host: core fits the injection budget ($n <= $INJECT_BUDGET)" \
+  "$([ "$n" -le "$INJECT_BUDGET" ] && echo yes || echo no)" "yes"
+# context-warn without transcript_path: one loud notice, then silence.
+cwf() {
+  printf '{"session_id":"relevio-test-%s-foreign"}' "$$" \
+    | bash "$d/.claude/hooks/context-warn.sh" | jq -r '.hookSpecificOutput.additionalContext // ""'
+}
+out="$(cwf)"
+check "foreign host: context-warn says reporting is OFF" \
+  "$(printf '%s' "$out" | grep -c 'Usage reporting is OFF')" "1"
+check "foreign host: context-warn notice carries the handoff pointer" \
+  "$(printf '%s' "$out" | grep -c 'docs/handoff/')" "1"
+check "foreign host: context-warn speaks exactly once per session" \
+  "$(cwf | wc -c | tr -d ' ')" "0"
+# A transcript_path that is present but points to a missing file is a
+# transient oddity, not a foreign host: stays silent (unchanged behavior).
+check "foreign host: present-but-missing transcript stays silent" \
+  "$(printf '{"transcript_path":"/nonexistent-relevio-test-%s","session_id":"relevio-test-%s-missing"}' "$$" "$$" \
+     | bash "$d/.claude/hooks/context-warn.sh" | wc -c | tr -d ' ')" "0"
+rm -f /tmp/claude-ctx-warn-relevio-test-$$-*
+
 for src in startup resume compact; do
   n=$(printf '%s' "$(inject "$d" "$src")" | wc -c)
   check "session-start: $src payload fits the injection budget ($n <= $INJECT_BUDGET)" \

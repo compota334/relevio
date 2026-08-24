@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.20.1
+# relevio v0.20.2
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -39,6 +39,13 @@
 # messages carry a defensive line anyway. Requires jq.
 INPUT=$(cat)
 SOURCE=$(echo "$INPUT" | jq -r '.source // "startup"')
+# Claude Code sends transcript_path on every hook event; a payload without it
+# means a foreign host (e.g. Devin loads .claude/ hooks but sends none), where
+# the PostToolUse reporter cannot measure usage. The core must not promise a
+# report cadence that will never arrive: the agent would read the structural
+# silence as "usage is low" (silence-as-information only works if reports
+# actually flow). The foreign variant says reporting is OFF and nothing more.
+TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 
 emit() {
   jq -n --arg msg "$1" \
@@ -59,11 +66,16 @@ case "$SOURCE" in
     emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, append a row to docs/handoff/INDEX.md) with whatever detail remains, then recommend closing this session and opening a fresh one with /relevio:kickoff. $SUBAGENT_LINE"
     ;;
   *)
-    emit "relevio v0.20.1: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+    if [ -n "$TRANSCRIPT" ]; then
+      DURING="DURING THE SESSION: a PostToolUse hook tracks your context-window usage and reports it to you; you cannot see your own usage without it. It posts a status update roughly every 10% of the window. That cadence is information you can use: silence means you have NOT crossed the next 10% mark, so never guess or assume your usage is higher than the last number you received. Most of its messages are plain status updates that need no response and no change in behavior: just a number so you know where you stand. When the hook needs you to do something, the message itself will say so clearly and carry complete instructions. Until such a message arrives, the window needs nothing from you and is never a reason to change course: let the user's request, not the window, decide what you do and when you are done."
+    else
+      DURING="DURING THE SESSION: this host agent does not give relevio access to your context-window usage, so NO usage reports will arrive this session, and silence tells you NOTHING about the window. Never guess or invent a usage figure. You know your own model and window size: rely on that knowledge, keep the user informed of where the work stands, and let the user's request, not the window, decide what you do and when you are done."
+    fi
+    emit "relevio v0.20.2: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 OPEN: sessions start with /relevio:kickoff, which reads docs/handoff/INDEX.md and the LATEST handoff before any code (it may live on another branch) and settles with the user which branch to work on. If the user skipped /relevio:kickoff and docs/handoff/ exists, suggest it.
 
-DURING THE SESSION: a PostToolUse hook tracks your context-window usage and reports it to you; you cannot see your own usage without it. It posts a status update roughly every 10% of the window. That cadence is information you can use: silence means you have NOT crossed the next 10% mark, so never guess or assume your usage is higher than the last number you received. Most of its messages are plain status updates that need no response and no change in behavior: just a number so you know where you stand. When the hook needs you to do something, the message itself will say so clearly and carry complete instructions. Until such a message arrives, the window needs nothing from you and is never a reason to change course: let the user's request, not the window, decide what you do and when you are done.
+$DURING
 
 $SUBAGENT_LINE"
     ;;

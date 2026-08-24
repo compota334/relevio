@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.20.1
+# relevio v0.20.2
 # relevio: context warning for the agent.
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
@@ -21,6 +21,10 @@
 # remaining room concrete. The window is never presented as a reason to act:
 # the task decides, the hook only informs, and instructions arrive only in
 # the message of the band that needs them.
+#
+# A payload with NO transcript_path at all means a foreign host (e.g. Devin,
+# which loads .claude/ hooks but sends no transcript): that case fails loud
+# below, once, instead of leaving the agent waiting for reports forever.
 #
 # Two modes, chosen by whether the model's window size is known:
 #
@@ -48,7 +52,6 @@
 INPUT=$(cat)
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 SESSION=$(echo "$INPUT" | jq -r '.session_id // "nosession"')
-{ [ -z "$TRANSCRIPT" ] || [ ! -f "$TRANSCRIPT" ]; } && exit 0
 
 emit() {
   jq -n --arg msg "$1" \
@@ -59,6 +62,21 @@ once() {
   [ -f "$mark" ] && return 1
   touch "$mark"
 }
+
+# FOREIGN HOST: no transcript_path in the payload at all means the host is not
+# Claude Code (Devin and other Claude-compatible harnesses load .claude/ hooks
+# but send no transcript). Exiting silently here is the worst failure relevio
+# can produce: session-start armed the agent with a methodology whose reports
+# then never arrive, and the agent reads that structural silence as "usage is
+# low". Fail LOUD instead, once per session. The handoff pointer must travel
+# in this very message (like the RAW-COUNT notice): no later band will ever
+# fire in this host to carry it.
+if [ -z "$TRANSCRIPT" ]; then
+  once foreign || exit 0
+  emit "relevio: this host agent sends no transcript path in its hook payloads, so relevio cannot measure context-window usage here. Usage reporting is OFF for this whole session: no token counts and no percentage warnings will arrive, and silence tells you NOTHING about the window. Never guess or invent a usage figure. You know your own model and window: use that knowledge to decide when to wrap up the session with a handoff (write it in docs/handoff/, append the INDEX.md row, commit and push, then a fresh session), and keep the user informed of where things stand."
+  exit 0
+fi
+[ ! -f "$TRANSCRIPT" ] && exit 0
 
 # Last real usage entry. grep streams the file and works on both GNU and BSD.
 USED=$(grep '"input_tokens"' "$TRANSCRIPT" 2>/dev/null | tail -1 | jq -r '

@@ -357,6 +357,8 @@ read or audit every word the agent receives.
 | 85 / 90 / 95% | Escalating guards: short answers, no new work, remind the user the window is nearly full. |
 | 99% | Full STOP: do not answer the pending request; warn that one more exchange may trigger auto-compact and wait for explicit confirmation. |
 | Unknown model | The raw token count every 100k, with the reasoning spelled out (relevio refuses to guess a window size) and the close-out decision left to the agent. |
+| Foreign host, session start | Some Claude-compatible harnesses (e.g. Devin) load `.claude/` hooks but send no transcript path, so usage cannot be measured there. The startup core then does NOT promise the report cadence: it says no usage reports will arrive, silence tells you nothing, and never guess a figure. |
+| Foreign host, first tool call | One loud notice, once per session: usage reporting is OFF, no counts or warnings will come, the agent must use its own knowledge of its window to time the handoff and keep the user informed. Never silence: an agent waiting for reports that structurally cannot arrive is the exact failure relevio exists to prevent. |
 | Errors | A misconfigured threshold variable, an impossible measured usage or a broken context math are each reported loudly, once, with warnings disabled rather than silently wrong. |
 
 The design rule behind the dosing: **an instruction travels inside the
