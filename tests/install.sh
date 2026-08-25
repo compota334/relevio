@@ -267,9 +267,9 @@ check "session-start: the core promises the checkpoint cadence" \
   "$(printf '%s' "$out" | grep -c 'every 10%')" "1"
 # The checkpoints fire six times per session, so anything they say is the
 # strongest anchor of all: they carry the bare number and nothing else.
-cw() { # usage: cw <input_tokens> <band-tag> -> the injected message
-  local fake="$d/fake-transcript.jsonl"
-  printf '{"model":"claude-opus-5","message":{"usage":{"input_tokens":%s,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}\n' "$1" > "$fake"
+cw() { # usage: cw <input_tokens> <band-tag> [model] -> the injected message
+  local fake="$d/fake-transcript.jsonl" model="${3:-claude-opus-5}"
+  printf '{"model":"%s","message":{"usage":{"input_tokens":%s,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}\n' "$model" "$1" > "$fake"
   printf '{"transcript_path":"%s","session_id":"relevio-test-%s-%s"}' "$fake" "$$" "$2" \
     | bash "$d/.claude/hooks/context-warn.sh" | jq -r '.hookSpecificOutput.additionalContext // ""'
 }
@@ -312,6 +312,19 @@ check "context-warn: hard tells the agent not to rush" \
 # commit order made agents cut work mid-change to obey it.
 check "context-warn: hard does not ask to commit before the handoff" \
   "$(printf '%s' "$cw_out" | grep '^1\.' | grep -c 'commit')" "0"
+# GLM (Z.ai) models: the GLM Coding Plan plugs them into Claude Code, so the
+# window table must know them. Same token count, different band, proves the
+# window is really being applied (150k is 15% of 1M but 75% of 200k). An
+# unlisted glm variant must NOT be guessed at: raw count, like any unknown.
+cw_out="$(cw 150000 glm1m glm-5.2)"
+check "context-warn: glm-5.2 gets the 1M window (150k is a checkpoint)" \
+  "$(printf '%s' "$cw_out" | grep -c 'no action needed')" "1"
+cw_out="$(cw 150000 glm200k glm-4.6)"
+check "context-warn: glm-4.6 gets the 200k window (150k is the sweet spot)" \
+  "$(printf '%s' "$cw_out" | grep -c 'sweet spot')" "1"
+cw_out="$(cw 150000 glmunknown glm-4.5-air)"
+check "context-warn: unlisted glm variant drops to raw count, no guessed window" \
+  "$(printf '%s' "$cw_out" | grep -c 'cannot compute a percentage')" "1"
 rm -f /tmp/claude-ctx-warn-relevio-test-$$-*
 
 # --- Case 9b: FOREIGN HOST (no transcript_path) fails LOUD, never silent ----

@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.20.2
+# relevio v0.20.3
 # relevio: context warning for the agent.
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
@@ -103,6 +103,15 @@ if [ -z "$LIMIT" ]; then
     *haiku*)  LIMIT=200000 ;;
     *\[1m\]*|*fable*|*mythos*|*opus-5*|*sonnet-5*|*opus-4-6*|*opus-4-7*|*opus-4-8*|*sonnet-4-6*)
               LIMIT=1000000 ;;
+    # GLM (Z.ai): the GLM Coding Plan plugs these models into Claude Code, so
+    # sessions carry glm ids in the transcript. Matched EXACTLY
+    # (quote-delimited), not loosely: GLM variants differ in window size
+    # (4.5-air is 128k, 4.6 is 200k, 5.2/5.3 are 1M per Z.ai's catalog as of
+    # 2026-08), so a loose *glm-5.2* could catch a future -air variant with a
+    # different window. An unlisted glm id drops to RAW-COUNT mode, as any
+    # unknown model does.
+    *\"glm-5.2\"*|*\"glm-5.3\"*) LIMIT=1000000 ;;
+    *\"glm-5.1\"*|*\"glm-4.6\"*) LIMIT=200000 ;;
   esac
 fi
 
