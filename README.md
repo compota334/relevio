@@ -1,8 +1,11 @@
 # relevio
 
-Pass the baton between Claude Code sessions instead of running them into the
-ground. One command installs a complete session methodology into any project:
-ordered, named, never-compacted sessions with written handoffs.
+AI coding agents forget everything when their context window fills. relevio
+is session memory for them: context-usage awareness in real time, a written
+handoff before every close, and a navigable archive of never-compacted,
+reopenable sessions. Each session starts where the last one ended. One
+command (or one plugin install) puts the whole cycle into any project. For
+Claude Code and ZCode.
 
 ## The core idea: never lose context again
 
