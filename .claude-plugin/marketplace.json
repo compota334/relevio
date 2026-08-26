@@ -11,7 +11,8 @@
       "name": "relevio",
       "source": "./",
       "description": "Pass the baton between Claude Code sessions: context-usage warnings for the agent, the /kickoff and /handoff cycle, and a navigable archive of never-compacted conversations.",
-      "version": "0.21.0",
+      "version": "0.21.1",
+      "icon": "icon.png",
       "author": {
         "name": "compota334",
         "email": "compota334@gmail.com",

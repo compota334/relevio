@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.21.0
+# relevio v0.21.1
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -82,7 +82,7 @@ case "$SOURCE" in
     else
       DURING="DURING THE SESSION: this host agent does not give relevio access to your context-window usage, so NO usage reports will arrive this session, and silence tells you NOTHING about the window. Never guess or invent a usage figure. You know your own model and window size: rely on that knowledge, keep the user informed of where the work stands, and let the user's request, not the window, decide what you do and when you are done."
     fi
-    emit "relevio v0.21.0: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+    emit "relevio v0.21.1: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 OPEN: sessions start with /relevio:kickoff, which reads docs/handoff/INDEX.md and the LATEST handoff before any code (it may live on another branch) and settles with the user which branch to work on. If the user skipped /relevio:kickoff and docs/handoff/ exists, suggest it.
 
