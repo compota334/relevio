@@ -444,6 +444,11 @@ PY
     "$(printf '%s' "$out" | grep -q 'relevio:kickoff' && echo yes || echo no)" "no"
   check "zcode: hard close-out never asks for /rename" \
     "$(printf '%s' "$out" | grep -q '/rename' && echo yes || echo no)" "no"
+  # ZCode has no rename command, but the agent CAN rename the task itself by
+  # updating ZCode's session table (verified live 2026-08-26: the UI shows
+  # the new title). The close-out must carry that instruction, fail-loud.
+  check "zcode: hard close-out has the agent rename the task itself" \
+    "$(printf '%s' "$out" | grep -q 'Rename this ZCode task YOURSELF' && echo yes || echo no)" "yes"
   zss_out="$(zss "$zdb")"
   check "zcode: session-start core names plain /kickoff" \
     "$(printf '%s' "$zss_out" | grep -q 'start with /kickoff' && echo yes || echo no)" "yes"

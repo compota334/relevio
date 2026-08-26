@@ -97,18 +97,35 @@ inexperienced user):
 
 HOST NOTE (ZCode): if this session runs inside ZCode rather than Claude Code,
 adapt the close-out. ZCode registers plugin commands WITHOUT the prefix, so
-the kickoff command there is `/kickoff` (never `/relevio:kickoff`). ZCode has
-no `/rename` command: skip that code block entirely and instead ask the user
-to rename the session to the exact `Session` name from ZCode's session list,
-if its UI allows it. And `claude --resume` does not apply: in the `Resume:`
-header line write the ZCode session id (`sess_...`) and note that the
-conversation reopens from ZCode's session list, or write `-` if unknown. To
-find that id on ZCode (the `~/.claude/projects` method above is Claude Code
-only): take the newest row of ZCode's usage table, with the same caveat as
-the Claude Code method (parallel sessions can make it point at the wrong
-one):
+the kickoff command there is `/kickoff` (never `/relevio:kickoff`). ZCode
+calls sessions "tasks" and has no `/rename` command, but unlike Claude Code
+YOU can rename the task yourself: the title lives in ZCode's local database,
+and the current task is the newest session row for this project directory.
+Skip the /rename code block and run this instead (put the exact `Session`
+name from the header as the second argument; avoid apostrophes in it):
 
-    python3 -c "import sqlite3,os;print(sqlite3.connect('file:'+os.path.expanduser('~/.zcode/cli/db/db.sqlite')+'?mode=ro',uri=True).execute('SELECT session_id FROM model_usage ORDER BY rowid DESC LIMIT 1').fetchone()[0])"
+    python3 -c "
+    import sqlite3, os, sys, time
+    con = sqlite3.connect(os.path.expanduser('~/.zcode/cli/db/db.sqlite'), timeout=5)
+    con.execute('PRAGMA busy_timeout=5000')
+    row = con.execute('SELECT id, title FROM session WHERE directory=?'
+                      ' ORDER BY time_updated DESC LIMIT 1', (sys.argv[1],)).fetchone()
+    assert row, 'no ZCode session found for this directory'
+    cur = con.execute('UPDATE session SET title=?, time_title_updated=? WHERE id=?',
+                      (sys.argv[2], str(int(time.time()*1000)), row[0]))
+    con.commit()
+    assert cur.rowcount == 1, 'expected 1 row, got %d' % cur.rowcount
+    print('renamed', row[0], 'from', repr(row[1]), 'to', repr(sys.argv[2]))
+    " "$PWD" "26-08-26 example-title"
+
+   FAIL LOUD: if the script errors, or the printed OLD title does not look
+   like this conversation's current title (with two ZCode tasks open in the
+   SAME project the newest row can be the other one), do NOT retry blindly:
+   tell the user to rename manually (right-click the task -> Rename task)
+   with the exact `Session` name. The `sess_...` id the script prints is
+   what the `Resume:` header line records (the `~/.claude/projects` method
+   above is Claude Code only, and `claude --resume` does not apply: the
+   conversation reopens from ZCode's task list).
 
 After this close-out, if the user asks you to write or edit MORE code in this
 same session: do NOT code in place. If you detached in step 2 you are on a

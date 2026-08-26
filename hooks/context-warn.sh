@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.21.3
+# relevio v0.21.4
 # relevio: context warning for the agent.
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
@@ -202,7 +202,7 @@ fi
 # both Claude Code modes get the two-command close-out with the host's
 # kickoff name interpolated.
 if [ "$HOST" = zcode ]; then
-  STEP4="4. Give the user the close-out: '${KICKOFF}', in its own fenced code block so they copy it in one click, to send as the first message of a NEW session. ZCode has no rename command: ask the user to rename this session to 'DD-MM-YY <short-title>' from ZCode's session list if the UI allows it. State the branch you worked on and the handoff filename."
+  STEP4="4. Rename this ZCode task YOURSELF, then give the user the close-out. The title lives in ZCode's local database: ~/.zcode/cli/db/db.sqlite, table session, column title; the current task is the newest row (time_updated) whose directory equals this project's cwd. Update its title to 'DD-MM-YY <short-title>' and its time_title_updated to now-in-epoch-ms (python3 + sqlite3, busy_timeout 5000). FAIL LOUD: if the update does not affect exactly one row, or the row's OLD title does not look like this conversation, STOP and ask the user to rename via right-click on the task -> Rename task instead. The row's id (sess_...) is what the Resume: header line records. Then give '${KICKOFF}', in its own fenced code block so they copy it in one click, to send as the first message of a NEW session. State the branch you worked on and the handoff filename."
 else
   STEP4="4. Give the user the close-out, two commands, EACH in its own fenced code block so they copy it in one click: '/rename DD-MM-YY <short-title>' to rename this session, and '${KICKOFF}' as the first message of a NEW session. State the branch you worked on and the handoff filename."
 fi
