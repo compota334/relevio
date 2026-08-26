@@ -371,6 +371,63 @@ check "foreign host: present-but-missing transcript stays silent" \
      | bash "$d/.claude/hooks/context-warn.sh" | wc -c | tr -d ' ')" "0"
 rm -f /tmp/claude-ctx-warn-relevio-test-$$-*
 
+# --- Case 9c: ZCODE host (payload model "builtin:*") reads SQLite -----------
+# ZCode DOES send a transcript_path, but it points at a throwaway temp file
+# with no token data (the decoy), so shape-based detection cannot work: the
+# reader must key off the payload model, ignore the transcript, and read the
+# usage from ZCode's SQLite by session_id. Measured schema and behavior:
+# docs/2026-08-26_zcode-investigation.md.
+if command -v python3 >/dev/null 2>&1; then
+  zdb="$d/fake-zcode.sqlite"
+  python3 - "$zdb" "relevio-test-$$-zc" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute('CREATE TABLE model_usage (session_id TEXT, turn_id TEXT,'
+            ' model_id TEXT, computed_total_tokens INTEGER)')
+con.execute('INSERT INTO model_usage VALUES (?, "t1", "GLM-5.3", 900000)',
+            (sys.argv[2],))
+con.execute('INSERT INTO model_usage VALUES (?, "t2", "GLM-5.3", 150000)',
+            (sys.argv[2],))
+con.commit()
+PY
+  printf '{"message":{"content":[{"text":"decoy, no usage here","type":"text"}],"role":"user"}}\n' > "$d/decoy-transcript.jsonl"
+  zcw() { # usage: zcw <session-suffix> <db> -> the injected message
+    printf '{"model":"builtin:zai/GLM-5.3","session_id":"relevio-test-%s-%s","transcript_path":"%s"}' "$$" "$1" "$d/decoy-transcript.jsonl" \
+      | RELEVIO_ZCODE_DB="$2" bash "$d/.claude/hooks/context-warn.sh" \
+      | jq -r '.hookSpecificOutput.additionalContext // ""'
+  }
+  # Latest row wins (150k, not the older 900k), GLM-5.3 normalizes into the
+  # window table (1M), so 150k is a 15% checkpoint and not a guard band.
+  out="$(zcw zc "$zdb")"
+  check "zcode: reads latest usage from sqlite and applies the GLM window" \
+    "$(printf '%s' "$out" | grep -c '15% of your context window')" "1"
+  check "zcode: the decoy transcript was ignored (percentage, not silence)" \
+    "$(printf '%s' "$out" | grep -c 'no action needed')" "1"
+  # A session with no rows yet is a normal early state: quiet, no OFF notice.
+  check "zcode: no usage rows yet stays silent" \
+    "$(zcw zcempty "$zdb" | wc -c | tr -d ' ')" "0"
+  # A missing db is structural: the loud OFF notice, exactly once.
+  out="$(zcw zcnodb /nonexistent-zcode-db-$$)"
+  check "zcode: missing db fails LOUD with the OFF notice" \
+    "$(printf '%s' "$out" | grep -c 'Usage reporting is OFF')" "1"
+  check "zcode: the OFF notice fires only once per session" \
+    "$(zcw zcnodb /nonexistent-zcode-db-$$ | wc -c | tr -d ' ')" "0"
+  # session-start mirrors the capability: cadence with a readable db, the
+  # OFF variant without one.
+  zss() {
+    printf '{"source":"startup","model":"builtin:zai/GLM-5.3"}' \
+      | RELEVIO_ZCODE_DB="$1" bash "$d/.claude/hooks/session-start.sh" \
+      | jq -r '.hookSpecificOutput.additionalContext'
+  }
+  check "zcode: session-start promises the cadence when the db is readable" \
+    "$(zss "$zdb" | grep -c 'every 10%')" "1"
+  check "zcode: session-start goes OFF-variant when the db is not there" \
+    "$(zss "/nonexistent-zcode-db-$$" | grep -c 'NO usage reports will arrive')" "1"
+  rm -f /tmp/claude-ctx-warn-relevio-test-$$-*
+else
+  echo "  SKIP  zcode cases (python3 not available)"
+fi
+
 for src in startup resume compact; do
   n=$(printf '%s' "$(inject "$d" "$src")" | wc -c)
   check "session-start: $src payload fits the injection budget ($n <= $INJECT_BUDGET)" \

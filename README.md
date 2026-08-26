@@ -311,10 +311,14 @@ remove`, never forced), and offers to prune detached leftovers.
 > real 17% and end hours early for no reason. A raw token count can never lie
 > that way, which is why an unknown model gets one.
 
-Claude Code emits a JSONL transcript per session that includes per-message
-token usage. On every tool call (PostToolUse, matcher `*`), the hook reads the
-most recent usage entry; what it does with it depends on whether it can size
-the window. For a model it recognizes it computes a percentage against that
+The hook reads the usage through one READER PER HOST AGENT, and everything
+else (window table, bands, messages) is shared. On Claude Code, the reader
+uses the JSONL transcript the host emits per session, which includes
+per-message token usage; on ZCode, it queries ZCode's local usage database
+(see the ZCode section below); on a host it cannot read at all, it says so
+loudly once instead of staying silent. On every tool call (PostToolUse,
+matcher `*`), the hook reads the most recent usage; what it does with it
+depends on whether it can size the window. For a model it recognizes it computes a percentage against that
 model's REAL window (1M for current models, 200k for Haiku 4.5) and, if
 measured usage ever exceeds that window, self-corrects to 1M with a loud
 one-time notice (evidence beats a wrong assumption). For a model it does NOT
@@ -339,6 +343,36 @@ A marker file in `/tmp` guarantees each band fires only once per session, and
 if one tool call jumps several bands at once, only the most serious one
 speaks, so the agent is nudged, not spammed.
 
+## ZCode (Z.ai) support
+
+relevio also runs inside [ZCode](https://zcode.z.ai), Z.ai's agentic desktop
+environment, as a plugin. ZCode's plugin format is Claude Code-compatible
+(same manifest fallback, same `hooks/hooks.json` shape, same
+`CLAUDE_PLUGIN_ROOT` variable), so the same plugin works on both hosts.
+
+To install: in ZCode go to **Settings -> Plugins**, add
+`compota334/relevio` as a marketplace, and install **relevio** from it. Then
+enable hooks (they are off by default): put `{"hooks": {"enabled": true}}`
+in `~/.zcode/cli/config.json`, and restart ZCode completely (plugins and
+hooks resolve at startup).
+
+How it measures usage there: ZCode sends a `transcript_path` in its hook
+payloads, but that file is a throwaway per-event copy of recent messages
+with NO token data in it, so relevio ignores it and instead queries ZCode's
+local usage database (`~/.zcode/cli/db/db.sqlite`, read-only, keyed by the
+session id the payload carries). This requires `python3` on the PATH. If the
+database or python3 is missing, relevio says so loudly once per session
+instead of failing silently; a nonstandard database location can be pointed
+at with the `RELEVIO_ZCODE_DB` environment variable. GLM models get their
+real windows from the same table as everything else (GLM-5.2/5.3 at 1M,
+GLM-5.1/4.6 at 200k); an unrecognized model gets the raw running count, as
+always. Note that ZCode ignores project-level hooks by design, so the script
+installer does NOT work there: the plugin is the only path.
+
+The GLM Coding Plan also works in the opposite direction: GLM models plugged
+into CLAUDE CODE itself (via Z.ai's Anthropic-compatible endpoint) are
+recognized by the same window table, with no extra setup.
+
 ## What relevio says to the agent (and when)
 
 Every message relevio injects, in firing order. The exact texts live in the
@@ -359,6 +393,7 @@ read or audit every word the agent receives.
 | Unknown model | The raw token count every 100k, with the reasoning spelled out (relevio refuses to guess a window size) and the close-out decision left to the agent. |
 | Foreign host, session start | Some Claude-compatible harnesses (e.g. Devin) load `.claude/` hooks but send no transcript path, so usage cannot be measured there. The startup core then does NOT promise the report cadence: it says no usage reports will arrive, silence tells you nothing, and never guess a figure. |
 | Foreign host, first tool call | One loud notice, once per session: usage reporting is OFF, no counts or warnings will come, the agent must use its own knowledge of its window to time the handoff and keep the user informed. Never silence: an agent waiting for reports that structurally cannot arrive is the exact failure relevio exists to prevent. |
+| ZCode sessions | The same checkpoints and warnings as Claude Code, with the usage read from ZCode's local database instead of a transcript. If that database (or python3) is unreachable, the loud OFF notice above fires instead of silence. |
 | Errors | A misconfigured threshold variable, an impossible measured usage or a broken context math are each reported loudly, once, with warnings disabled rather than silently wrong. |
 
 The design rule behind the dosing: **an instruction travels inside the

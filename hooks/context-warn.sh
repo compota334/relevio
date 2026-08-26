@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.20.3
+# relevio v0.21.0
 # relevio: context warning for the agent.
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
@@ -22,9 +22,10 @@
 # the task decides, the hook only informs, and instructions arrive only in
 # the message of the band that needs them.
 #
-# A payload with NO transcript_path at all means a foreign host (e.g. Devin,
-# which loads .claude/ hooks but sends no transcript): that case fails loud
-# below, once, instead of leaving the agent waiting for reports forever.
+# The usage is read by ONE READER PER HOST AGENT (Claude Code: the session's
+# JSONL transcript; ZCode: its local SQLite usage table), and everything from
+# the window table down is shared. A host relevio cannot read at all fails
+# loud, once, instead of leaving the agent waiting for reports forever.
 #
 # Two modes, chosen by whether the model's window size is known:
 #
@@ -52,6 +53,7 @@
 INPUT=$(cat)
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 SESSION=$(echo "$INPUT" | jq -r '.session_id // "nosession"')
+PAYLOAD_MODEL=$(echo "$INPUT" | jq -r '.model // empty')
 
 emit() {
   jq -n --arg msg "$1" \
@@ -62,43 +64,83 @@ once() {
   [ -f "$mark" ] && return 1
   touch "$mark"
 }
-
-# FOREIGN HOST: no transcript_path in the payload at all means the host is not
-# Claude Code (Devin and other Claude-compatible harnesses load .claude/ hooks
-# but send no transcript). Exiting silently here is the worst failure relevio
-# can produce: session-start armed the agent with a methodology whose reports
-# then never arrive, and the agent reads that structural silence as "usage is
-# low". Fail LOUD instead, once per session. The handoff pointer must travel
-# in this very message (like the RAW-COUNT notice): no later band will ever
-# fire in this host to carry it.
-if [ -z "$TRANSCRIPT" ]; then
+# The one loud OFF notice, shared by every structural failure to read usage:
+# fired once per session, never silence (an agent waiting for reports that
+# cannot arrive is the exact failure relevio exists to prevent). The handoff
+# pointer must travel in this very message, like the RAW-COUNT notice: no
+# later band will ever fire in this host to carry it.
+off_notice() {
   once foreign || exit 0
-  emit "relevio: this host agent sends no transcript path in its hook payloads, so relevio cannot measure context-window usage here. Usage reporting is OFF for this whole session: no token counts and no percentage warnings will arrive, and silence tells you NOTHING about the window. Never guess or invent a usage figure. You know your own model and window: use that knowledge to decide when to wrap up the session with a handoff (write it in docs/handoff/, append the INDEX.md row, commit and push, then a fresh session), and keep the user informed of where things stand."
+  emit "relevio: $1 Usage reporting is OFF for this whole session: no token counts and no percentage warnings will arrive, and silence tells you NOTHING about the window. Never guess or invent a usage figure. You know your own model and window: use that knowledge to decide when to wrap up the session with a handoff (write it in docs/handoff/, append the INDEX.md row, commit and push, then a fresh session), and keep the user informed of where things stand."
   exit 0
-fi
-[ ! -f "$TRANSCRIPT" ] && exit 0
+}
 
-# Last real usage entry. grep streams the file and works on both GNU and BSD.
-USED=$(grep '"input_tokens"' "$TRANSCRIPT" 2>/dev/null | tail -1 | jq -r '
-  .message.usage as $u |
-  ($u.input_tokens // 0) +
-  ($u.cache_read_input_tokens // 0) +
-  ($u.cache_creation_input_tokens // 0)' 2>/dev/null)
+# --- Read the usage: one reader per host agent ------------------------------
+# Everything below the readers (window resolution, bands, messages) is
+# host-agnostic: it only needs USED (tokens, integer) and MODEL (an id
+# wrapped in double quotes for the exact-match table). Each reader fills
+# them or handles its own failure; a reader that cannot possibly work fails
+# LOUD via off_notice, a merely-empty read this early in the session stays
+# quiet and retries on the next tool call.
+USED=""; MODEL=""
+if [ "${PAYLOAD_MODEL#builtin:}" != "$PAYLOAD_MODEL" ]; then
+  # ZCode (Z.ai): the payload names a builtin model. Its transcript_path is
+  # a DECOY for usage purposes (a throwaway per-event temp file with no
+  # token data inside; measured, see docs/2026-08-26_zcode-investigation.md),
+  # so the real usage is read from ZCode's local SQLite, keyed by the
+  # session_id the payload carries. Latest computed_total_tokens (input +
+  # output of the last model call) is the context size right now. python3
+  # instead of the sqlite3 CLI: the CLI is often absent, python3 rarely is.
+  ZCODE_DB="${RELEVIO_ZCODE_DB:-$HOME/.zcode/cli/db/db.sqlite}"
+  [ -f "$ZCODE_DB" ] || off_notice "this is a ZCode session, but ZCode's usage database is not where relevio expects it (${ZCODE_DB}), so context-window usage cannot be measured. Point RELEVIO_ZCODE_DB at the db.sqlite to fix it."
+  command -v python3 >/dev/null 2>&1 || off_notice "this is a ZCode session, but python3 is not available, and relevio needs it to read ZCode's usage database, so context-window usage cannot be measured."
+  USED=$(python3 - "$ZCODE_DB" "$SESSION" <<'PY' 2>/dev/null
+import sqlite3, sys
+con = sqlite3.connect('file:%s?mode=ro' % sys.argv[1], uri=True)
+row = con.execute(
+    'SELECT computed_total_tokens FROM model_usage'
+    ' WHERE session_id=? ORDER BY rowid DESC LIMIT 1',
+    (sys.argv[2],)).fetchone()
+print(row[0] if row and row[0] is not None else '')
+PY
+) || off_notice "this is a ZCode session, but reading ZCode's usage database failed (${ZCODE_DB}), so context-window usage cannot be measured."
+  # An empty result with a healthy db is the normal early-turn state (no
+  # model call recorded yet): stay quiet, the next tool call retries.
+  MODEL="\"$(printf '%s' "$PAYLOAD_MODEL" | tr '[:upper:]' '[:lower:]' | sed 's|^builtin:zai/||; s|^builtin:||')\""
+elif [ -n "$TRANSCRIPT" ]; then
+  # Claude Code: usage lives in the session's JSONL transcript. A path that
+  # is present but points to a missing file is transient, not structural:
+  # stay quiet. Last real usage entry wins; grep streams the file and works
+  # on both GNU and BSD.
+  [ ! -f "$TRANSCRIPT" ] && exit 0
+  USED=$(grep '"input_tokens"' "$TRANSCRIPT" 2>/dev/null | tail -1 | jq -r '
+    .message.usage as $u |
+    ($u.input_tokens // 0) +
+    ($u.cache_read_input_tokens // 0) +
+    ($u.cache_creation_input_tokens // 0)' 2>/dev/null)
+  MODEL=$(grep -o '"model":"[^"]*"' "$TRANSCRIPT" 2>/dev/null | tail -1)
+else
+  # FOREIGN HOST: no transcript_path at all means a host relevio does not
+  # know how to read (e.g. Devin loads .claude/ hooks but sends no
+  # transcript). session-start armed the agent with a methodology whose
+  # reports would then never arrive: say so, loudly, once.
+  off_notice "this host agent sends no transcript path in its hook payloads, so relevio cannot measure context-window usage here."
+fi
 [[ "$USED" =~ ^[0-9]+$ ]] || exit 0
 [ "$USED" -eq 0 ] && exit 0
 
 # Resolve the context-window size, in precedence order:
 # 1) explicit CLAUDE_CONTEXT_LIMIT always wins (forces PERCENTAGE mode);
-# 2) else map the session's model to its real window (table from Anthropic's
-#    catalog as of 2026-07: current models are 1M, except Haiku 4.5 at 200k;
-#    the [1m] tag catches any 1M session whose exact id is not listed);
+# 2) else map the session's MODEL (set by the reader above) to its real
+#    window (Anthropic catalog as of 2026-07: current models are 1M, except
+#    Haiku 4.5 at 200k; the [1m] tag catches any 1M session whose exact id
+#    is not listed; GLM windows per Z.ai's catalog as of 2026-08);
 # 3) UNKNOWN model => leave LIMIT empty and drop to RAW-COUNT mode below. We do
 #    NOT fall back to a guessed size: assuming 200k (or any number) is the
 #    silent fallback fail-loud forbids -- a model relevio cannot identify gets
 #    raw token counts, and the agent applies its own window knowledge.
 LIMIT="${CLAUDE_CONTEXT_LIMIT:-}"
 if [ -z "$LIMIT" ]; then
-  MODEL=$(grep -o '"model":"[^"]*"' "$TRANSCRIPT" 2>/dev/null | tail -1)
   case "$MODEL" in
     *haiku*)  LIMIT=200000 ;;
     *\[1m\]*|*fable*|*mythos*|*opus-5*|*sonnet-5*|*opus-4-6*|*opus-4-7*|*opus-4-8*|*sonnet-4-6*)
