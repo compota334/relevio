@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.21.4
+# relevio v0.21.5
 # relevio: context warning for the agent.
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
