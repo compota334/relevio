@@ -229,11 +229,11 @@ INJECT_BUDGET=6000
 # payload WITHOUT it simulates a foreign host (Devin et al.), tested below.
 inject() {
   printf '{"source":"%s","transcript_path":"%s"}' "$2" "$1/.claude/hooks/session-start.sh" \
-    | CLAUDE_PROJECT_DIR="$1" bash "$1/.claude/hooks/session-start.sh" \
+    | env -u CLAUDE_PLUGIN_ROOT CLAUDE_PROJECT_DIR="$1" bash "$1/.claude/hooks/session-start.sh" \
     | jq -r '.hookSpecificOutput.additionalContext'
 }
 inject_foreign() {
-  printf '{"source":"%s"}' "$2" | CLAUDE_PROJECT_DIR="$1" bash "$1/.claude/hooks/session-start.sh" \
+  printf '{"source":"%s"}' "$2" | env -u CLAUDE_PLUGIN_ROOT CLAUDE_PROJECT_DIR="$1" bash "$1/.claude/hooks/session-start.sh" \
     | jq -r '.hookSpecificOutput.additionalContext'
 }
 d="$(fixture '')"
@@ -271,7 +271,7 @@ cw() { # usage: cw <input_tokens> <band-tag> [model] -> the injected message
   local fake="$d/fake-transcript.jsonl" model="${3:-claude-opus-5}"
   printf '{"model":"%s","message":{"usage":{"input_tokens":%s,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}\n' "$model" "$1" > "$fake"
   printf '{"transcript_path":"%s","session_id":"relevio-test-%s-%s"}' "$fake" "$$" "$2" \
-    | bash "$d/.claude/hooks/context-warn.sh" | jq -r '.hookSpecificOutput.additionalContext // ""'
+    | env -u CLAUDE_PLUGIN_ROOT bash "$d/.claude/hooks/context-warn.sh" | jq -r '.hookSpecificOutput.additionalContext // ""'
 }
 cw_out="$(cw 150000 info)"
 check "context-warn: checkpoint speaks at 15%" \
@@ -355,7 +355,7 @@ check "foreign host: core fits the injection budget ($n <= $INJECT_BUDGET)" \
 # context-warn without transcript_path: one loud notice, then silence.
 cwf() {
   printf '{"session_id":"relevio-test-%s-foreign"}' "$$" \
-    | bash "$d/.claude/hooks/context-warn.sh" | jq -r '.hookSpecificOutput.additionalContext // ""'
+    | env -u CLAUDE_PLUGIN_ROOT bash "$d/.claude/hooks/context-warn.sh" | jq -r '.hookSpecificOutput.additionalContext // ""'
 }
 out="$(cwf)"
 check "foreign host: context-warn says reporting is OFF" \
@@ -368,7 +368,7 @@ check "foreign host: context-warn speaks exactly once per session" \
 # transient oddity, not a foreign host: stays silent (unchanged behavior).
 check "foreign host: present-but-missing transcript stays silent" \
   "$(printf '{"transcript_path":"/nonexistent-relevio-test-%s","session_id":"relevio-test-%s-missing"}' "$$" "$$" \
-     | bash "$d/.claude/hooks/context-warn.sh" | wc -c | tr -d ' ')" "0"
+     | env -u CLAUDE_PLUGIN_ROOT bash "$d/.claude/hooks/context-warn.sh" | wc -c | tr -d ' ')" "0"
 rm -f /tmp/claude-ctx-warn-relevio-test-$$-*
 
 # --- Case 9c: ZCODE host (payload model "builtin:*") reads SQLite -----------
@@ -393,7 +393,7 @@ PY
   printf '{"message":{"content":[{"text":"decoy, no usage here","type":"text"}],"role":"user"}}\n' > "$d/decoy-transcript.jsonl"
   zcw() { # usage: zcw <session-suffix> <db> -> the injected message
     printf '{"model":"builtin:zai/GLM-5.3","session_id":"relevio-test-%s-%s","transcript_path":"%s"}' "$$" "$1" "$d/decoy-transcript.jsonl" \
-      | RELEVIO_ZCODE_DB="$2" bash "$d/.claude/hooks/context-warn.sh" \
+      | env -u CLAUDE_PLUGIN_ROOT RELEVIO_ZCODE_DB="$2" bash "$d/.claude/hooks/context-warn.sh" \
       | jq -r '.hookSpecificOutput.additionalContext // ""'
   }
   # Latest row wins (150k, not the older 900k), GLM-5.3 normalizes into the
@@ -416,17 +416,134 @@ PY
   # OFF variant without one.
   zss() {
     printf '{"source":"startup","model":"builtin:zai/GLM-5.3"}' \
-      | RELEVIO_ZCODE_DB="$1" bash "$d/.claude/hooks/session-start.sh" \
+      | env -u CLAUDE_PLUGIN_ROOT RELEVIO_ZCODE_DB="$1" bash "$d/.claude/hooks/session-start.sh" \
       | jq -r '.hookSpecificOutput.additionalContext'
   }
   check "zcode: session-start promises the cadence when the db is readable" \
     "$(zss "$zdb" | grep -c 'every 10%')" "1"
   check "zcode: session-start goes OFF-variant when the db is not there" \
     "$(zss "/nonexistent-zcode-db-$$" | grep -c 'NO usage reports will arrive')" "1"
+  # Command names on ZCode (measured 2026-08-26): plugin commands register
+  # WITHOUT the prefix and /rename does not exist, so the hard close-out
+  # must say /kickoff and must not ask for any rename command.
+  python3 - "$zdb" "relevio-test-$$-zchard" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute('INSERT INTO model_usage VALUES (?, "t1", "GLM-5.3", 810000)',
+            (sys.argv[2],))
+con.commit()
+PY
+  out="$(zcw zchard "$zdb")"
+  check "zcode: 81% fires the hard close-out" \
+    "$(printf '%s' "$out" | grep -c 'Time to close the session')" "1"
+  # Presence AND absence: an absence-only check would also pass on an empty
+  # or kickoff-less message, unguarding the very name this release pins.
+  check "zcode: hard close-out names plain '/kickoff'" \
+    "$(printf '%s' "$out" | grep -q "'/kickoff'" && echo yes || echo no)" "yes"
+  check "zcode: hard close-out has no namespaced command" \
+    "$(printf '%s' "$out" | grep -q 'relevio:kickoff' && echo yes || echo no)" "no"
+  check "zcode: hard close-out never asks for /rename" \
+    "$(printf '%s' "$out" | grep -q '/rename' && echo yes || echo no)" "no"
+  zss_out="$(zss "$zdb")"
+  check "zcode: session-start core names plain /kickoff" \
+    "$(printf '%s' "$zss_out" | grep -q 'start with /kickoff' && echo yes || echo no)" "yes"
+  check "zcode: session-start core has no namespaced command" \
+    "$(printf '%s' "$zss_out" | grep -q 'relevio:kickoff' && echo yes || echo no)" "no"
   rm -f /tmp/claude-ctx-warn-relevio-test-$$-*
 else
   echo "  SKIP  zcode cases (python3 not available)"
 fi
+
+# --- Case 9d: command names per host/install mode ---------------------------
+# The hooks resolve the kickoff command name at RUNTIME: Claude Code plugin
+# installs (CLAUDE_PLUGIN_ROOT set, no builtin model) say /relevio:kickoff;
+# script installs (no CLAUDE_PLUGIN_ROOT) say /kickoff. hooks/ and templates/
+# are the same file since v0.21.3: the old sed namespace transform is gone.
+out="$(printf '{"source":"startup","transcript_path":"%s"}' "$REPO/VERSION" \
+  | CLAUDE_PLUGIN_ROOT="$REPO" bash "$REPO/hooks/session-start.sh" \
+  | jq -r '.hookSpecificOutput.additionalContext')"
+check "plugin-on-claude: core names /relevio:kickoff" \
+  "$(printf '%s' "$out" | grep -q 'start with /relevio:kickoff' && echo yes || echo no)" "yes"
+out="$(inject "$d" startup)"
+check "script install: core names plain /kickoff" \
+  "$(printf '%s' "$out" | grep -q 'start with /kickoff' && echo yes || echo no)" "yes"
+check "script install: core has no namespaced command" \
+  "$(printf '%s' "$out" | grep -q 'relevio:kickoff' && echo yes || echo no)" "no"
+fake="$d/fake-transcript.jsonl"
+printf '{"model":"claude-opus-5","message":{"usage":{"input_tokens":810000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}\n' > "$fake"
+out="$(printf '{"transcript_path":"%s","session_id":"relevio-test-%s-plughard"}' "$fake" "$$" \
+  | CLAUDE_PLUGIN_ROOT="$REPO" bash "$REPO/hooks/context-warn.sh" \
+  | jq -r '.hookSpecificOutput.additionalContext // ""')"
+check "plugin-on-claude: hard close-out keeps /rename" \
+  "$(printf '%s' "$out" | grep -q '/rename DD-MM-YY' && echo yes || echo no)" "yes"
+check "plugin-on-claude: hard close-out namespaced kickoff present" \
+  "$(printf '%s' "$out" | grep -q "'/relevio:kickoff'" && echo yes || echo no)" "yes"
+check "hooks/ and templates/ scripts are identical (no more sed transform)" \
+  "$(diff -q "$REPO/hooks/context-warn.sh" "$REPO/templates/context-warn.sh" >/dev/null && diff -q "$REPO/hooks/session-start.sh" "$REPO/templates/session-start.sh" >/dev/null && echo same)" "same"
+# The ZCode db default lives in TWO scripts that cannot share a variable; if
+# they ever disagree, session-start promises reports context-warn cannot
+# deliver (or vice versa). Pin them to the same literal.
+check "zcode db default path identical in both scripts" \
+  "$(grep -o 'RELEVIO_ZCODE_DB:-[^}]*' "$REPO/templates/context-warn.sh" | sort -u)" \
+  "$(grep -o 'RELEVIO_ZCODE_DB:-[^}]*' "$REPO/templates/session-start.sh" | sort -u)"
+rm -f /tmp/claude-ctx-warn-relevio-test-$$-*
+
+# --- Case 9e: regressions pinned by the v0.21.3 code review -----------------
+# A session_id containing "/" used to break every /tmp marker write, which
+# silenced all bands AND the fail-loud notice; the marker name now sanitizes
+# the id (the raw id still keys the db query).
+out="$(printf '{"session_id":"relevio-test/%s-slash"}' "$$" \
+  | env -u CLAUDE_PLUGIN_ROOT bash "$d/.claude/hooks/context-warn.sh" \
+  | jq -r '.hookSpecificOutput.additionalContext // ""')"
+check "slash in session_id: off_notice still speaks" \
+  "$(printf '%s' "$out" | grep -q 'Usage reporting is OFF' && echo yes || echo no)" "yes"
+# A haiku id carrying the 1M tag must resolve to the 1M window (the [1m]
+# group is matched before the haiku family row).
+cw_out="$(cw 150000 haiku1m 'claude-haiku-4-5[1m]')"
+check "haiku[1m]: the 1M tag outranks the haiku 200k row" \
+  "$(printf '%s' "$cw_out" | grep -q '15% of your context window' && echo yes || echo no)" "yes"
+if command -v python3 >/dev/null 2>&1; then
+  # A db path containing %xx used to be percent-decoded by sqlite's URI
+  # parser, failing a healthy db into the OFF notice; the path is now quoted.
+  pdir="$d/pct%31dir"; mkdir -p "$pdir"; cp "$zdb" "$pdir/db.sqlite"
+  python3 - "$pdir/db.sqlite" "relevio-test-$$-pct" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute('INSERT INTO model_usage VALUES (?, "t1", "GLM-5.3", 150000)',
+            (sys.argv[2],))
+con.commit()
+PY
+  out="$(printf '{"model":"builtin:zai/GLM-5.3","session_id":"relevio-test-%s-pct"}' "$$" \
+    | env -u CLAUDE_PLUGIN_ROOT RELEVIO_ZCODE_DB="$pdir/db.sqlite" bash "$d/.claude/hooks/context-warn.sh" \
+    | jq -r '.hookSpecificOutput.additionalContext // ""')"
+  check "percent in db path: healthy db still yields a percentage" \
+    "$(printf '%s' "$out" | grep -q '15% of your context window' && echo yes || echo no)" "yes"
+  # ZCode's second fingerprint: the decoy transcript path routes to the
+  # sqlite reader even if a future ZCode stops sending the model field.
+  dec="$d/zcode-claude-hook-fake"; mkdir -p "$dec"; cp "$d/decoy-transcript.jsonl" "$dec/transcript.jsonl"
+  python3 - "$zdb" "relevio-test-$$-decoy" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute('INSERT INTO model_usage VALUES (?, "t1", "GLM-5.3", 150000)',
+            (sys.argv[2],))
+con.commit()
+PY
+  out="$(printf '{"session_id":"relevio-test-%s-decoy","transcript_path":"%s/transcript.jsonl"}' "$$" "$dec" \
+    | env -u CLAUDE_PLUGIN_ROOT RELEVIO_ZCODE_DB="$zdb" bash "$d/.claude/hooks/context-warn.sh" \
+    | jq -r '.hookSpecificOutput.additionalContext // ""')"
+  # Without a model field the window cannot be sized, so the correct outcome
+  # is RAW-COUNT mode fed by the sqlite reader: the 150000 figure can only
+  # come from the db (the decoy transcript carries no usage), which proves
+  # the decoy-path fingerprint routed to the right reader.
+  check "zcode decoy path alone (no model field) still reads the sqlite usage" \
+    "$(printf '%s' "$out" | grep -q '150000 tokens of your context window used so far' && echo yes || echo no)" "yes"
+  # session-start must not promise the cadence on a db that cannot answer:
+  # a zero-length file passes [ -f ] but has no model_usage table.
+  : > "$d/empty.sqlite"
+  check "zcode: unanswerable db gets the OFF variant, not the promise" \
+    "$(zss "$d/empty.sqlite" | grep -q 'NO usage reports will arrive' && echo yes || echo no)" "yes"
+fi
+rm -f /tmp/claude-ctx-warn-relevio-test*
 
 for src in startup resume compact; do
   n=$(printf '%s' "$(inject "$d" "$src")" | wc -c)

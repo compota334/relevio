@@ -103,9 +103,11 @@ Inside any Claude Code session, run:
 ```
 
 That's it: the context hook and the commands are active in every project you
-open. Plugin commands are namespaced: use `/relevio:kickoff`,
-`/relevio:handoff` and `/relevio:revisit`. `docs/handoff/` is
-created in each project the first time you close a session there.
+open. On Claude Code, plugin commands are namespaced: use `/relevio:kickoff`,
+`/relevio:handoff` and `/relevio:revisit`. On ZCode they register WITHOUT the
+prefix: plain `/kickoff`, `/handoff` and `/revisit` (the hooks name the right
+variant for the host at runtime). `docs/handoff/` is created in each project
+the first time you close a session there.
 
 The plugin ships the same SessionStart hook as the installer, arming the agent
 with the methodology at the start of EVERY session, kickoff or not. The
@@ -390,13 +392,13 @@ read or audit every word the agent receives.
 | Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |
 | 10-60% (every 10%) | A bare status line: the percentage, used and free tokens, "no action needed". Nothing else, on purpose: these fire six times, so anything they said would be the strongest anchor of all. |
 | 70% (soft, configurable) | The sweet spot: maximum understanding loaded AND plenty of free tokens, so put that combination to work. Finish and polish what is open, new user requests welcome at any size, begin thinking about what the next session will need. Explicitly: nothing needs writing yet, a later message will say when. |
-| 80% (hard, configurable) | The complete close-out checklist, first time it appears: bring the work to a coherent stopping point (nothing abandoned mid-change), write the handoff while the understanding is still loaded (structure included), run the project's checks, then commit everything and push, hand the user the two close-out commands. Explicitly: the free tokens are enough to do it well, no rushing. |
+| 80% (hard, configurable) | The complete close-out checklist, first time it appears: bring the work to a coherent stopping point (nothing abandoned mid-change), write the handoff while the understanding is still loaded (structure included), run the project's checks, then commit everything and push, hand the user the close-out (on Claude Code two commands, `/rename` plus the kickoff; on ZCode the kickoff command plus a rename-from-the-UI request, since ZCode has no rename command). Explicitly: the free tokens are enough to do it well, no rushing. |
 | 85 / 90 / 95% | Escalating guards: short answers, no new work, remind the user the window is nearly full. |
 | 99% | Full STOP: do not answer the pending request; warn that one more exchange may trigger auto-compact and wait for explicit confirmation. |
 | Unknown model | The raw token count every 100k, with the reasoning spelled out (relevio refuses to guess a window size) and the close-out decision left to the agent. |
 | Foreign host, session start | Some Claude-compatible harnesses (e.g. Devin) load `.claude/` hooks but send no transcript path, so usage cannot be measured there. The startup core then does NOT promise the report cadence: it says no usage reports will arrive, silence tells you nothing, and never guess a figure. |
 | Foreign host, first tool call | One loud notice, once per session: usage reporting is OFF, no counts or warnings will come, the agent must use its own knowledge of its window to time the handoff and keep the user informed. Never silence: an agent waiting for reports that structurally cannot arrive is the exact failure relevio exists to prevent. |
-| ZCode sessions | The same checkpoints and warnings as Claude Code, with the usage read from ZCode's local database instead of a transcript. If that database (or python3) is unreachable, the loud OFF notice above fires instead of silence. |
+| ZCode sessions | The same checkpoints and warnings, with the usage read from ZCode's local database instead of a transcript, and the close-out adapted to the host: unprefixed `/kickoff`, no `/rename` (the user renames from ZCode's session list). If that database (or python3) is unreachable, the loud OFF notice above fires instead of silence. |
 | Errors | A misconfigured threshold variable, an impossible measured usage or a broken context math are each reported loudly, once, with warnings disabled rather than silently wrong. |
 
 The design rule behind the dosing: **an instruction travels inside the

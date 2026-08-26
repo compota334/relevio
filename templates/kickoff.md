@@ -56,12 +56,15 @@ Act on its messages when they arrive, never in anticipation.
    a new session. Do not name any warning percentages or thresholds: an agent
    that knows the numbers anchors on them and acts before the hook speaks.
 4. Check whether this project's relevio is out of date, and report the result
-   in one line. If you also received the methodology from the relevio PLUGIN
-   this session (its injected text names the `/relevio:` commands), say so
-   first: two installs means the rules arrive twice, in possibly different
-   versions. Tell the user to keep one, either by disabling the plugin through
-   `/plugin` or by removing this install with `bash <relevio>/uninstall.sh`
-   (which keeps `docs/handoff/`). Read the installed version from the stamp,
+   in one line. If the session-cycle core was injected TWICE at session start
+   (two separate "relevio vX.Y.Z: this project uses the relevio session
+   cycle" messages, whatever command names they carry: the plugin and this
+   script install arming you in parallel), say so first: two installs means
+   the rules arrive twice, in possibly different versions. Tell the user to
+   keep one, either by disabling the plugin through the host's plugin manager
+   (`/plugin` on Claude Code, Settings -> Plugins on ZCode) or by removing
+   this install with `bash <relevio>/uninstall.sh` (which keeps
+   `docs/handoff/`). Read the installed version from the stamp,
    and the published one from the repo:
 
        grep -m1 'relevio v' .claude/hooks/context-warn.sh

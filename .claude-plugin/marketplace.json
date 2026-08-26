@@ -11,7 +11,7 @@
       "name": "relevio",
       "source": "./",
       "description": "AI coding agents forget everything when their context window fills. relevio is session memory for them: context-usage awareness in real time, a written handoff before every close, and a navigable archive of never-compacted, reopenable sessions. Each session starts where the last one ended. For Claude Code and ZCode.",
-      "version": "0.21.2",
+      "version": "0.21.3",
       "icon": "https://raw.githubusercontent.com/compota334/relevio/main/icon.png",
       "author": {
         "name": "compota334",

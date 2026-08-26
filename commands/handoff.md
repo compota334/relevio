@@ -95,13 +95,30 @@ inexperienced user):
      `docs/handoff/<file just created>`); /relevio:kickoff will read it and
      confirm the branch with you before continuing."
 
+HOST NOTE (ZCode): if this session runs inside ZCode rather than Claude Code,
+adapt the close-out. ZCode registers plugin commands WITHOUT the prefix, so
+the kickoff command there is `/kickoff` (never `/relevio:kickoff`). ZCode has
+no `/rename` command: skip that code block entirely and instead ask the user
+to rename the session to the exact `Session` name from ZCode's session list,
+if its UI allows it. And `claude --resume` does not apply: in the `Resume:`
+header line write the ZCode session id (`sess_...`) and note that the
+conversation reopens from ZCode's session list, or write `-` if unknown. To
+find that id on ZCode (the `~/.claude/projects` method above is Claude Code
+only): take the newest row of ZCode's usage table, with the same caveat as
+the Claude Code method (parallel sessions can make it point at the wrong
+one):
+
+    python3 -c "import sqlite3,os;print(sqlite3.connect('file:'+os.path.expanduser('~/.zcode/cli/db/db.sqlite')+'?mode=ro',uri=True).execute('SELECT session_id FROM model_usage ORDER BY rowid DESC LIMIT 1').fetchone()[0])"
+
 After this close-out, if the user asks you to write or edit MORE code in this
 same session: do NOT code in place. If you detached in step 2 you are on a
 detached HEAD, where new commits belong to no branch and get silently lost.
 Re-establish a branch first (a fresh worktree, or ask the user where to work),
-and remind them that new work belongs in a new session started with
-/relevio:kickoff.
+and remind them that new work belongs in a new session started with the
+kickoff command (`/relevio:kickoff`; plain `/kickoff` on ZCode).
 
-If the "user" is itself an operator agent driving Claude Code, these close-out
-instructions are for IT to execute, not to display: it sends the `/rename`,
-closes the session, opens a new one, and sends `/relevio:kickoff`.
+If the "user" is itself an operator agent driving the host, these close-out
+instructions are for IT to execute, not to display: it sends the rename (the
+`/rename` command on Claude Code; on ZCode, renaming happens in the UI or is
+skipped), closes the session, opens a new one, and sends the host's kickoff
+command (`/relevio:kickoff` on Claude Code, `/kickoff` on ZCode).

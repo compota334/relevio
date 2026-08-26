@@ -59,9 +59,9 @@ previous session.
    truth, resumable jobs). Close the summary with a one-line reminder of the
    cycle: a hook watches the context window and will speak, explicitly and in
    the moment, if it needs anything; the session will end with a handoff
-   (`/relevio:handoff`) plus a new session. Do not name any warning
-   percentages or thresholds: an agent that knows the numbers anchors on them
-   and acts before the hook speaks.
+   (the `/relevio:handoff` command; on ZCode it is plain `/handoff`) plus a
+   new session. Do not name any warning percentages or thresholds: an agent
+   that knows the numbers anchors on them and acts before the hook speaks.
 4. If this project ALSO has a script-installed relevio (its hooks at
    `.claude/hooks/session-start.sh` and `.claude/hooks/context-warn.sh`, or a
    legacy `relevio.md` at the project root), say so FIRST, because two
@@ -70,11 +70,11 @@ previous session.
    receives it TWICE, and if their versions differ it receives two different
    sets of rules. Tell the user to keep one: either remove the script install
    (`bash <relevio>/uninstall.sh` from the project root, which keeps
-   `docs/handoff/`) or disable the plugin through `/plugin`. Then check
-   whether that script install is out of date and report the result in one
-   line. The plugin updates through Claude Code's `/plugin` interface, but a
-   script install sitting beside it does not, so it is the one that silently
-   rots:
+   `docs/handoff/`) or disable the plugin (through `/plugin` on Claude Code;
+   through Settings -> Plugins on ZCode). Then check whether that script
+   install is out of date and report the result in one line. The plugin
+   updates through the host's plugin manager, but a script install sitting
+   beside it does not, so it is the one that silently rots:
 
        grep -m1 'relevio v' .claude/hooks/context-warn.sh
        curl -fsSL --max-time 5 https://raw.githubusercontent.com/compota334/relevio/main/VERSION
@@ -91,6 +91,11 @@ previous session.
    - **Could not check** (no network, curl missing, timeout): say so explicitly
      alongside the installed version. Never let a failed check pass as "up to
      date": silence would be indistinguishable from a clean result.
+HOST NOTE (ZCode): if this session runs inside ZCode rather than Claude Code,
+every relevio command is unprefixed there: `/kickoff`, `/handoff`, `/revisit`
+(never `/relevio:...`). ZCode has no `/rename` and no `claude --resume`:
+sessions are renamed and reopened from ZCode's own session list.
+
 5. Then propose starting with the first pending item from the handoff and wait
    for the user's confirmation or their own direction. Do not start coding
    before that confirmation.

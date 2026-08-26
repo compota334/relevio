@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.21.2
+# relevio v0.21.3
 # relevio: context warning for the agent.
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
@@ -55,12 +55,34 @@ TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 SESSION=$(echo "$INPUT" | jq -r '.session_id // "nosession"')
 PAYLOAD_MODEL=$(echo "$INPUT" | jq -r '.model // empty')
 
+# Marker filenames must survive ANY session_id a host may send: a "/" in the
+# id used to make every marker write fail, which silenced every band AND the
+# fail-loud notice below. Everything outside [A-Za-z0-9._-] becomes "_" for
+# the marker name only; the raw id still keys the ZCode db query.
+SAFE_SESSION="${SESSION//[!A-Za-z0-9._-]/_}"
+
+# --- Resolve the HOST once; everything else derives from it -----------------
+# Measured on ZCode 3.9.1 (2026-08-26): ZCode is fingerprinted by its
+# builtin:* payload model AND by its throwaway per-event transcript path
+# (/tmp/zcode-claude-hook-*/); either marker suffices, so if a future ZCode
+# drops one of them the other still routes correctly. ZCode also sets
+# CLAUDE_PLUGIN_ROOT, which is why its checks come first. ZCode registers
+# plugin commands WITHOUT the prefix (/kickoff) and has no rename command;
+# Claude Code namespaces plugin commands (/relevio:kickoff) and has /rename;
+# the script install uses plain names.
+HOST=script
+case "$TRANSCRIPT" in */zcode-claude-hook-*) HOST=zcode ;; esac
+[ "${PAYLOAD_MODEL#builtin:}" != "$PAYLOAD_MODEL" ] && HOST=zcode
+[ "$HOST" = script ] && [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && HOST=plugin
+KICKOFF="/kickoff"
+[ "$HOST" = plugin ] && KICKOFF="/relevio:kickoff"
+
 emit() {
   jq -n --arg msg "$1" \
     '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":$msg}}'
 }
 once() {
-  local mark="/tmp/claude-ctx-warn-${SESSION}-$1"
+  local mark="/tmp/claude-ctx-warn-${SAFE_SESSION}-$1"
   [ -f "$mark" ] && return 1
   touch "$mark"
 }
@@ -83,7 +105,7 @@ off_notice() {
 # LOUD via off_notice, a merely-empty read this early in the session stays
 # quiet and retries on the next tool call.
 USED=""; MODEL=""
-if [ "${PAYLOAD_MODEL#builtin:}" != "$PAYLOAD_MODEL" ]; then
+if [ "$HOST" = zcode ]; then
   # ZCode (Z.ai): the payload names a builtin model. Its transcript_path is
   # a DECOY for usage purposes (a throwaway per-event temp file with no
   # token data inside; measured, see docs/2026-08-26_zcode-investigation.md),
@@ -94,9 +116,13 @@ if [ "${PAYLOAD_MODEL#builtin:}" != "$PAYLOAD_MODEL" ]; then
   ZCODE_DB="${RELEVIO_ZCODE_DB:-$HOME/.zcode/cli/db/db.sqlite}"
   [ -f "$ZCODE_DB" ] || off_notice "this is a ZCode session, but ZCode's usage database is not where relevio expects it (${ZCODE_DB}), so context-window usage cannot be measured. Point RELEVIO_ZCODE_DB at the db.sqlite to fix it."
   command -v python3 >/dev/null 2>&1 || off_notice "this is a ZCode session, but python3 is not available, and relevio needs it to read ZCode's usage database, so context-window usage cannot be measured."
+  # The path is percent-quoted before entering the URI: sqlite's URI parser
+  # percent-DECODES it, so a raw path containing %xx or ? would silently
+  # resolve to a different file and fail on a perfectly healthy db.
   USED=$(python3 - "$ZCODE_DB" "$SESSION" <<'PY' 2>/dev/null
 import sqlite3, sys
-con = sqlite3.connect('file:%s?mode=ro' % sys.argv[1], uri=True)
+from urllib.parse import quote
+con = sqlite3.connect('file:%s?mode=ro' % quote(sys.argv[1]), uri=True)
 row = con.execute(
     'SELECT computed_total_tokens FROM model_usage'
     ' WHERE session_id=? ORDER BY rowid DESC LIMIT 1',
@@ -142,9 +168,11 @@ fi
 LIMIT="${CLAUDE_CONTEXT_LIMIT:-}"
 if [ -z "$LIMIT" ]; then
   case "$MODEL" in
-    *haiku*)  LIMIT=200000 ;;
+    # The [1m] group goes FIRST: a haiku id carrying the 1M tag must resolve
+    # to 1M, so the tag outranks the family name.
     *\[1m\]*|*fable*|*mythos*|*opus-5*|*sonnet-5*|*opus-4-6*|*opus-4-7*|*opus-4-8*|*sonnet-4-6*)
               LIMIT=1000000 ;;
+    *haiku*)  LIMIT=200000 ;;
     # GLM (Z.ai): the GLM Coding Plan plugs these models into Claude Code, so
     # sessions carry glm ids in the transcript. Matched EXACTLY
     # (quote-delimited), not loosely: GLM variants differ in window size
@@ -167,6 +195,16 @@ if [ -z "$LIMIT" ]; then
   once "k${HUNDREDS}" || exit 0
   emit "CONTEXT: ${USED} tokens of your context window used so far (past the $(( HUNDREDS * 100 ))k mark). relevio does not recognize this session's model, so it cannot compute a percentage of the context window, and it will not guess one (a wrong guess would either fire false alarms or stay silent past the real ceiling), so no percentage-based warnings will fire this session. You know your own window size: use this running count to decide when to close the session (write the handoff in docs/handoff/, append the INDEX.md row, commit and push, then a fresh session) and keep the user informed of where things stand. To switch to percentage warnings, set \"env\": {\"CLAUDE_CONTEXT_LIMIT\": \"<tokens>\"} in .claude/settings.local.json."
   exit 0
+fi
+
+# Close-out wording per host (HOST and KICKOFF resolved at the top): ZCode
+# has no rename command, so it gets one command plus a UI-rename request;
+# both Claude Code modes get the two-command close-out with the host's
+# kickoff name interpolated.
+if [ "$HOST" = zcode ]; then
+  STEP4="4. Give the user the close-out: '${KICKOFF}', in its own fenced code block so they copy it in one click, to send as the first message of a NEW session. ZCode has no rename command: ask the user to rename this session to 'DD-MM-YY <short-title>' from ZCode's session list if the UI allows it. State the branch you worked on and the handoff filename."
+else
+  STEP4="4. Give the user the close-out, two commands, EACH in its own fenced code block so they copy it in one click: '/rename DD-MM-YY <short-title>' to rename this session, and '${KICKOFF}' as the first message of a NEW session. State the branch you worked on and the handoff filename."
 fi
 
 # --- PERCENTAGE mode (window size known) ---
@@ -218,7 +256,7 @@ Nothing needs to be written down yet: a later message will tell you when to writ
 1. Bring the work in progress to a coherent, safe stopping point at full quality (do not abandon anything mid-change). Start nothing new after this.
 2. Then write the handoff, while this session's understanding is still fully loaded, to docs/handoff/YYYY-MM-DD_<short-title>.md: what was done this session (cite the hashes of commits already made, so the next session can read the work with git log), lessons learned (only real problems that took several attempts to solve; never invent one), pending work in priority order, and for anything left open that depended on understanding built up this session (approaches you tried and ruled out, why the obvious fix does not work, a subtle coupling you found), the REASONING and not just the title: the next session can re-read files cheaply, but cannot cheaply re-derive your conclusions. Append a row to docs/handoff/INDEX.md (append-only: never edit or delete old rows).
 3. Run the project's checks (type-check, linter, tests: see CLAUDE.md), then commit everything, work and handoff included, and push.
-4. Give the user the close-out, two commands, EACH in its own fenced code block so they copy it in one click: '/rename DD-MM-YY <short-title>' to rename this session, and '/kickoff' as the first message of a NEW session. State the branch you worked on and the handoff filename." ;;
+$STEP4" ;;
   g85)  emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free. If a handoff has already been written for this session, keep answers short and do no new work: auto-compact is getting close. If NO handoff exists yet, write it NOW: docs/handoff/YYYY-MM-DD_<short-title>.md with what was done (commit hashes), lessons that cost real effort, pending work in order and the reasoning behind anything left open; append a row to docs/handoff/INDEX.md; commit and push." ;;
   g90)  emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free. Auto-compact is approaching. Answer briefly, do not read files or start anything new, and remind the user in your reply that this conversation is nearly full and new work belongs in a fresh session." ;;
   g95)  emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, only ${FREE} still free. Auto-compact is imminent. Give only short answers and warn the user in EVERY reply that this conversation is about to auto-compact." ;;
