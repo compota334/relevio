@@ -508,6 +508,15 @@ they do NOT interfere:
 - The context hooks do not reach subagents: warnings are injected into the
   main agent only, so a subagent will never try to close your session.
 
+### Hooks run without the executable bit
+
+Some hosts install plugin files read-only: ZCode does, hooks included. relevio's
+manifest therefore invokes its hooks through an interpreter,
+`bash "${CLAUDE_PLUGIN_ROOT}"/hooks/...`, which makes the executable bit
+irrelevant rather than a silent prerequisite. If you see relevio's `.sh` files
+sitting at `644` in a plugin cache, that is expected and nothing is broken. The
+script installer still chmods its own copies, since it owns them.
+
 ### Who is reading
 
 relevio tells the agent, once per session, that the person reading may not be a
