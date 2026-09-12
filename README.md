@@ -314,6 +314,21 @@ Delete an unmerged branch and its handoff leaves the index with it. Push and
 merge, or lose it. That was already true when the index was hand-written, since
 the row lived on that branch too.
 
+### Repositories without a remote
+
+The board measures "merged" and "ahead" against an integration branch, and by
+default that is `origin/main`. A repository with no remote has none, so relevio
+asks once and the repository remembers:
+
+```bash
+git config relevio.main main
+```
+
+Every later session uses it. relevio never guesses this: which branch the work
+integrates into is a decision, not something to infer from the branch list. A
+one-off override is `--main <ref>` or the `RELEVIO_MAIN` environment variable,
+and both win over the recorded value.
+
 ### Tracing who touched a surface
 
 The other half of the problem is time, not just branches. When you open a new

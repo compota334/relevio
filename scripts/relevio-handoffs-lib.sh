@@ -56,8 +56,14 @@ join_csv() { paste -sd, - | sed 's/,/, /g'; }
 # Everything the board reports (merged / open / ahead) is measured against
 # this ref. There is no fallback to a guess: if it cannot be found, the run
 # stops and says which ref it looked for and how to point it elsewhere.
+# Precedence: an explicit --main, then the environment, then the project's own
+# recorded answer, then the remote's default branch. The git-config step is
+# what keeps a repo with no remote from having to be told again on every
+# single run, and it is a setting rather than a guess: somebody decided it once
+# and the repo remembers.
 resolve_main() {
   MAIN="${1:-${RELEVIO_MAIN:-}}"
+  [ -n "$MAIN" ] || MAIN="$(git config --get relevio.main 2>/dev/null || true)"
   # A repository with no commits at all has no branches to compare, so there
   # is no integration branch to find and no lane that could be open. This is
   # a real state (a brand new repo closing its first session), not a missing
@@ -73,15 +79,30 @@ resolve_main() {
     elif MAIN="$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)" && [ -n "$MAIN" ]; then
       : # origin/HEAD told us the default branch
     else
+      if [ -z "$(git remote 2>/dev/null)" ]; then
+        # No remote at all, so "fetch first" would be useless advice. Tell it
+        # to record its own integration branch once, in the repo.
+        die "this repository has no remote, so relevio cannot tell which branch
+  the work is integrated into. Record it once, and every future session in
+  this project will use it:
+
+    git config relevio.main $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
+
+  For a one-off run instead, pass --main <branch> or set RELEVIO_MAIN."
+      fi
       die "integration branch not found: expected refs/remotes/origin/main.
-  Run 'git fetch origin' first, or name it explicitly:
-    RELEVIO_MAIN=origin/master  (a remote whose default branch is not 'main')
-    RELEVIO_MAIN=main           (a repo with no remote at all)
-  or pass --main <ref>."
+  Run 'git fetch origin' first, or name it, once and for this repository:
+
+    git config relevio.main origin/master
+
+  For a one-off run instead, pass --main <ref> or set RELEVIO_MAIN."
     fi
   fi
   git rev-parse --verify -q "$MAIN^{commit}" >/dev/null \
-    || die "integration branch '$MAIN' does not resolve to a commit"
+    || die "integration branch '$MAIN' does not resolve to a commit. It came from $(
+         [ -n "${1:-}" ] && echo '--main' \
+         || { [ -n "${RELEVIO_MAIN:-}" ] && echo 'RELEVIO_MAIN'; } \
+         || echo 'git config relevio.main')."
 }
 
 # --- finding the handoff files ---------------------------------------------

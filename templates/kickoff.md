@@ -30,11 +30,18 @@ Act on its messages when they arrive, never in anticipation.
 
       If nothing is found, tell the user that relevio's scripts are not
       reachable from this session and STOP. Do NOT conclude the install is out
-      of date, and do not hand-edit INDEX.md. When the script instead FAILS on
-      a malformed header it names the file and the field: report both. If that
-      header predates v0.22, propose `relevio-migrate.sh` (same `$S`) and wait
-      for the user's OK. Never patch a handoff header silently, least of all
-      another dev's.
+      of date, and do not hand-edit INDEX.md.
+
+      When the script instead FAILS, it always says why, and the two kinds of
+      failure need different answers. If it names a handoff FILE and a FIELD,
+      that header is malformed: report both, and if it predates v0.22 propose
+      `relevio-migrate.sh` (same `$S`) and wait for the user's OK. Never patch
+      a handoff header silently, least of all another dev's. If it names a REF
+      instead, relevio does not know which branch this project integrates into;
+      it prints the one-line `git config relevio.main <branch>` that records
+      the answer for every future session. Relay that line and let the user
+      choose the branch. Do not set it yourself: which branch is "main" is
+      theirs to decide, and it is written into their repository.
    c. Show the user the **Active lanes** table exactly as generated. That is
       the team board: one row per branch with open work, who owns it, which
       areas it touches, how far ahead of main it is.

@@ -812,10 +812,36 @@ write_handoff "$d2" 2026-09-01_solo.md "01-09-26 solo" NICO main none none "solo
 git -C "$d2" add -A >/dev/null 2>&1; git -C "$d2" commit -qm first >/dev/null 2>&1
 err="$( (cd "$d2" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
 check "index: no origin/main fails loud instead of guessing" "$rc" "2"
-check "index: ... and says which ref it looked for" \
-  "$(printf '%s' "$err" | grep -c 'refs/remotes/origin/main')" "1"
+check "index: ... saying this repository has no remote" \
+  "$(contains "$err" 'has no remote')" "yes"
+check "index: ... and a repo with no remote is told to record its branch" \
+  "$(contains "$err" 'git config relevio.main')" "yes"
+check "index: ... without being told to fetch a remote it does not have" \
+  "$(contains "$err" 'git fetch')" "no"
 ( cd "$d2" && RELEVIO_MAIN=main bash "$IDX" >/dev/null 2>&1 )
 check "index: RELEVIO_MAIN points it at a repo with no remote" "$?" "0"
+# Recorded once in the repository, it needs no environment variable again.
+git -C "$d2" config relevio.main main
+( cd "$d2" && env -u RELEVIO_MAIN bash "$IDX" >/dev/null 2>&1 )
+check "index: git config relevio.main settles it for every future run" "$?" "0"
+# With a remote present but no origin/main, the ref it looked for is the useful
+# thing to name, and fetching really is the likely fix.
+git -C "$d2" config --unset relevio.main
+git -C "$d2" remote add origin "$(mktemp -d)/o.git"
+err="$( (cd "$d2" && env -u RELEVIO_MAIN bash "$IDX" >/dev/null) 2>&1 )"
+check "index: with a remote but no origin/main it names the ref" \
+  "$(contains "$err" 'refs/remotes/origin/main')" "yes"
+check "index: ... and offers to record the branch for good" \
+  "$(contains "$err" 'git config relevio.main')" "yes"
+git -C "$d2" remote remove origin
+git -C "$d2" config relevio.main main
+# An explicit override still wins over the recorded value, and the error says
+# which of the three sources supplied the bad ref.
+err="$( (cd "$d2" && env -u RELEVIO_MAIN bash "$IDX" --main no-such-branch >/dev/null) 2>&1 )"
+check "index: --main overrides the recorded branch" \
+  "$(contains "$err" 'does not resolve to a commit')" "yes"
+check "index: ... and says where the bad value came from" \
+  "$(contains "$err" '--main')" "yes"
 rm -rf "$d2"
 
 # A repository with no commits at all is a real state, not a missing ref: the
