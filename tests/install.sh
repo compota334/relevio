@@ -794,6 +794,86 @@ check "index: ... and its unmerged handoff leaves the catalog with it" \
   "$(catalog_of "$idx" | grep -c '2026-09-03_feat-open.md')" "0"
 rm -rf "$d"
 
+# --- Case 13: the one-time migration of pre-v0.22 headers -------------------
+# Other projects (and other people) are running relevio v0.21 and older, where
+# Branch could carry prose and Commits a "(N commits)" suffix. There is no
+# tolerant parser for that: there is one migration, run once per repo, and
+# after it there is a single header format.
+MIG="$REPO/scripts/relevio-migrate.sh"
+d="$(fixture '')"
+mkdir -p "$d/docs/handoff" "$d/src" "$d/lib"
+echo a > "$d/src/a.txt"; echo b > "$d/lib/b.txt"
+git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm base >/dev/null 2>&1
+h="$(git -C "$d" rev-parse --short HEAD)"
+# A v0.21 header: prose in Branch, a suffix in Commits, no Areas at all.
+legacy_handoff() {
+  printf 'Session: %s\nDate: %s\nDev: NICO\nBranch: %s\nCommits: %s\nResume: claude --resume old\nTopics: t\nSummary: s\n\n## 1. Body\n\nText.\n' \
+    "$3" "$(echo "$2" | cut -c1-10)" "$4" "$5" > "$1/docs/handoff/$2"
+}
+legacy_handoff "$d" 2026-08-01_one.md "01-08-26 one" "main (worked from a worktree, all pushed)" "$h..$h"
+legacy_handoff "$d" 2026-08-02_two.md "02-08-26 two" "main (no open branches)" "$h..$h (10 commits)"
+legacy_handoff "$d" 2026-08-03_three.md "03-08-26 three" "main" "deadbee..f00dcaf"
+
+before="$(cat "$d/docs/handoff/2026-08-01_one.md")"
+( cd "$d" && bash "$MIG" --dry-run >/dev/null 2>&1 )
+check "migrate: --dry-run changes nothing on disk" \
+  "$(yesno "$([ "$before" = "$(cat "$d/docs/handoff/2026-08-01_one.md")" ]; echo $?)")" "yes"
+
+out="$( (cd "$d" && bash "$MIG") 2>&1 )"; rc=$?
+# The third handoff's range does not resolve, so its Areas cannot be derived.
+# Deriving it anyway, or defaulting it to "none", would write a wrong answer
+# into the field the lane board reads. It is reported instead.
+check "migrate: exits non-zero when a file needs a hand" "$rc" "2"
+check "migrate: ... naming that file and why" \
+  "$(printf '%s' "$out" | grep -c '2026-08-03_three.md: the range .* no longer resolves')" "1"
+check "migrate: the other two are converted" \
+  "$(printf '%s' "$out" | grep -c '^  fixed  ')" "2"
+check "migrate: prose leaves Branch bare" \
+  "$(grep -c '^Branch: main$' "$d/docs/handoff/2026-08-01_one.md")" "1"
+check "migrate: ... and is kept in the body, not thrown away" \
+  "$(grep -c '^Branch note: (worked from a worktree, all pushed)$' "$d/docs/handoff/2026-08-01_one.md")" "1"
+check "migrate: the \"(10 commits)\" suffix is dropped" \
+  "$(grep -c "^Commits: $h..$h\$" "$d/docs/handoff/2026-08-02_two.md")" "1"
+check "migrate: Areas is derived from the commit range, not invented" \
+  "$(grep '^Areas: ' "$d/docs/handoff/2026-08-01_one.md")" "Areas: lib/b.txt, src/a.txt"
+check "migrate: Areas lands right after Commits" \
+  "$(grep -A1 '^Commits: ' "$d/docs/handoff/2026-08-01_one.md" | tail -1 | cut -d: -f1)" "Areas"
+check "migrate: the body survives the rewrite" \
+  "$(grep -c '^## 1. Body$' "$d/docs/handoff/2026-08-01_one.md")" "1"
+
+# A session that touched dozens of files would make an unreadable board row,
+# so those collapse to their top-level directory.
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14; do
+  mkdir -p "$d/area$i"; echo x > "$d/area$i/f.txt"
+done
+git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm wide >/dev/null 2>&1
+h2="$(git -C "$d" rev-parse --short HEAD)"
+legacy_handoff "$d" 2026-08-04_wide.md "04-08-26 wide" "main" "$h2..$h2"
+( cd "$d" && bash "$MIG" >/dev/null 2>&1 )
+check "migrate: a wide session collapses its areas to directories" \
+  "$(grep '^Areas: ' "$d/docs/handoff/2026-08-04_wide.md" | grep -c 'area1, area10')" "1"
+check "migrate: ... without keeping the file names" \
+  "$(grep -c 'f.txt' "$d/docs/handoff/2026-08-04_wide.md")" "0"
+
+# Running it again must be a no-op: the converted files are already
+# current, and the third still needs the same hand.
+out2="$( (cd "$d" && bash "$MIG") 2>&1 )"
+check "migrate: a second run converts nothing" \
+  "$(printf '%s' "$out2" | grep -c '^  fixed  ')" "0"
+check "migrate: ... and reports the converted ones as already current" \
+  "$(printf '%s' "$out2" | grep -c 'already a v0.22 header')" "3"
+
+# Once the last file is fixed by hand, the index builds.
+printf 'Areas: none\n' > /dev/null
+sed 's/^Commits: deadbee..f00dcaf$/Commits: none\nAreas: none/' "$d/docs/handoff/2026-08-03_three.md" > "$d/t" && mv "$d/t" "$d/docs/handoff/2026-08-03_three.md"
+( cd "$d" && bash "$MIG" >/dev/null 2>&1 )
+check "migrate: exits 0 once every handoff is current" "$?" "0"
+( cd "$d" && RELEVIO_MAIN=main bash "$IDX" >/dev/null 2>&1 )
+check "migrate: a migrated repo indexes cleanly" "$?" "0"
+check "migrate: ... with every session in the catalog" \
+  "$(catalog_of "$d/docs/handoff/INDEX.md" | grep -c '^| 2026-08-0')" "4"
+rm -rf "$d"
+
 echo
 if [ "$FAILURES" -eq 0 ]; then
   echo "all cases passed"

@@ -21,6 +21,11 @@
 RELEVIO_FIELDS="Session Date Dev Branch Commits Areas Resume Topics Summary"
 REPO_UNBORN=no
 
+# Byte ordering everywhere. `sort` collates differently per locale, so without
+# this two devs regenerating the same index on the same commits would produce
+# two different files and a pointless merge conflict.
+export LC_ALL=C
+
 die() { echo "ERROR: $*" >&2; exit 2; }
 
 # The repository root, from anywhere inside it (a worktree included).
