@@ -1,5 +1,5 @@
 ---
-description: Close a session - write the dated handoff, update the index, hand over the close-out steps
+description: Close a session - write the dated handoff, regenerate the lane index, hand over the close-out steps
 ---
 
 Write a handoff for the next agent: you are passing the baton. Sessions close
@@ -15,16 +15,31 @@ belongs in the metadata header below. Only if that exact filename already
 exists (same date, same title), append the next letter in alphabetical order
 (`_B`, `_C`, ...) to keep them ordered.
 
-Start the file with this metadata header, every field filled:
+Start the file with this metadata header, every field filled, one
+`Key: value` line per field and nothing else in it. A script parses this
+header to build the library index, so the values must be bare: no
+parentheses, no commentary, no wrapped lines. Anything you want to explain
+goes in the body, not in a field.
 
     Session: DD-MM-YY <short title>
     Date: YYYY-MM-DD
     Dev: NAME (the dev's short name, uppercase; ask if you do not know it)
-    Branch: <git branch the session worked on>
-    Commits: <first hash>..<last hash> (or "none")
+    Branch: <bare branch name, e.g. feat-parser; never "main (via worktree x)">
+    Commits: <first>..<last> (bare short hashes, e.g. a1b2c3d..e4f5a6b; or exactly: none)
+    Areas: <comma-separated paths this session touched; or exactly: none>
     Resume: claude --resume <session-id>
     Topics: <comma-separated lowercase tags>
-    Summary: <one line>
+    Summary: <one line, and no "|" character in it>
+
+`Areas` is what lets a future session on another branch discover that you
+were here. Derive it from the commit range, do not guess it:
+
+    git log --format= --name-only <first>^..<last> | cut -d/ -f1-2 | sort -u
+
+Collapse those to their top-level directory if the list runs past a dozen
+items, and keep every item a real path in the repo. If `Commits` is `none`,
+`Areas` is `none`. Note the `^`: the range in the header is inclusive of
+`<first>`, while git's `a..b` excludes `a`.
 
 To find <session-id>: this session's transcript is the most recently modified
 `.jsonl` file in `~/.claude/projects/<slug>/`, where `<slug>` is this
@@ -59,21 +74,32 @@ Also record any operational state that git does not capture: services or jobs
 left running, which database or environment is the source of truth right now,
 and any long process in progress with the information needed to resume it.
 
-After writing the handoff, update the library index `docs/handoff/INDEX.md`:
-append ONE row to the table with the same data as the metadata header (Date,
-Session, Handoff file, Dev, Commits, Topics, Summary). The Commits column carries
-the same `<first>..<last>` range as the header, so from the index anyone can
-run `git log <first>..<last>` and read the session's work commit by commit.
-If INDEX.md does not exist, create it by copying the relevio template
-(https://github.com/compota334/relevio/blob/main/templates/INDEX.md).
-Rows are append-only: never edit or delete existing rows.
+After writing the handoff, REGENERATE the library index. Never edit
+`docs/handoff/INDEX.md` by hand: it is a generated file, built from the
+header of every handoff on every branch, and a hand-added row would be
+discarded by the next regeneration.
+
+    S="${CLAUDE_PLUGIN_ROOT}/scripts"
+    [ -x "$S/relevio-index.sh" ] || S="$(git rev-parse --show-toplevel)/.claude/scripts"
+    if [ -x "$S/relevio-index.sh" ]; then bash "$S/relevio-index.sh"; else
+      echo "relevio: relevio-index.sh is in neither \${CLAUDE_PLUGIN_ROOT}/scripts nor .claude/scripts. This relevio predates v0.22, or the script install is incomplete: bash <relevio>/install.sh --update" >&2
+    fi
+
+The script FAILS LOUD naming the file and the field when a header is
+malformed. If it fails on the handoff you just wrote, fix that header and
+rerun. If it fails on somebody else's handoff, tell the user and leave the
+file alone; if the message says the header predates v0.22, the fix is
+`bash "$S/relevio-migrate.sh"`, which is the user's call, not yours.
 
 Finally, close with LITERAL instructions the user can copy (assume an
 inexperienced user):
-1. Commit and push all verified work (if the machine has more than one GitHub
+1. Commit and push all verified work, the handoff and the regenerated
+   `docs/handoff/INDEX.md` together (if the machine has more than one GitHub
    account, check first that the active one is correct for this repo). This is
    what makes the handoff visible to the next session, so it MUST happen before
-   the later steps. Say which branch you pushed to.
+   the later steps. Say which branch you pushed to. If the push is rejected and
+   the rebase reports a conflict on INDEX.md, do not resolve it: rerun the
+   index script, `git add docs/handoff/INDEX.md`, and continue the rebase.
 2. If this session runs inside a git worktree (check: the path from
    `git rev-parse --git-dir` contains `/worktrees/`), release the branch NOW,
    AFTER the push succeeded: run `git switch --detach`. Git allows a branch to

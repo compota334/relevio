@@ -1,5 +1,5 @@
 ---
-description: Open a session - read the latest handoff, check git state, summarize where things stand
+description: Open a session - show the team's lanes, read your branch's handoff, trace who else touched the surfaces you will work on
 ---
 
 Open this session following the relevio cycle: a session is NEVER
@@ -10,26 +10,56 @@ and in the moment, if it needs anything from you. Act on its messages when
 they arrive, never in anticipation. You are picking up the baton from the
 previous session.
 
-1. Find and read the LATEST handoff, and do NOT assume it lives on your
-   current branch. The previous session may have committed it on a feature
-   branch you are not on, so it can be missing from your working tree. Steps:
+1. Find YOUR lane and read its latest handoff. Never assume the newest handoff
+   in the repo is yours: on a team, other devs and other agents are closing
+   sessions on their own branches, and their handoff is not your context.
    a. `git fetch --all --prune` (fall back to `git fetch origin`).
-   b. Read `docs/handoff/INDEX.md` if present, then find the newest handoff
-      across ALL branches (handoff filenames sort chronologically):
+   b. Regenerate and read the library index. It is a GENERATED file: never
+      edit it by hand and never resolve a merge conflict on it by hand.
 
-          git log --all --diff-filter=A --name-only --format='' -- 'docs/handoff/*.md' \
-            | grep -oE 'docs/handoff/[0-9]{4}-[0-9]{2}-[0-9]{2}_[^/]+\.md' | sort -u | tail -1
+          S="${CLAUDE_PLUGIN_ROOT}/scripts"
+          [ -x "$S/relevio-index.sh" ] || S="$(git rev-parse --show-toplevel)/.claude/scripts"
+          if [ -x "$S/relevio-index.sh" ]; then bash "$S/relevio-index.sh"; else
+            echo "relevio: relevio-index.sh is in neither \${CLAUDE_PLUGIN_ROOT}/scripts nor .claude/scripts. This relevio predates v0.22, or the script install is incomplete: bash <relevio>/install.sh --update" >&2
+          fi
 
-   c. Read it. If that file is in your working tree, read it directly; if it
-      is NOT (it lives on another branch), read it from the ref that has it:
+      If the script is missing the block prints why: STOP there and tell the
+      user, do not hand-edit INDEX.md.
+      If it FAILS on a malformed header, it names the file and the field:
+      report both. When it says the header predates v0.22, the fix is one
+      migration, `bash "$S/relevio-migrate.sh"`, which rewrites the headers in
+      this working tree: propose it and wait for the user's OK. Never patch a
+      handoff header silently, and never one that belongs to another dev.
+   c. Show the user the **Active lanes** table exactly as generated. That is
+      the team board: one row per branch with open work, who owns it, which
+      areas it touches, how far ahead of main it is.
+   d. Your lane is your current branch: `git rev-parse --abbrev-ref HEAD`.
+      Read the LAST catalog row whose `Branch` column equals it. If the file
+      is in your working tree read it directly; otherwise read it from history:
 
-          f=<the path from b>; c=$(git log --all --format='%H' -1 -- "$f"); git show "$c:$f"
+          f=<the Handoff file cell>; c=$(git log --all --format='%H' -1 -- "docs/handoff/$f"); git show "$c:docs/handoff/$f"
 
+   e. If NO row carries your branch (a brand new branch, or a detached HEAD),
+      read the last handoff of the main branch instead, and SAY so in those
+      words: "your branch is new, so this is where main stood at its last
+      session". Do not silently hand the user someone else's lane as if it
+      were theirs.
+   f. Ask the user which files or directories this session will touch, then
+      trace them BEFORE any code:
+
+          bash "$S/relevio-trace.sh" <path> [<path> ...]
+
+      Rows marked `OPEN WORK` are unmerged branches sitting on that same
+      surface right now. Name them to the user as a collision risk, and offer
+      to read their latest handoff (same command as d). Rows marked `handoff`
+      are earlier sessions on that surface, possibly weeks old and from other
+      branches: offer them, and read the ones the user picks. This is the step
+      that stops a new branch from silently undoing work it never saw.
    If `docs/handoff/` has no handoffs yet, this is the project's first
    session: say so and skip to step 2.
 2. Reconcile the branch BEFORE working (this is where sessions usually get
-   lost). The handoff header has a `Branch:` field: the branch the previous
-   session worked on. Report your current branch (`git rev-parse --abbrev-ref
+   lost). The handoff header has a `Branch:` field, a bare branch name: the
+   branch that session worked on. Report your current branch (`git rev-parse --abbrev-ref
    HEAD`), whether it is up to date with its remote, and any uncommitted work.
    Then work out where the previous work landed and ASK the user:
    - Is that work already on main? Check with
