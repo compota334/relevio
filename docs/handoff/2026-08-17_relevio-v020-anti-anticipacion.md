@@ -1,11 +1,14 @@
 Session: 17-08-26 relevio v0.20 anti-anticipacion
 Date: 2026-08-17
 Dev: NICO
-Branch: main (todo pusheado; sin ramas abiertas en relevio)
-Commits: bd9f40c..5bd4bb0 (5 commits)
+Branch: main
+Commits: bd9f40c..5bd4bb0
+Areas: .claude-plugin, .gitignore, README.md, VERSION, commands, hooks, install.sh, templates, tests, uninstall.sh
 Resume: claude --resume 1255dece-2843-48d3-9f8b-8ed1500fb927
 Topics: relevio, anti-anticipacion, prompts, hooks, cadencia, tokens-libres, handoff, arrotrack, code-review, security-review
 Summary: Rediseno completo de los mensajes que relevio le inyecta al agente (v0.20.0 y v0.20.1), a partir de dos fallas opuestas observadas en sesiones reales: agentes que cerraban al 40-60% porque conocian los umbrales, y agentes que se creian sin ventana porque el silencio entre reportes era ambiguo. Se elimino relevio.md como archivo de runtime, se agrego la cadencia de checkpoints y los tokens libres, y se porto todo a ARROTRACK (PRs #368 y #377, ambos mergeados) donde ademas quedo un gate de reviews previo a cada PR.
+
+Branch note: todo pusheado; sin ramas abiertas en relevio
 
 ## 1. De que va esto (para quien abra sin contexto)
 

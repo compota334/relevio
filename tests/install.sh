@@ -781,6 +781,24 @@ out="$( cd "$d" && bash "$TRC" nothing/here 2>&1 )"
 check "trace: an untouched path says so instead of printing an empty table" \
   "$(printf '%s' "$out" | grep -c 'No handoff and no open branch touched')" "1"
 
+# A project with relevio installed but no session closed yet must still be
+# able to build its index, and what it gets must be what templates/INDEX.md
+# promises. The prose is the part users read to learn the file is generated;
+# pinning it here keeps the template from drifting away from the script.
+d4="$(fixture '')"
+echo x > "$d4/README.md"
+git -C "$d4" add -A >/dev/null 2>&1; git -C "$d4" commit -qm init >/dev/null 2>&1
+( cd "$d4" && RELEVIO_MAIN=main bash "$IDX" >/dev/null 2>&1 )
+check "index: a project with no handoffs yet still builds an index" "$?" "0"
+check "index: ... which says so instead of printing an empty table" \
+  "$(grep -c 'No handoffs yet' "$d4/docs/handoff/INDEX.md")" "1"
+check "index: the INDEX template carries the same prose the script writes" \
+  "$(diff <(sed -n '1,/^## Active lanes$/p' "$d4/docs/handoff/INDEX.md") \
+          <(sed -n '1,/^## Active lanes$/p' "$REPO/templates/INDEX.md") >/dev/null && echo same)" "same"
+check "index: the template no longer calls the index append-only" \
+  "$(grep -c 'append-only' "$REPO/templates/INDEX.md")" "0"
+rm -rf "$d4"
+
 # A branch deleted before merging takes its handoff with it: git can no longer
 # reach the file, so the row is gone. This is the documented trade-off of
 # deriving the index from git rather than hand-maintaining it. Last, because
@@ -831,7 +849,7 @@ check "migrate: the other two are converted" \
 check "migrate: prose leaves Branch bare" \
   "$(grep -c '^Branch: main$' "$d/docs/handoff/2026-08-01_one.md")" "1"
 check "migrate: ... and is kept in the body, not thrown away" \
-  "$(grep -c '^Branch note: (worked from a worktree, all pushed)$' "$d/docs/handoff/2026-08-01_one.md")" "1"
+  "$(grep -c '^Branch note: worked from a worktree, all pushed$' "$d/docs/handoff/2026-08-01_one.md")" "1"
 check "migrate: the \"(10 commits)\" suffix is dropped" \
   "$(grep -c "^Commits: $h..$h\$" "$d/docs/handoff/2026-08-02_two.md")" "1"
 check "migrate: Areas is derived from the commit range, not invented" \

@@ -1,11 +1,14 @@
 Session: 26-07-26 relevio v0.17 y agrotrack
 Date: 2026-07-26
 Dev: NICO
-Branch: main (todo pusheado a main; sin ramas abiertas)
-Commits: aeb5eee..2bf8667 (10 commits)
+Branch: main
+Commits: aeb5eee..2bf8667
+Areas: .claude-plugin, README.md, VERSION, commands, hooks, install.sh, templates, tests
 Resume: claude --resume 0126210a-186f-44cb-a72c-c6ade4e5c1f3
 Topics: relevio, fail-loud, installer, marcadores, versionado, opus-5, cosecha, agrotrack, tests
 Summary: De relevio v0.10.0 a v0.17.0 en una sola sesión, empujada casi entera por dos reportes de bugs del agente de POLY-BOX-MOVIES. Lo central: los modelos desconocidos ya no reciben una ventana adivinada, el 70% pasó de freno a cosecha, el installer dejó de tener una trampa de tiempo diferido en sus propios consejos, y ahora hay tests. Además Agrotrack recibió tres PRs (25, 33, 35), todos mergeados.
+
+Branch note: todo pusheado a main; sin ramas abiertas
 
 ## 1. De qué va esto (para quien abra sin contexto)
 

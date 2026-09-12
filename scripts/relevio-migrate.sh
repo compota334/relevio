@@ -73,6 +73,9 @@ for f in docs/handoff/*.md; do
 
   branch="${raw_branch%% *}"
   note="${raw_branch#"$branch"}"; note="${note# }"
+  # The prose was usually parenthesised because it sat inside a field; as a
+  # body line it reads better without the wrapping pair.
+  case "$note" in "("*")") note="${note#\(}"; note="${note%\)}" ;; esac
   if ! git check-ref-format --branch "$branch" >/dev/null 2>&1; then
     echo "  PROBLEM   ${f##*/}: Branch starts with \"$branch\", which is not a valid branch name; fix it by hand" >&2
     PROBLEMS=$((PROBLEMS + 1)); continue

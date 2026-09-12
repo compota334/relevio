@@ -78,7 +78,9 @@ list_handoffs() {
   {
     git log --all --diff-filter=A --name-only --format='' -- 'docs/handoff/*.md' 2>/dev/null
     ( cd "$TOP" && ls docs/handoff/*.md 2>/dev/null )
-  } | grep -E '^docs/handoff/[0-9]{4}-[0-9]{2}-[0-9]{2}_[^/]+\.md$' | sort -u
+  } | grep -E '^docs/handoff/[0-9]{4}-[0-9]{2}-[0-9]{2}_[^/]+\.md$' | sort -u || true
+  # `|| true`: a project with no handoffs yet is not an error, but grep exits
+  # 1 on no match and the callers run under `set -o pipefail`.
 }
 
 # Print the content of a handoff path. The working tree wins (it is the most

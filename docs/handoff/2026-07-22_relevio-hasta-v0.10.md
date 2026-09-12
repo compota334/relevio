@@ -1,11 +1,14 @@
 Session: 22-07-26 relevio hasta v0.10
 Date: 2026-07-22
 Dev: NICO
-Branch: main (trabajado vía worktree claude/project-check-f091c8, todo pusheado a main)
+Branch: main
 Commits: d85b8eb..2952789
+Areas: .claude-plugin, .gitignore, LICENSE, README.md, commands, hooks, install.sh, templates, uninstall.sh
 Resume: claude --resume 5681463f-d5c3-41f9-86c7-39aaaae73d4d
 Topics: relevio, plugin, marketplace, hooks, contexto, worktrees, branch-reconciliation, despliegues
 Summary: De claude-baton v0.2 a relevio v0.10: rename completo, plugin de Claude Code con marketplace propio, submission al directorio de Anthropic, y cinco iteraciones de la metodología (checkpoints cada 10%, esquema de nombres postmortem, reconciliación de rama, liberación de worktrees, ventana de contexto por modelo), todo desplegado además en los proyectos POLY y ARROTRACK del usuario.
+
+Branch note: trabajado vía worktree claude/project-check-f091c8, todo pusheado a main
 
 ## 1. Qué es este proyecto (vista de pájaro)
 
