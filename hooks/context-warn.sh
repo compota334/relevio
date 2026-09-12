@@ -76,10 +76,24 @@ case "$TRANSCRIPT" in */zcode-claude-hook-*) HOST=zcode ;; esac
 [ "$HOST" = script ] && [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && HOST=plugin
 KICKOFF="/kickoff"
 [ "$HOST" = plugin ] && KICKOFF="/relevio:kickoff"
-# docs/handoff/INDEX.md is generated, so the close-out has to name the script
-# that generates it, and the script lives in a different place per host.
-INDEX_CMD='bash .claude/scripts/relevio-index.sh'
-[ "$HOST" = plugin ] && INDEX_CMD='bash "$CLAUDE_PLUGIN_ROOT/scripts/relevio-index.sh"'
+# The close-out has to name relevio's scripts, and they sit in a different
+# place per install channel. Do NOT branch on $HOST for that: HOST says which
+# product is running (ZCode never becomes "plugin" above, yet ZCode runs
+# relevio as a plugin), while the question here is which CHANNEL installed it,
+# and CLAUDE_PLUGIN_ROOT answers that on its own.
+# Resolve it HERE when it is known, rather than handing the agent the variable
+# to expand: this hook runs inside the host, so it sees the plugin root even
+# if the shell the agent later opens does not inherit it. The /handoff and
+# /kickoff commands are static text and cannot do this, so they carry the
+# variable form; same rule, applied as early as each one can apply it.
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+  RELEVIO_SCRIPTS="$CLAUDE_PLUGIN_ROOT/scripts"
+else
+  # A script install: the agent's own shell expands this from the repo root.
+  RELEVIO_SCRIPTS='$(git rev-parse --show-toplevel)/.claude/scripts'
+fi
+INDEX_CMD="bash \"$RELEVIO_SCRIPTS/relevio-index.sh\""
+AREAS_CMD="bash \"$RELEVIO_SCRIPTS/relevio-areas.sh\""
 
 
 emit() {
@@ -259,7 +273,7 @@ case "$TOP" in
 Nothing needs to be written down yet: a later message will tell you when to write the handoff, with complete instructions. Until then, keep working." ;;
   hard) emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free; you passed the ${HARD}% mark. Time to close the session, and ${FREE} tokens is enough room to do it well: no rushing, no skipped steps.
 1. Bring the work in progress to a coherent, safe stopping point at full quality (do not abandon anything mid-change). Start nothing new after this.
-2. Then write the handoff, while this session's understanding is still fully loaded, to docs/handoff/YYYY-MM-DD_<short-title>.md: what was done this session (cite the hashes of commits already made, so the next session can read the work with git log), lessons learned (only real problems that took several attempts to solve; never invent one), pending work in priority order, and for anything left open that depended on understanding built up this session (approaches you tried and ruled out, why the obvious fix does not work, a subtle coupling you found), the REASONING and not just the title: the next session can re-read files cheaply, but cannot cheaply re-derive your conclusions. Fill its Branch, Commits and Areas fields with bare values (Areas from git log --format= --name-only <first>^..<last>), then regenerate the index with $INDEX_CMD: docs/handoff/INDEX.md is generated, never hand-edited, and the script names the file and field if a header is malformed.
+2. Then write the handoff, while this session's understanding is still fully loaded, to docs/handoff/YYYY-MM-DD_<short-title>.md: what was done this session (cite the hashes of commits already made, so the next session can read the work with git log), lessons learned (only real problems that took several attempts to solve; never invent one), pending work in priority order, and for anything left open that depended on understanding built up this session (approaches you tried and ruled out, why the obvious fix does not work, a subtle coupling you found), the REASONING and not just the title: the next session can re-read files cheaply, but cannot cheaply re-derive your conclusions. Fill its Branch, Commits and Areas fields with bare values: Branch is a plain branch name, Commits is <first>..<last>, and Areas comes from '$AREAS_CMD <first>..<last>' (do not hand-roll that derivation, the range is inclusive of <first> and git's is not). Then regenerate the index with $INDEX_CMD: docs/handoff/INDEX.md is generated, never hand-edited, and the script names the file and field if a header is malformed.
 3. Run the project's checks (type-check, linter, tests: see CLAUDE.md), then commit everything, work and handoff included, and push.
 $STEP4" ;;
   g85)  emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free. If a handoff has already been written for this session, keep answers short and do no new work: auto-compact is getting close. If NO handoff exists yet, write it NOW: docs/handoff/YYYY-MM-DD_<short-title>.md with what was done (commit hashes), lessons that cost real effort, pending work in order and the reasoning behind anything left open; then regenerate the index with $INDEX_CMD; commit and push." ;;

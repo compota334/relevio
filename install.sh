@@ -126,9 +126,18 @@ fi
 SRC="${BASH_SOURCE[0]:-}"
 if [ -n "$SRC" ] && [ -f "$(dirname "$SRC")/templates/context-warn.sh" ]; then
   TPL="$(cd "$(dirname "$SRC")/templates" && pwd)"
-  SCR="$(cd "$(dirname "$SRC")/scripts" && pwd)"
   [ "$(dirname "$TPL")" = "$(pwd)" ] && fail "you are running the installer inside the relevio repo itself.
        cd into YOUR project first, then run: bash $(pwd)/install.sh"
+  # Since v0.22 the installer also ships scripts/. Check it before using it:
+  # without this the run dies on a bare 'cd: No such file or directory' from
+  # somewhere in the middle of the file, with nothing naming relevio or the
+  # actual problem.
+  [ -d "$(dirname "$SRC")/scripts" ] || fail "this installer is v${VERSION}, which installs the handoff scripts, but there is no scripts/ directory next to it:
+         $(cd "$(dirname "$SRC")" && pwd)
+       Installer and payload come from different versions, so nothing was
+       installed. Re-download a matching set (install.sh + templates/ +
+       scripts/), or install from a full clone of the relevio repo."
+  SCR="$(cd "$(dirname "$SRC")/scripts" && pwd)"
   info "using local templates: $TPL"
 else
   command -v curl >/dev/null 2>&1 || fail "curl is required for the remote install."

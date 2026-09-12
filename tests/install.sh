@@ -564,16 +564,41 @@ out="$(printf '{"source":"startup","transcript_path":"%s"}' "$REPO/VERSION" \
   printf '{"transcript_path":"%s","session_id":"relevio-test-%s-plugidx"}' "$d/plug-transcript.jsonl" "$$" \
   | CLAUDE_PLUGIN_ROOT="$REPO" bash "$REPO/hooks/context-warn.sh" \
   | jq -r '.hookSpecificOutput.additionalContext // ""')"
-check "plugin-on-claude: the close-out points at the plugin's index script" \
-  "$(printf '%s' "$out" | grep -c 'CLAUDE_PLUGIN_ROOT/scripts/relevio-index.sh')" "1"
+check "close-out: a plugin install gets the plugin's own resolved path" \
+  "$(contains "$out" "bash \"$REPO/scripts/relevio-index.sh\"")" "yes"
 check "close-out: nobody is told to append an index row by hand any more" \
   "$(grep -c 'append a row to docs/handoff/INDEX.md' "$REPO/hooks/context-warn.sh" "$REPO/hooks/session-start.sh" | awk -F: '{ s += $2 } END { print s }')" "0"
 check "close-out: the handoff header fields it names include Areas" \
-  "$(printf '%s' "$out" | grep -c 'Branch, Commits and Areas')" "1"
+  "$(contains "$out" 'Branch, Commits and Areas')" "yes"
+# The Areas derivation belongs to relevio-areas.sh. The hook is the ONLY place
+# that delivers the close-out checklist, so a hand-rolled pipeline surviving
+# here would quietly become the version agents actually follow.
+check "close-out: Areas is derived by the script, not by a hand-rolled pipeline" \
+  "$(contains "$out" 'relevio-areas.sh')" "yes"
+check "close-out: the hooks carry no copy of that pipeline" \
+  "$(grep -c 'name-only' "$REPO/hooks/context-warn.sh" "$REPO/hooks/session-start.sh" | awk -F: '{ s += $2 } END { print s }')" "0"
 rm -f /tmp/claude-ctx-warn-relevio-test-$$-plugidx
+# ZCode runs relevio as a PLUGIN, yet HOST is "zcode" there and never becomes
+# "plugin": a close-out that branched on HOST handed ZCode users the script
+# install's path, which a plugin install never creates. The path must not
+# depend on HOST at all.
+zt="$d/zcode-claude-hook-probe"; mkdir -p "$zt"
+printf '{"message":{"usage":{"input_tokens":810000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}\n' > "$zt/tr.jsonl"
+out="$(printf '{"session_id":"relevio-test-%s-zidx","model":"builtin:zai/GLM-5.3","transcript_path":"%s/tr.jsonl"}' "$$" "$zt" \
+  | CLAUDE_PLUGIN_ROOT="$REPO" RELEVIO_ZCODE_DB=/nonexistent bash "$REPO/hooks/context-warn.sh" \
+  | jq -r '.hookSpecificOutput.additionalContext // ""')"
+check "zcode with a plugin install: the close-out does not hardcode .claude/scripts" \
+  "$(contains "$out" 'bash .claude/scripts/relevio-index.sh')" "no"
+check "zcode with a plugin install: it gets the plugin's resolved path" \
+  "$(contains "$out" "bash \"$REPO/scripts/relevio-index.sh\"")" "yes"
+# Resolved here, not handed over as a variable: the shell the agent opens may
+# not inherit CLAUDE_PLUGIN_ROOT, and on ZCode that is unverified.
+check "zcode with a plugin install: no unexpanded variable is handed over" \
+  "$(contains "$out" 'CLAUDE_PLUGIN_ROOT')" "no"
+rm -f /tmp/claude-ctx-warn-relevio-test-$$-zidx
 out="$(cw 810000 scridx)"
-check "script install: the close-out points at .claude/scripts/relevio-index.sh" \
-  "$(printf '%s' "$out" | grep -c 'bash .claude/scripts/relevio-index.sh')" "1"
+check "script install: the close-out resolves to .claude/scripts when no plugin root is set" \
+  "$(contains "$out" 'show-toplevel)/.claude/scripts/relevio-index.sh')" "yes"
 check "session-start: the core describes kickoff as reading YOUR branch" \
   "$(inject "$d" startup | grep -c 'latest handoff OF YOUR OWN BRANCH')" "1"
 check "hooks/ and templates/ scripts are identical (no more sed transform)" \
@@ -893,6 +918,8 @@ RESOLVER="$(grep -h 'CLAUDE_PLUGIN_ROOT:-' "$REPO/commands/handoff.md" "$REPO/co
   "$REPO/templates/handoff.md" "$REPO/templates/kickoff.md" | sed 's/^ *//' | sort -u)"
 check "format: the script resolver is one line, identical in both channels" \
   "$(printf '%s' "$RESOLVER" | grep -c '')" "1"
+check "format: the hooks build the script path from the same two candidates" \
+  "$(grep -c 'RELEVIO_SCRIPTS=' "$REPO/hooks/context-warn.sh")" "2"
 check "format: nobody re-types the Areas pipeline by hand any more" \
   "$(grep -c 'name-only' "$REPO/commands/handoff.md" "$REPO/templates/handoff.md" | awk -F: '{ s += $2 } END { print s }')" "0"
 
@@ -936,6 +963,20 @@ out="$( (cd "$d6" && RELEVIO_MAIN=main bash "$INSTALLER" --update) 2>&1 )"
 check "install: a healthy project gets no migration note" \
   "$(contains "$out" 'cannot be indexed yet')" "no"
 rm -rf "$d6"
+
+# An installer whose payload is incomplete must say so in relevio's own words.
+# Resolving scripts/ with a bare `cd` under `set -e` used to abort mid-file
+# with a shell error naming neither relevio nor the missing directory.
+c2="$(mktemp -d)"
+cp "$INSTALLER" "$c2/install.sh"; cp -r "$REPO/templates" "$c2/"
+cp "$REPO/VERSION" "$c2/VERSION"
+d7="$(fixture '')"
+out="$( (cd "$d7" && bash "$c2/install.sh") 2>&1 )"; rc=$?
+check "install: a payload with no scripts/ fails loud" "$([ "$rc" -ne 0 ] && echo yes || echo no)" "yes"
+check "install: ... naming relevio and what is missing" \
+  "$(contains "$out" 'no scripts/ directory next to it')" "yes"
+check "install: ... and installs nothing" "$(exists "$d7/.claude")" "no"
+rm -rf "$c2" "$d7"
 
 # --- Case 13: the one-time migration of pre-v0.22 headers -------------------
 # Other projects (and other people) are running relevio v0.21 and older, where
