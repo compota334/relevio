@@ -1000,6 +1000,48 @@ check "kickoff fallback: it tests readability, not the executable bit" \
   "$(grep -c '\[ -r "\$c/relevio-index.sh" \]' "$REPO/commands/kickoff.md")" "1"
 rm -rf "$zc"
 
+# --- Case 12e: an out-of-date relevio, told apart by install channel --------
+# There are two upgrade paths and they do not overlap. The script installer is
+# updated with install.sh; a plugin is updated through the host, and on ZCode
+# there is no CLI for that at all (measured: `zcode` is the Electron launcher,
+# no subcommands), so the only honest answer is a click path plus a new
+# session. Sending a plugin user to install.sh wastes their time on a command
+# that does not apply to them, so the hook states the channel and the command
+# branches on it.
+chan() {  # $1 = directory holding hooks/ and scripts/ -> the INSTALL CHANNEL line
+  printf '{"source":"startup","transcript_path":"/tmp/x.jsonl","model":"claude-opus-5"}' \
+    | env -u CLAUDE_PLUGIN_ROOT bash "$1/hooks/session-start.sh" \
+    | jq -r '.hookSpecificOutput.additionalContext // ""' | grep -o 'INSTALL CHANNEL: [a-z ]*'
+}
+pl="$(mktemp -d)"; mkdir -p "$pl/hooks" "$pl/scripts"
+cp "$REPO"/hooks/*.sh "$pl/hooks/"; cp "$REPO"/scripts/*.sh "$pl/scripts/"
+check "channel: a plugin layout reports itself as a plugin" \
+  "$(chan "$pl")" "INSTALL CHANNEL: a plugin"
+sc="$(mktemp -d)"; mkdir -p "$sc/.claude/hooks" "$sc/.claude/scripts"
+cp "$REPO"/templates/*.sh "$sc/.claude/hooks/"; cp "$REPO"/scripts/*.sh "$sc/.claude/scripts/"
+check "channel: a script install reports itself as the script installer" \
+  "$(chan "$sc/.claude")" "INSTALL CHANNEL: the script installer"
+# With the scripts missing the channel is unknown, and saying so beats guessing.
+mv "$pl/scripts" "$pl/gone"
+check "channel: with no scripts beside the hooks the channel is unknown" \
+  "$(chan "$pl")" "INSTALL CHANNEL: unknown"
+rm -rf "$pl" "$sc"
+
+# The kickoff command must carry BOTH upgrade paths, and must forbid the one
+# thing an agent could plausibly try on ZCode and should never do.
+for f in commands/kickoff.md templates/kickoff.md; do
+  check "upgrade: $f gives the script installer its own command" \
+    "$(contains "$(cat "$REPO/$f")" 'install.sh --update')" "yes"
+  check "upgrade: $f sends a plugin to the host instead" \
+    "$(contains "$(cat "$REPO/$f")" 'Settings -> Plugins -> relevio')" "yes"
+  check "upgrade: $f says a plugin upgrade needs a new session" \
+    "$(contains "$(cat "$REPO/$f")" 'open a NEW session')" "yes"
+  check "upgrade: $f forbids hand-editing the host's plugin directory" \
+    "$(contains "$(cat "$REPO/$f")" 'zcode/cli/plugins')" "yes"
+  check "upgrade: $f reads the channel from what relevio announced" \
+    "$(contains "$(cat "$REPO/$f")" 'INSTALL CHANNEL')" "yes"
+done
+
 # --- Case 12b: the format has one definition, not four ----------------------
 # The header is described in three languages: the awk parser, the /handoff
 # prose (twice, once per install channel) and these fixtures. Nothing stops

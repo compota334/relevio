@@ -102,35 +102,51 @@ previous session.
    (the `/relevio:handoff` command; on ZCode it is plain `/handoff`) plus a
    new session. Do not name any warning percentages or thresholds: an agent
    that knows the numbers anchors on them and acts before the hook speaks.
-4. If this project ALSO has a script-installed relevio (its hooks at
-   `.claude/hooks/session-start.sh` and `.claude/hooks/context-warn.sh`, or a
-   legacy `relevio.md` at the project root), say so FIRST, because two
-   installs is a problem before it is a version question: the plugin and the
-   script install each inject the methodology at session start, so the agent
-   receives it TWICE, and if their versions differ it receives two different
-   sets of rules. Tell the user to keep one: either remove the script install
-   (`bash <relevio>/uninstall.sh` from the project root, which keeps
-   `docs/handoff/`) or disable the plugin (through `/plugin` on Claude Code;
-   through Settings -> Plugins on ZCode). Then check whether that script
-   install is out of date and report the result in one line. The plugin
-   updates through the host's plugin manager, but a script install sitting
-   beside it does not, so it is the one that silently rots:
+4. Check whether relevio itself is out of date, and report it in one line.
+   relevio told you at session start which version it is running, on the first
+   line of its core message, and which channel installed it, on the line
+   beginning "INSTALL CHANNEL". Compare that version with the published one:
 
-       grep -m1 'relevio v' .claude/hooks/context-warn.sh
        curl -fsSL --max-time 5 https://raw.githubusercontent.com/compota334/relevio/main/VERSION
 
-   Say which of these is true, and no more:
-   - **Same version**: one line confirming it is current.
-   - **Behind by a little**: information, not an alarm. Give the upgrade command
-     (`bash <relevio>/install.sh --update` from this project root) and move on.
-   - **Behind by several versions, or NO stamp** (an install predating version
-     stamping): say so clearly and recommend upgrading before real work. A stale
-     model table makes the hook report a context percentage that is simply
-     wrong, so a session gets told to close at "80%" while it is really at 17%,
-     and nobody can tell from the inside that the number is a lie.
-   - **Could not check** (no network, curl missing, timeout): say so explicitly
-     alongside the installed version. Never let a failed check pass as "up to
-     date": silence would be indistinguishable from a clean result.
+   If the core was injected TWICE at session start (two "relevio vX.Y.Z: this
+   project uses the relevio session cycle" messages, whatever command names
+   they carry), say THAT first: a plugin and a script install are arming you
+   in parallel, so the rules arrive twice and possibly in two different
+   versions. Tell the user to keep one, either by disabling the plugin in the
+   host's plugin manager or by removing the script install with
+   `bash <relevio>/uninstall.sh`, which keeps `docs/handoff/`.
+
+   Then say which of these is true, and nothing more elaborate:
+   - **Same version**: one line confirming it is current. Do not belabour it.
+   - **Behind**: information, not an alarm. Being one version behind is not an
+     emergency. Behind by SEVERAL versions, or carrying no stamp at all, is
+     worth insisting on before real work: a stale model table makes the hook
+     report a context percentage that is simply wrong, so a session gets told
+     to wrap up at "80%" while it is really at 17%, and nobody can tell from
+     the inside that the number is a lie.
+
+     How it upgrades depends on the channel relevio named. Giving the wrong
+     one wastes the user's time on a command that does not apply:
+     * **script installer**: `bash <relevio>/install.sh --update`, run from
+       this project root. It refreshes only relevio's own files and never
+       touches `CLAUDE.md`, which is yours.
+     * **plugin**: through the HOST, never with `install.sh`. On ZCode:
+       Settings -> Plugins -> relevio -> update, or uninstall and install it
+       again if no update button is offered. On Claude Code: `/plugin`. Then
+       open a NEW session, because hooks and commands are registered when a
+       session starts, so this one keeps the old copy no matter what.
+       Prepare that click path for the user and stop there. You may confirm
+       the new version is really published (the `curl` above reads it straight
+       from `main`). You may NOT install it yourself, and in particular NEVER
+       edit the host's plugin directory by hand (`~/.zcode/cli/plugins/...`
+       and its equivalents): it is the host's own transactional state, and a
+       half-applied edit breaks plugin loading in every project, not just this
+       one.
+   - **Could not check** (no network, curl missing, request timed out): say
+     that explicitly, alongside the installed version. Never let a failed
+     check pass as "up to date": silence would be indistinguishable from a
+     clean result.
 HOST NOTE (ZCode): if this session runs inside ZCode rather than Claude Code,
 every relevio command is unprefixed there: `/kickoff`, `/handoff`, `/revisit`
 (never `/relevio:...`). ZCode has no `/rename` and no `claude --resume`:

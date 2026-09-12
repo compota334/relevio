@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.22.2
+# relevio v0.22.3
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -78,6 +78,21 @@ else
   SCRIPTS_LINE="WHERE THE SCRIPTS ARE: relevio's handoff scripts are NOT installed beside its hooks, so the index cannot be regenerated in this project. Say that to the user if it comes up, and never hand-edit docs/handoff/INDEX.md instead."
 fi
 
+# Which channel installed relevio here. Derived from the path above rather
+# than from $HOST: HOST names the product (ZCode runs relevio as a plugin, yet
+# never reports "plugin"), while what an upgrade depends on is the CHANNEL.
+# The script installer is the only one that puts relevio inside the project's
+# own .claude/; every plugin install lives in the host's plugin directory.
+# Getting this wrong sends the user to the wrong upgrade path entirely.
+case "${RELEVIO_SCRIPTS:-}" in
+  */.claude/scripts)
+    CHANNEL_LINE="INSTALL CHANNEL: the script installer, inside this project's .claude/. If relevio is out of date here, it upgrades with 'bash <relevio>/install.sh --update' run from the project root." ;;
+  "")
+    CHANNEL_LINE="INSTALL CHANNEL: unknown, because relevio's scripts were not found beside its hooks." ;;
+  *)
+    CHANNEL_LINE="INSTALL CHANNEL: a plugin, in the host's own plugin directory. If relevio is out of date here it upgrades through the HOST's plugin manager (ZCode: Settings -> Plugins; Claude Code: /plugin), and only takes effect in a NEW session, because hooks and commands are registered when a session starts. Never with install.sh, which belongs to the other channel, and never by editing the host's plugin directory by hand: that is the host's own transactional state, and a half-applied edit breaks plugin loading in every project." ;;
+esac
+
 # The core must not promise a report cadence that will never arrive: the
 # agent would read the structural silence as "usage is low"
 # (silence-as-information only works if reports actually flow). HAVE_USAGE
@@ -126,13 +141,15 @@ case "$SOURCE" in
     else
       DURING="DURING THE SESSION: this host agent does not give relevio access to your context-window usage, so NO usage reports will arrive this session, and silence tells you NOTHING about the window. Never guess or invent a usage figure. You know your own model and window size: rely on that knowledge, keep the user informed of where the work stands, and let the user's request, not the window, decide what you do and when you are done."
     fi
-    emit "relevio v0.22.2: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+    emit "relevio v0.22.3: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 OPEN: sessions start with $KICKOFF, which regenerates docs/handoff/INDEX.md (the team board of branches with open work), reads the latest handoff OF YOUR OWN BRANCH before any code (it may live only in another branch history), traces who else has touched the surfaces you are about to work on, and settles with the user which branch to work on. If the user skipped $KICKOFF and docs/handoff/ exists, suggest it.
 
 $DURING
 
 $SCRIPTS_LINE
+
+$CHANNEL_LINE
 
 $SUBAGENT_LINE"
     ;;

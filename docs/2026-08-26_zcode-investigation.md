@@ -145,3 +145,28 @@ Two findings, and both broke v0.22.0:
 Still unverified: whether v0.21.5 and earlier ever ran their hooks at all on a
 ZCode PLUGIN install, given the stripped executable bit. The 0.21.5 cache was
 replaced by the upgrade, so it can no longer be inspected.
+
+## Missing on the ZCode side: no CLI to update a plugin (feature request)
+
+Measured while fixing v0.22.1: `zcode` on the PATH is the Electron launcher,
+with no subcommands. There is no `zcode plugin update`, no `zcode plugin
+install`, nothing an agent or a script could call. The only supported way to
+move a plugin to a new version is the client UI, Settings -> Plugins.
+
+Two consequences relevio has to live with:
+
+- An agent cannot upgrade relevio for the user on ZCode. It can confirm the
+  new version is published and hand over the exact click path, and that is
+  where its job ends. Editing `~/.zcode/cli/plugins/` by hand is not a
+  workaround: `installed_plugins.json`, the cache tree and the transaction ids
+  are the host's own state, and a half-applied edit breaks plugin loading for
+  every project, not only the one being fixed. The kickoff command says this
+  in those words.
+- Even a correct update does not reach the running session: hooks and commands
+  are registered when a session starts. Any upgrade path has to end with
+  "open a new session", which is why the instruction says so explicitly rather
+  than leaving the user wondering why nothing changed.
+
+This is a gap in ZCode, not in relevio. Worth filing with Z.ai as a feature
+request: a `zcode plugin` subcommand (list / install / update / remove) would
+let agents and CI manage plugins the way `claude plugin` does.
