@@ -61,6 +61,7 @@ Nothing is ever lost to compaction again.
 | `docs/handoff/` | Where handoffs live. They accumulate; the newest one is the next session's starting point. |
 | `.claude/scripts/relevio-index.sh` | Regenerates `docs/handoff/INDEX.md` from the header of every handoff on every branch. Fails loud naming the file and field if a header is malformed. |
 | `.claude/scripts/relevio-trace.sh` | Answers "which sessions touched this path, and who has unmerged work on it right now". |
+| `.claude/scripts/relevio-areas.sh` | Derives a handoff's `Areas:` value from its commit range. `/handoff` calls it instead of re-typing the pipeline, so the inclusive-range subtlety is handled in one place. |
 | `.claude/scripts/relevio-migrate.sh` | One-time conversion of pre-v0.22 handoff headers. Run once per repo when upgrading. |
 | `.claude/scripts/relevio-handoffs-lib.sh` | Shared library for the three scripts above (sourced, not run). |
 | `docs/handoff/INDEX.md` | The library index, **generated** by `relevio-index.sh`: an **Active lanes** board (branches with open work) plus the full **Catalog** (date, conversation name, handoff file, dev, branch, areas, commit range, topics, summary). Never edited by hand, never overwritten by the installer. |
@@ -538,6 +539,10 @@ tolerant parser for the old shape: there is one migration, run once per repo.
 ```
 bash .claude/scripts/relevio-migrate.sh
 ```
+
+The installer tells you when a project needs this: after copying its files it
+asks the generator whether the handoffs can be indexed, and prints the
+generator's own reason if they cannot.
 
 It leaves `Branch` bare and moves the explanation into the body as a
 `Branch note:` line, drops the `Commits` suffix, and derives `Areas` from the

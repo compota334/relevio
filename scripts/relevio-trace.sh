@@ -25,7 +25,7 @@ MAIN_ARG=""; PATHS=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --main) [ $# -ge 2 ] || die "--main needs a ref"; MAIN_ARG="$2"; shift 2 ;;
-    -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) relevio_usage "${BASH_SOURCE[0]}"; exit 0 ;;
     -*) die "unknown argument: $1 (usage: relevio-trace.sh [--main <ref>] <path> ...)" ;;
     *) PATHS="${PATHS}${1}
 "; shift ;;
@@ -38,51 +38,72 @@ resolve_main "$MAIN_ARG"
 load_catalog
 HERE="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
 
+# Everything except the per-path `git log` is path-independent, so it is
+# resolved ONCE here instead of once per path: the state of each branch, and
+# each handoff's commit range. Without this, tracing five paths across forty
+# handoffs re-asks git the same questions two hundred times.
+STATES=""   # branch \t state
+for b in $(catalog_branches); do
+  STATES="${STATES}${b}	$(branch_state "$b")
+"
+done
+state_of() {
+  printf '%s' "$STATES" | awk -F'\t' -v b="$1" '$1 == b { print $2; found = 1 }
+                                                END { if (!found) print "merged" }'
+}
+
+ROWS=""     # file \t dev \t branch \t range \t note
+while IFS='	' read -r p _date _session dev branch _areas commits _rest; do
+  [ -n "$p" ] || continue
+  [ "$commits" = none ] && continue
+  st="$(state_of "$branch")"
+  case "$st" in
+    gone)   note="branch gone" ;;
+    merged) note="merged" ;;
+    *)      note="open" ;;
+  esac
+  range="$(range_of "$commits")"
+  # The hashes no longer resolve. Say so rather than silently omitting a
+  # session that may well have touched this path.
+  [ -n "$range" ] || note="range unresolvable (rebased or squashed?)"
+  ROWS="${ROWS}${p##*/}	${dev}	${branch}	${range}	${note}
+"
+done <<EOF
+$CATALOG
+EOF
+
 trace_one() {
-  local p="$1" rec file branch commits dev range hits note tip rows="" open_rows=""
-  # Prior sessions: a handoff touched the path when its own commit range
-  # contains at least one commit that changed it.
-  while IFS= read -r rec; do
-    [ -n "$rec" ] || continue
-    file="$(fld "$rec" 1)"; file="${file##*/}"
-    dev="$(fld "$rec" 4)"; branch="$(fld "$rec" 5)"; commits="$(fld "$rec" 7)"
-    if [ "$commits" = "none" ]; then continue; fi
-    range="$(range_of "$commits")"
+  local p="$1" file dev branch range note hits b rows="" open_rows=""
+  while IFS='	' read -r file dev branch range note; do
+    [ -n "$file" ] || continue
     if [ -z "$range" ]; then
-      # The hashes no longer resolve. Say so rather than silently omitting a
-      # session that may well have touched this path.
-      rows="${rows}handoff	${branch}	${file}	${dev}	?	range unresolvable (rebased or squashed?)
+      rows="${rows}handoff	${branch}	${file}	${dev}	?	${note}
 "
       continue
     fi
-    hits="$(git log --format=%h "$range" -- "$p" 2>/dev/null | grep -c '' || true)"
+    hits="$(git rev-list --count "$range" -- "$p" 2>/dev/null || echo 0)"
     [ "${hits:-0}" -gt 0 ] || continue
-    tip="$(branch_tip "$branch")"
-    if [ -z "$tip" ]; then note="branch gone"
-    elif git merge-base --is-ancestor "$tip" "$MAIN" 2>/dev/null; then note="merged"
-    else note="open"
-    fi
     rows="${rows}handoff	${branch}	${file}	${dev}	${hits}	${note}
 "
   done <<EOF
-$CATALOG
+$ROWS
 EOF
 
   # Open work: unmerged branches that changed this path. This is the part a
   # naive `git log` on your own branch can never show you.
-  local b dev
-  for b in $(catalog_branches); do
+  while IFS='	' read -r b state; do
+    [ -n "$b" ] || continue
+    [ "$state" = open ] || continue
     tip="$(branch_tip "$b")"
-    [ -n "$tip" ] || continue
-    git merge-base --is-ancestor "$tip" "$MAIN" 2>/dev/null && continue
-    hits="$(git log --format=%h "$MAIN..$tip" -- "$p" 2>/dev/null | grep -c '' || true)"
+    hits="$(git rev-list --count "$MAIN..$tip" -- "$p" 2>/dev/null || echo 0)"
     [ "${hits:-0}" -gt 0 ] || continue
     note="collision risk"
     [ "$b" = "$HERE" ] && note="your own branch"
-    dev="$(printf '%s' "$CATALOG" | awk -F'\t' -v b="$b" '$5 == b { print $4 }' | sort -u | paste -sd, - | sed 's/,/, /g')"
-    open_rows="${open_rows}OPEN WORK	${b}	${tip}	${dev}	${hits}	${note}
+    open_rows="${open_rows}OPEN WORK	${b}	${tip}	$(devs_of "$b")	${hits}	${note}
 "
-  done
+  done <<EOF
+$STATES
+EOF
 
   printf '## %s\n\n' "$p"
   if [ -z "$rows" ] && [ -z "$open_rows" ]; then

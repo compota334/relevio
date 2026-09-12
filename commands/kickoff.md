@@ -17,19 +17,17 @@ previous session.
    b. Regenerate and read the library index. It is a GENERATED file: never
       edit it by hand and never resolve a merge conflict on it by hand.
 
-          S="${CLAUDE_PLUGIN_ROOT}/scripts"
-          [ -x "$S/relevio-index.sh" ] || S="$(git rev-parse --show-toplevel)/.claude/scripts"
-          if [ -x "$S/relevio-index.sh" ]; then bash "$S/relevio-index.sh"; else
-            echo "relevio: relevio-index.sh is in neither \${CLAUDE_PLUGIN_ROOT}/scripts nor .claude/scripts. This relevio predates v0.22, or the script install is incomplete: bash <relevio>/install.sh --update" >&2
-          fi
+          S="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/.claude}/scripts"
+          bash "$S/relevio-index.sh"
 
-      If the script is missing the block prints why: STOP there and tell the
-      user, do not hand-edit INDEX.md.
-      If it FAILS on a malformed header, it names the file and the field:
-      report both. When it says the header predates v0.22, the fix is one
-      migration, `bash "$S/relevio-migrate.sh"`, which rewrites the headers in
-      this working tree: propose it and wait for the user's OK. Never patch a
-      handoff header silently, and never one that belongs to another dev.
+      That line finds the scripts in either install: the plugin sets
+      `CLAUDE_PLUGIN_ROOT`, a script install puts them in `.claude/scripts`.
+      Whatever it prints, report it and change nothing on your own: no such
+      file means this relevio predates v0.22 (`bash <relevio>/install.sh
+      --update`), and a failure names the file and field at fault. If that
+      header predates v0.22, propose `relevio-migrate.sh` (same `$S`) and wait
+      for the user's OK. Never patch a handoff header silently, least of all
+      another dev's.
    c. Show the user the **Active lanes** table exactly as generated. That is
       the team board: one row per branch with open work, who owns it, which
       areas it touches, how far ahead of main it is.
@@ -40,13 +38,13 @@ previous session.
           f=<the Handoff file cell>; c=$(git log --all --format='%H' -1 -- "docs/handoff/$f"); git show "$c:docs/handoff/$f"
 
    e. If NO row carries your branch (a brand new branch, or a detached HEAD),
-      read the last handoff of the main branch instead, and SAY so in those
-      words: "your branch is new, so this is where main stood at its last
-      session". Do not silently hand the user someone else's lane as if it
-      were theirs.
+      read the last handoff of the main branch instead and say plainly that
+      that is what you did, and why. Never hand the user another lane's
+      handoff as though it were their own.
    f. Ask the user which files or directories this session will touch, then
       trace them BEFORE any code:
 
+          S="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/.claude}/scripts"
           bash "$S/relevio-trace.sh" <path> [<path> ...]
 
       Rows marked `OPEN WORK` are unmerged branches sitting on that same

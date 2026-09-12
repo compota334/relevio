@@ -23,7 +23,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --main) [ $# -ge 2 ] || die "--main needs a ref"; MAIN_ARG="$2"; shift 2 ;;
     --stdout) TO_STDOUT=yes; shift ;;
-    -h|--help) sed -n '2,17p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) relevio_usage "${BASH_SOURCE[0]}"; exit 0 ;;
     *) die "unknown argument: $1 (usage: relevio-index.sh [--main <ref>] [--stdout])" ;;
   esac
 done
@@ -33,7 +33,7 @@ resolve_main "$MAIN_ARG"
 load_catalog
 
 ROWS="$(board_rows)"
-if [ -z "$ROWS" ]; then LANES=0; else LANES="$(printf '%s\n' "$ROWS" | grep -c '')"; fi
+LANES="$(printf '%s' "$ROWS" | grep -c '' || true)"
 
 render() {
   cat <<'HEAD'

@@ -18,7 +18,7 @@ TEMPLATES=(context-warn.sh session-start.sh handoff.md kickoff.md revisit.md IND
 # Since v0.22 docs/handoff/INDEX.md is generated rather than hand-edited, so
 # the commands need the generator next to them. These live in scripts/, not
 # templates/: both install channels ship the same copy.
-SCRIPTS=(relevio-handoffs-lib.sh relevio-index.sh relevio-trace.sh relevio-migrate.sh)
+SCRIPTS=(relevio-handoffs-lib.sh relevio-index.sh relevio-trace.sh relevio-areas.sh relevio-migrate.sh)
 STAMPED=(context-warn.sh session-start.sh)
 # Legacy markers: only ever used to REMOVE the pre-v0.18 block from CLAUDE.md.
 MARK_START="<!-- relevio:start -->"
@@ -199,10 +199,11 @@ install_file "$TPL/handoff.md" .claude/commands/handoff.md 644
 install_file "$TPL/kickoff.md" .claude/commands/kickoff.md 644
 install_file "$TPL/revisit.md" .claude/commands/revisit.md 644
 mkdir -p .claude/scripts
-install_file "$SCR/relevio-handoffs-lib.sh" .claude/scripts/relevio-handoffs-lib.sh 644
-install_file "$SCR/relevio-index.sh" .claude/scripts/relevio-index.sh 755
-install_file "$SCR/relevio-trace.sh" .claude/scripts/relevio-trace.sh 755
-install_file "$SCR/relevio-migrate.sh" .claude/scripts/relevio-migrate.sh 755
+for f in "${SCRIPTS[@]}"; do
+  # The library is sourced, never executed; the rest are entry points.
+  mode=755; [ "$f" = relevio-handoffs-lib.sh ] && mode=644
+  install_file "$SCR/$f" ".claude/scripts/$f" "$mode"
+done
 
 # --- 2. Register both hooks in .claude/settings.json (merge, don't clobber) --
 # PostToolUse/context-warn.sh keeps the agent aware of its context window;
@@ -322,24 +323,30 @@ mkdir -p docs/handoff
 touch docs/handoff/.gitkeep
 if [ -f docs/handoff/INDEX.md ]; then
   info "unchanged: docs/handoff/INDEX.md (never overwritten: it holds your history)"
-  # Since v0.22 the index is generated from the handoff headers instead of
-  # being appended to by hand. An index still carrying the old "append-only"
-  # prose belongs to a pre-v0.22 install, whose handoff headers need the
-  # one-time migration before the generator will accept them. The installer
-  # does not run either script: rewriting a project's handoff history is the
-  # user's decision, not a side effect of an upgrade.
-  if grep -qF 'append-only' docs/handoff/INDEX.md; then
-    info "NOTE: docs/handoff/INDEX.md is hand-written, from relevio v0.21 or
-        older. Since v0.22 it is GENERATED from the handoff headers. To
-        convert this project, once, from its root:
+else
+  cp "$TPL/INDEX.md" docs/handoff/INDEX.md
+  info "installed: docs/handoff/INDEX.md"
+fi
+
+# Since v0.22 the index is generated from the handoff headers instead of being
+# appended to by hand. Ask the generator itself whether this project's
+# handoffs can be indexed, rather than guessing from the wording of the old
+# template: the thing that actually needs converting is the handoff HEADERS,
+# and this is the very check whose failure the note tells the user to fix, so
+# the two cannot disagree. It reports the generator's own first line, because
+# a stale header is the usual cause but not the only one. A diagnosis must
+# never abort an install, and the installer never runs the conversion itself:
+# rewriting a project's handoff history is the user's decision, not a side
+# effect of an upgrade.
+if ! why="$(bash .claude/scripts/relevio-index.sh --stdout 2>&1 >/dev/null)"; then
+  info "NOTE: this project's handoffs cannot be indexed yet. The generator says:
+          $(printf '%s' "$why" | head -1)
+        A header written by relevio v0.21 or older is the usual cause, and it
+        is converted once, from this project's root:
           bash .claude/scripts/relevio-migrate.sh   # updates the handoff headers
           bash .claude/scripts/relevio-index.sh     # rebuilds INDEX.md
         Review the diff and commit it. Handoffs that live on other branches
         are migrated by running the same pair on each of those branches."
-  fi
-else
-  cp "$TPL/INDEX.md" docs/handoff/INDEX.md
-  info "installed: docs/handoff/INDEX.md"
 fi
 
 # --- 5. Private mode (optional): keep the methodology out of the repo -------

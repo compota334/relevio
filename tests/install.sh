@@ -54,17 +54,17 @@ fixture() {
 # core.hooksPath is pointed at an empty directory so the developer's own global
 # git hooks (a commit-author guard, for instance) cannot block the fixture.
 team_fixture() {
-  local d r
-  d="$(mktemp -d)"; r="$d/repo"
-  git init -q --bare "$d/origin.git"
-  git init -q "$r"
-  git -C "$r" symbolic-ref HEAD refs/heads/main
-  mkdir -p "$d/nohooks"
-  git -C "$r" config core.hooksPath "$d/nohooks"
-  git -C "$r" config user.email test@relevio.local
-  git -C "$r" config user.name relevio-test
-  git -C "$r" config commit.gpgsign false
-  git -C "$r" remote add origin "$d/origin.git"
+  local r o
+  # fixture() already produces a repo with exactly the config wanted here
+  # (main as the initial branch, neutered global hooks, a test identity), so a
+  # new guard added there protects both kinds of fixture.
+  r="$(fixture '')"
+  # The bare origin gets its own temp dir: putting it beside the worktree
+  # would let `git add -A` swallow it, and putting it in the shared parent
+  # would leak state from one test run into the next.
+  o="$(mktemp -d)/origin.git"
+  git init -q --bare "$o"
+  git -C "$r" remote add origin "$o"
   mkdir -p "$r/src" "$r/lib" "$r/docs/handoff"
 
   echo a > "$r/src/a.txt"
@@ -93,6 +93,12 @@ team_fixture() {
   git -C "$r" fetch -q origin
   echo "$r"
 }
+
+# One vocabulary for the two questions the new cases ask, so a reader can scan
+# for a single shape instead of four spellings of "does this exist".
+exists()     { [ -e "$1" ] && echo yes || echo no; }
+executable() { [ -x "$1" ] && echo yes || echo no; }
+contains()   { printf '%s' "$1" | grep -q -- "$2" && echo yes || echo no; }
 
 # write_handoff <repo> <file> <session> <dev> <branch> <commits> <areas> <summary>
 write_handoff() {
@@ -142,7 +148,7 @@ check "clean install: CLAUDE.md untouched" "$(diff_is_empty "$d" CLAUDE.md)" "em
 check "clean install: no relevio.md is created" \
   "$(yesno "$([ -f "$d/relevio.md" ]; echo $?)")" "no"
 check "clean install: the index script is installed and executable" \
-  "$(yesno "$([ -x "$d/.claude/scripts/relevio-index.sh" ]; echo $?)")" "yes"
+  "$(executable "$d/.claude/scripts/relevio-index.sh")" "yes"
 check "clean install: both hooks installed" \
   "$(yesno "$([ -f "$d/.claude/hooks/session-start.sh" ] && [ -f "$d/.claude/hooks/context-warn.sh" ]; echo $?)")" "yes"
 check "clean install: no markers written into CLAUDE.md" \
@@ -664,7 +670,7 @@ check "uninstall: hooks gone" "$(yesno "$([ -d "$d/.claude/hooks" ]; echo $?)")"
 check "uninstall: the user's CLAUDE.md survived" \
   "$(grep -c 'A rule of my own' "$d/CLAUDE.md")" "1"
 check "uninstall: the scripts are gone too" \
-  "$(yesno "$([ -d "$d/.claude/scripts" ]; echo $?)")" "no"
+  "$(exists "$d/.claude/scripts")" "no"
 check "uninstall: docs/handoff kept" \
   "$(yesno "$([ -d "$d/docs/handoff" ]; echo $?)")" "yes"
 rm -rf "$d"
@@ -712,7 +718,7 @@ check "index: the catalog holds every session, in filename order" \
 # The point of reading handoffs across refs: main is checked out, so the open
 # branch's handoff is not in this working tree at all, yet it is catalogued.
 check "index: a handoff living only on another branch is still catalogued" \
-  "$(yesno "$([ -f "$d/docs/handoff/2026-09-03_feat-open.md" ]; echo $?)")" "no"
+  "$(exists "$d/docs/handoff/2026-09-03_feat-open.md")" "no"
 check "index: ... and its row carries that branch" \
   "$(catalog_of "$idx" | grep -c '2026-09-03_feat-open.md | JUAN | `feat-open`')" "1"
 
@@ -734,7 +740,6 @@ check "index: a lane with many areas is summarised, not dumped" \
 check "index: ... while the catalog row keeps every one of them" \
   "$(catalog_of "$idx" | grep -c 'a1, a2, a3, a4, a5, a6, a7, a8, a9')" "1"
 rm "$d/docs/handoff/2026-09-04_wide.md"
-( cd "$d" && bash "$IDX" >/dev/null 2>&1 )
 
 # Idempotency: the generated file carries no timestamp, so regenerating it
 # without new sessions must produce a byte-identical file. A file that always
@@ -833,9 +838,20 @@ git -C "$d4" add -A >/dev/null 2>&1; git -C "$d4" commit -qm init >/dev/null 2>&
 check "index: a project with no handoffs yet still builds an index" "$?" "0"
 check "index: ... which says so instead of printing an empty table" \
   "$(grep -c 'No handoffs yet' "$d4/docs/handoff/INDEX.md")" "1"
-check "index: the INDEX template carries the same prose the script writes" \
-  "$(diff <(sed -n '1,/^## Active lanes$/p' "$d4/docs/handoff/INDEX.md") \
-          <(sed -n '1,/^## Active lanes$/p' "$REPO/templates/INDEX.md") >/dev/null && echo same)" "same"
+rm -rf "$d4"
+
+# templates/INDEX.md is the placeholder a fresh install seeds, and it is a
+# snapshot of this generator's output. Pin the WHOLE file, not just its prose:
+# the part most likely to drift is the part below the prose, and a placeholder
+# that contradicts what the first /handoff will write is worse than none.
+d4="$(fixture '')"
+o4="$(mktemp -d)/origin.git"; git init -q --bare "$o4"
+git -C "$d4" remote add origin "$o4"
+echo x > "$d4/README.md"
+git -C "$d4" add -A >/dev/null 2>&1; git -C "$d4" commit -qm init >/dev/null 2>&1
+git -C "$d4" push -q origin main >/dev/null 2>&1; git -C "$d4" fetch -q origin >/dev/null 2>&1
+check "index: templates/INDEX.md is exactly what a fresh project generates" \
+  "$( (cd "$d4" && bash "$IDX" --stdout) | diff - "$REPO/templates/INDEX.md" >/dev/null && echo same)" "same"
 check "index: the template no longer calls the index append-only" \
   "$(grep -c 'append-only' "$REPO/templates/INDEX.md")" "0"
 rm -rf "$d4"
@@ -852,6 +868,74 @@ check "index: a branch deleted before merging drops off the board" \
 check "index: ... and its unmerged handoff leaves the catalog with it" \
   "$(catalog_of "$idx" | grep -c '2026-09-03_feat-open.md')" "0"
 rm -rf "$d"
+
+# --- Case 12b: the format has one definition, not four ----------------------
+# The header is described in three languages: the awk parser, the /handoff
+# prose (twice, once per install channel) and these fixtures. Nothing stops
+# them drifting, and the drift is silent until somebody's handoff is rejected
+# after it was written. These pins turn that into a test failure.
+FIELDS="$(sed -n 's/^RELEVIO_FIELDS="\(.*\)"$/\1/p' "$REPO/scripts/relevio-handoffs-lib.sh")"
+check "format: the parser publishes its field list" \
+  "$(contains "$FIELDS" 'Areas')" "yes"
+for chan in commands templates; do
+  missing=""
+  for f in $FIELDS; do
+    grep -q "^    $f: " "$REPO/$chan/handoff.md" || missing="$missing $f"
+  done
+  check "format: $chan/handoff.md documents every field the parser requires" \
+    "$missing" ""
+done
+# The one line that finds relevio's scripts is the same in both commands and
+# both templates: the plugin sets CLAUDE_PLUGIN_ROOT, a script install does
+# not. If the two channels ever disagree here, one of them silently stops
+# finding the generator.
+RESOLVER="$(grep -h 'CLAUDE_PLUGIN_ROOT:-' "$REPO/commands/handoff.md" "$REPO/commands/kickoff.md" \
+  "$REPO/templates/handoff.md" "$REPO/templates/kickoff.md" | sed 's/^ *//' | sort -u)"
+check "format: the script resolver is one line, identical in both channels" \
+  "$(printf '%s' "$RESOLVER" | grep -c '')" "1"
+check "format: nobody re-types the Areas pipeline by hand any more" \
+  "$(grep -c 'name-only' "$REPO/commands/handoff.md" "$REPO/templates/handoff.md" | awk -F: '{ s += $2 } END { print s }')" "0"
+
+# relevio-areas.sh is what that prose now calls, and the reason it exists is
+# the inclusive-range trap: `a..b` in the header includes a, git's does not.
+d5="$(fixture '')"
+mkdir -p "$d5/one" "$d5/two"
+echo x > "$d5/one/f"; git -C "$d5" add -A >/dev/null 2>&1; git -C "$d5" commit -qm c1 >/dev/null 2>&1
+h1="$(git -C "$d5" rev-parse --short HEAD)"
+echo y > "$d5/two/f"; git -C "$d5" add -A >/dev/null 2>&1; git -C "$d5" commit -qm c2 >/dev/null 2>&1
+h2="$(git -C "$d5" rev-parse --short HEAD)"
+check "areas: the range includes its own first commit" \
+  "$( cd "$d5" && bash "$REPO/scripts/relevio-areas.sh" "$h1..$h2" )" "one/f, two/f"
+check "areas: none in, none out" \
+  "$( cd "$d5" && bash "$REPO/scripts/relevio-areas.sh" none )" "none"
+out="$( (cd "$d5" && bash "$REPO/scripts/relevio-areas.sh" deadbee..f00dcaf) 2>&1 )"; rc=$?
+check "areas: an unresolvable range fails loud instead of guessing" "$rc" "2"
+check "areas: ... and says what to do about it" \
+  "$(contains "$out" 'by hand')" "yes"
+rm -rf "$d5"
+
+# --- Case 12c: the installer diagnoses, it does not guess --------------------
+# Whether a project needs the migration is answered by running the generator,
+# not by grepping the old template's wording: the thing that needs converting
+# is the handoff HEADERS, and this is the same check whose failure the note
+# tells the user to fix.
+d6="$(fixture '')"
+mkdir -p "$d6/docs/handoff"
+printf 'Session: s\nDate: 2026-08-01\nDev: N\nBranch: main (via worktree)\nCommits: abc1234..def5678\nResume: r\nTopics: t\nSummary: s\n\nB.\n' \
+  > "$d6/docs/handoff/2026-08-01_old.md"
+echo x > "$d6/f"; git -C "$d6" add -A >/dev/null 2>&1; git -C "$d6" commit -qm init >/dev/null 2>&1
+out="$( (cd "$d6" && RELEVIO_MAIN=main bash "$INSTALLER") 2>&1 )"
+check "install: a pre-v0.22 handoff gets the migration note" \
+  "$(contains "$out" 'cannot be indexed yet')" "yes"
+check "install: ... quoting the generator's own reason" \
+  "$(contains "$out" 'predates relevio v0.22')" "yes"
+# Same project, healthy header: silence.
+printf 'Session: s\nDate: 2026-08-01\nDev: N\nBranch: main\nCommits: none\nAreas: none\nResume: r\nTopics: t\nSummary: s\n\nB.\n' \
+  > "$d6/docs/handoff/2026-08-01_old.md"
+out="$( (cd "$d6" && RELEVIO_MAIN=main bash "$INSTALLER" --update) 2>&1 )"
+check "install: a healthy project gets no migration note" \
+  "$(contains "$out" 'cannot be indexed yet')" "no"
+rm -rf "$d6"
 
 # --- Case 13: the one-time migration of pre-v0.22 headers -------------------
 # Other projects (and other people) are running relevio v0.21 and older, where
@@ -923,7 +1007,6 @@ check "migrate: ... and reports the converted ones as already current" \
   "$(printf '%s' "$out2" | grep -c 'already a v0.22 header')" "3"
 
 # Once the last file is fixed by hand, the index builds.
-printf 'Areas: none\n' > /dev/null
 sed 's/^Commits: deadbee..f00dcaf$/Commits: none\nAreas: none/' "$d/docs/handoff/2026-08-03_three.md" > "$d/t" && mv "$d/t" "$d/docs/handoff/2026-08-03_three.md"
 ( cd "$d" && bash "$MIG" >/dev/null 2>&1 )
 check "migrate: exits 0 once every handoff is current" "$?" "0"

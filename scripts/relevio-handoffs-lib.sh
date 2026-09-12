@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # relevio: shared library for the handoff scripts (relevio-index.sh,
-# relevio-trace.sh, relevio-migrate.sh). Source it, do not run it.
+# relevio-trace.sh, relevio-areas.sh, relevio-migrate.sh). Source it, do not
+# run it.
 #
 # Everything here is POSIX awk + bash 3.2 + git. No jq, no GNU-only flags,
 # no `tac`, no `sort -V`, no `sed -i`, no `readlink -f`: the scripts run on
@@ -11,15 +12,15 @@
 # silently, and no output file is touched until every header has parsed.
 
 [ "${BASH_SOURCE[0]}" != "${0}" ] || {
-  echo "relevio-handoffs-lib.sh is a library: run relevio-index.sh, relevio-trace.sh or relevio-migrate.sh instead." >&2
+  echo "relevio-handoffs-lib.sh is a library: run relevio-index.sh, relevio-trace.sh, relevio-areas.sh or relevio-migrate.sh instead." >&2
   exit 2
 }
 
 # The nine header fields, in canonical order. Order is NOT enforced when
 # parsing (an agent may reorder without breaking the catalog); this list is
-# what the parser requires to be present, and what relevio-migrate.sh writes.
+# what the parser requires to be present, what relevio-migrate.sh writes, and
+# what the /handoff command documents.
 RELEVIO_FIELDS="Session Date Dev Branch Commits Areas Resume Topics Summary"
-REPO_UNBORN=no
 
 # Byte ordering everywhere. `sort` collates differently per locale, so without
 # this two devs regenerating the same index on the same commits would produce
@@ -33,6 +34,16 @@ relevio_top() {
   git rev-parse --show-toplevel 2>/dev/null || die "not inside a git repository"
 }
 
+# Print a script's banner comment as its usage text. Derived from the file, so
+# editing a banner can never leave the help truncated or over-long.
+relevio_usage() {
+  sed -n '2,/^[^#]/p' "$1" | sed -n 's/^# \{0,1\}//p'
+}
+
+# Join stdin lines into the catalog's list form, "a, b, c". One definition,
+# because the parser splits Areas on the same separator.
+join_csv() { paste -sd, - | sed 's/,/, /g'; }
+
 # --- the integration branch -------------------------------------------------
 # Everything the board reports (merged / open / ahead) is measured against
 # this ref. There is no fallback to a guess: if it cannot be found, the run
@@ -43,13 +54,11 @@ resolve_main() {
   # is no integration branch to find and no lane that could be open. This is
   # a real state (a brand new repo closing its first session), not a missing
   # ref: the catalog still gets built, the board is empty and says why.
-  if ! git rev-parse --verify -q HEAD >/dev/null 2>&1 && [ -z "$MAIN" ]; then
-    if [ -z "$(git for-each-ref --count=1 refs/heads refs/remotes)" ]; then
-      MAIN=""; MAIN_SHORT=""; REPO_UNBORN=yes
-      return 0
-    fi
-  fi
   REPO_UNBORN=no
+  if [ -z "$MAIN" ] && [ -z "$(git for-each-ref --count=1 refs/heads refs/remotes)" ]; then
+    MAIN=""; REPO_UNBORN=yes
+    return 0
+  fi
   if [ -z "$MAIN" ]; then
     if git show-ref --verify -q refs/remotes/origin/main; then
       MAIN=origin/main
@@ -65,41 +74,35 @@ resolve_main() {
   fi
   git rev-parse --verify -q "$MAIN^{commit}" >/dev/null \
     || die "integration branch '$MAIN' does not resolve to a commit"
-  MAIN_SHORT="${MAIN#origin/}"
 }
 
 # --- finding the handoff files ---------------------------------------------
-# The union of two sources, because a handoff has two lives:
-#   1. git history across ALL refs, so a handoff committed on someone else's
-#      unmerged branch is catalogued even though it is not in this worktree;
-#   2. the working tree, because /handoff regenerates the index BEFORE it
-#      commits, so the file it just wrote exists nowhere else yet.
-list_handoffs() {
-  {
-    git log --all --diff-filter=A --name-only --format='' -- 'docs/handoff/*.md' 2>/dev/null
-    ( cd "$TOP" && ls docs/handoff/*.md 2>/dev/null )
-  } | grep -E '^docs/handoff/[0-9]{4}-[0-9]{2}-[0-9]{2}_[^/]+\.md$' | sort -u || true
-  # `|| true`: a project with no handoffs yet is not an error, but grep exits
-  # 1 on no match and the callers run under `set -o pipefail`.
-}
-
-# Print the content of a handoff path. The working tree wins (it is the most
-# recent truth); otherwise the newest commit that still carries the file is
-# used. Addressing the blob by commit hash rather than by ref sidesteps the
-# refs/heads/x vs refs/remotes/origin/x duplication entirely: both reach the
-# same commit, and the hash is the same from either side.
-read_handoff() {
-  local p="$1" c
-  if [ -f "$TOP/$p" ]; then cat "$TOP/$p"; return 0; fi
-  # Newest first, and take the first commit that still HAS the blob: the
-  # newest commit touching the path may be the one that deleted or renamed it.
-  for c in $(git log --all --format=%H -- "$p" 2>/dev/null); do
-    if git cat-file -e "$c:$p" 2>/dev/null; then
-      git show "$c:$p"
-      return 0
-    fi
-  done
-  die "$p: listed in history but no commit still carries it"
+# One walk of every ref, resolving BOTH questions at once: which handoff paths
+# exist anywhere in history, and which commit to read each of them from.
+# --diff-filter=d excludes deletions, so the newest commit listed for a path is
+# guaranteed to still carry the blob. Doing this per file instead would mean
+# one full ref walk per handoff, which is the common case for a team whose
+# handoffs live on each other's branches.
+# Sets HANDOFF_REFS to "path<TAB>commit" lines, sorted by path.
+scan_handoffs() {
+  local worktree
+  worktree="$( cd "$TOP" && ls docs/handoff/*.md 2>/dev/null || true )"
+  HANDOFF_REFS="$(
+    {
+      git log --all --format='%H' --name-only --diff-filter=d -- 'docs/handoff/*.md' 2>/dev/null \
+        | awk '
+            # Commit lines have no slash; path lines do. Newest first, so the
+            # first sighting of a path is the commit to read it from.
+            NF && $0 !~ /\// { c = $0; next }
+            NF && !($0 in seen) { seen[$0] = 1; print $0 "\t" c }'
+      # A handoff being written right now exists only in the working tree:
+      # /handoff regenerates the index before it commits.
+      printf '%s\n' "$worktree" | awk 'NF { print $0 "\t" }'
+    } | grep -E '^docs/handoff/[0-9]{4}-[0-9]{2}-[0-9]{2}_[^/]+\.md	' \
+      | sort -u -t'	' -k1,1 || true
+    # `|| true`: a project with no handoffs yet is not an error, but grep exits
+    # 1 on no match and the callers run under `set -o pipefail`.
+  )"
 }
 
 # --- the header parser ------------------------------------------------------
@@ -107,10 +110,10 @@ read_handoff() {
 #   path  date  session  dev  branch  areas  commits  topics  summary  resume
 # Exit 2 with "ERROR: <path>: <field>: <reason>" on stderr otherwise.
 parse_header() {
-  local label="$1" rec date base branch
-  rec="$(awk -v F="$label" '
+  local label="$1" rec date branch
+  rec="$(awk -v F="$label" -v fields="$RELEVIO_FIELDS" '
     function fail(m) { printf("ERROR: %s: %s\n", F, m) > "/dev/stderr"; failed = 1; exit 2 }
-    BEGIN { n = split("'"$RELEVIO_FIELDS"'", want, " ") }
+    BEGIN { n = split(fields, want, " "); for (i = 1; i <= n; i++) allowed[want[i]] = 1 }
     /^[ \t]*$/ { done = 1; exit }
     {
       if (NR > 20) fail("header block not terminated by a blank line within 20 lines")
@@ -127,6 +130,8 @@ parse_header() {
       seen[k] = 1; val[k] = v
     }
     END {
+      # fail() exits; inside END that ends the program, and inside a rule it
+      # jumps here, which is what this one guard catches.
       if (failed) exit 2
       if (!done) fail("header block not terminated by a blank line")
       for (i = 1; i <= n; i++)
@@ -135,13 +140,8 @@ parse_header() {
             fail("missing field Areas: this header predates relevio v0.22. Run relevio-migrate.sh to convert it (it derives Areas from the commit range).")
           fail("missing field " want[i])
         }
-      if (failed) exit 2
-      for (k in seen) {
-        ok = 0
-        for (i = 1; i <= n; i++) if (want[i] == k) ok = 1
-        if (!ok) fail(k ": unknown header field (allowed: '"$RELEVIO_FIELDS"')")
-      }
-      if (failed) exit 2
+      for (k in seen)
+        if (!(k in allowed)) fail(k ": unknown header field (allowed: " fields ")")
       if (val["Date"] !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/)
         fail("Date: \"" val["Date"] "\" is not YYYY-MM-DD")
       if (val["Branch"] ~ /^(origin|refs)\//)
@@ -165,7 +165,6 @@ parse_header() {
           if (it ~ /[^A-Za-z0-9._@+\/-]/) fail("Areas: \"" it "\" has characters outside [A-Za-z0-9._@+/-]")
         }
       }
-      if (failed) exit 2
       printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", F, val["Date"], val["Session"],
              val["Dev"], val["Branch"], val["Areas"], val["Commits"], val["Topics"],
              val["Summary"], val["Resume"])
@@ -173,10 +172,10 @@ parse_header() {
   [ -n "$rec" ] || return 2
 
   # Two checks awk cannot make on its own.
-  date="$(printf '%s' "$rec" | cut -f2)"
-  branch="$(printf '%s' "$rec" | cut -f5)"
-  base="${label##*/}"
-  case "$base" in
+  IFS='	' read -r _ date _ _ branch _ <<EOF
+$rec
+EOF
+  case "${label##*/}" in
     "$date"_*) : ;;
     *) echo "ERROR: $label: Date: \"$date\" disagrees with the filename (the catalog is ordered by filename, so they must match)" >&2; return 2 ;;
   esac
@@ -190,28 +189,28 @@ parse_header() {
 # (which starts with the date, so it is chronological). Any parse failure
 # aborts the whole load: a partial catalog would silently drop a session.
 load_catalog() {
-  local paths p rec content
-  paths="$(list_handoffs)"
+  local p c content rec
+  scan_handoffs
   CATALOG=""
   CATALOG_COUNT=0
-  [ -n "$paths" ] || return 0
-  while IFS= read -r p; do
+  [ -n "$HANDOFF_REFS" ] || return 0
+  while IFS='	' read -r p c; do
     [ -n "$p" ] || continue
     # Read first, parse second: chaining them in a pipe would run the parser
     # on empty input after a read failure and print a second, bogus error.
-    content="$(read_handoff "$p")" || exit 2
+    if [ -n "$c" ] && [ ! -f "$TOP/$p" ]; then
+      content="$(git show "$c:$p")" || exit 2
+    else
+      content="$(cat "$TOP/$p")" || exit 2
+    fi
     rec="$(printf '%s\n' "$content" | parse_header "$p")" || exit 2
     CATALOG="${CATALOG}${rec}
 "
     CATALOG_COUNT=$((CATALOG_COUNT + 1))
   done <<EOF
-$paths
+$HANDOFF_REFS
 EOF
 }
-
-# Field n of a catalog record: 1 path, 2 date, 3 session, 4 dev, 5 branch,
-# 6 areas, 7 commits, 8 topics, 9 summary, 10 resume.
-fld() { printf '%s' "$1" | cut -f"$2"; }
 
 # --- branches ---------------------------------------------------------------
 # The ref to measure a branch by. The remote-tracking ref wins when it exists,
@@ -223,8 +222,22 @@ branch_tip() {
   if git show-ref --verify -q "refs/heads/$1"; then echo "$1"; return 0; fi
   echo ""
 }
-branch_is_local_only() {
-  ! git show-ref --verify -q "refs/remotes/origin/$1" && git show-ref --verify -q "refs/heads/$1"
+
+# gone | merged | open. The single definition of what an active lane is: the
+# board keeps the `open` ones, the trace labels every row with it. Two copies
+# of this decision would let the board and the trace disagree about the same
+# branch, which is the one thing a board must never do.
+branch_state() {
+  local tip
+  [ "$REPO_UNBORN" = yes ] && { echo gone; return 0; }
+  tip="$(branch_tip "$1")"
+  [ -n "$tip" ] || { echo gone; return 0; }
+  if git merge-base --is-ancestor "$tip" "$MAIN" 2>/dev/null; then echo merged; else echo open; fi
+}
+
+# The devs who closed a session on a branch, as "ANA, NICO".
+devs_of() {
+  printf '%s' "$CATALOG" | awk -F'\t' -v b="$1" '$5 == b { print $4 }' | sort -u | join_csv
 }
 
 # `Commits: a..b` names an INCLUSIVE range: the session's first commit is `a`.
@@ -244,42 +257,52 @@ range_of() {
   fi
 }
 
+# The paths a commit range touched, as an Areas value. The single definition of
+# that derivation: the /handoff command calls it through relevio-areas.sh
+# rather than re-typing the pipeline, so nobody can drop the `^` and silently
+# lose the session's own first commit. Returns 1 when the range no longer
+# resolves, so the caller can report it instead of inventing a value.
+areas_for_range() {
+  local range a
+  [ "$1" = none ] && { echo none; return 0; }
+  range="$(range_of "$1")"
+  [ -n "$range" ] || return 1
+  a="$(git log --format= --name-only "$range" 2>/dev/null | cut -d/ -f1-2 | sort -u | grep -v '^$' || true)"
+  # A session that touched dozens of files makes an unreadable row; those
+  # collapse to their top-level directory.
+  if [ "$(printf '%s\n' "$a" | grep -c '')" -gt 12 ]; then
+    a="$(printf '%s\n' "$a" | cut -d/ -f1 | sort -u)"
+  fi
+  a="$(printf '%s' "$a" | join_csv)"
+  printf '%s\n' "${a:-none}"
+}
+
 # The distinct branches in the catalog, minus the integration branch itself.
 catalog_branches() {
-  printf '%s' "$CATALOG" | awk -F'\t' -v m="$MAIN_SHORT" '$5 != "" && $5 != m { print $5 }' | sort -u
+  printf '%s' "$CATALOG" | awk -F'\t' -v m="${MAIN#origin/}" '$5 != "" && $5 != m { print $5 }' | sort -u
 }
 
 # One tab-separated board row per ACTIVE lane:
 #   branch  devs  last_date  last_file  areas  ahead  note
-# A lane is active when its branch still exists and is not an ancestor of the
-# integration branch. Merged and deleted branches drop off by design: the
-# board answers "what is open right now", the catalog keeps the history.
+# Merged and deleted branches drop off by design: the board answers "what is
+# open right now", the catalog keeps the history.
 board_rows() {
-  local b tip ahead devs areas last_date last_file note rows=""
-  [ "$REPO_UNBORN" = yes ] && return 0
+  local b tip ahead areas last note rows=""
   for b in $(catalog_branches); do
+    [ "$(branch_state "$b")" = open ] || continue
     tip="$(branch_tip "$b")"
-    [ -n "$tip" ] || continue
-    git merge-base --is-ancestor "$tip" "$MAIN" 2>/dev/null && continue
     ahead="$(git rev-list --count "$MAIN..$tip" 2>/dev/null || echo '?')"
-    devs="$(printf '%s' "$CATALOG" | awk -F'\t' -v b="$b" '$5 == b { print $4 }' | sort -u | paste -sd, - | sed 's/,/, /g')"
+    # One pass for both fields of the branch's last record.
+    last="$(printf '%s' "$CATALOG" | awk -F'\t' -v b="$b" '$5 == b { d = $2; p = $1 } END { sub(/.*\//, "", p); print d "\t" p }')"
+    # The board is meant to be scanned, so a lane that touched thirty paths
+    # shows the first few and says how many it left out; the catalog row below
+    # still carries the full list.
     areas="$(printf '%s' "$CATALOG" | awk -F'\t' -v b="$b" '$5 == b && $6 != "none" { print $6 }' \
-      | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' | sort -u | paste -sd, - | sed 's/,/, /g')"
-    [ -n "$areas" ] || areas="none"
-    # The board is meant to be scanned. A session that touched thirty paths
-    # would make its row unreadable, so the row shows the first few and says
-    # how many it left out; the catalog below still carries the full list.
-    areas="$(printf '%s' "$areas" | awk -F', ' '{
-      if (NF <= 6) { print; next }
-      out = $1
-      for (i = 2; i <= 6; i++) out = out ", " $i
-      printf("%s, +%d more\n", out, NF - 6)
-    }')"
-    last_date="$(printf '%s' "$CATALOG" | awk -F'\t' -v b="$b" '$5 == b { d = $2 } END { print d }')"
-    last_file="$(printf '%s' "$CATALOG" | awk -F'\t' -v b="$b" '$5 == b { p = $1 } END { sub(/.*\//, "", p); print p }')"
-    note=""
-    branch_is_local_only "$b" && note="local only"
-    rows="${rows}${b}	${devs}	${last_date}	${last_file}	${areas}	${ahead}	${note}
+      | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' | sort -u \
+      | awk 'NR <= 6 { out = (NR == 1 ? $0 : out ", " $0) }
+             END { if (NR == 0) print "none"; else print (NR > 6 ? out ", +" NR - 6 " more" : out) }')"
+    case "$tip" in origin/*) note="" ;; *) note="local only" ;; esac
+    rows="${rows}${b}	$(devs_of "$b")	${last}	${areas}	${ahead}	${note}
 "
   done
   # Most recent lane first: the board is read top-down.

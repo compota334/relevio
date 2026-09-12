@@ -15,11 +15,9 @@ belongs in the metadata header below. Only if that exact filename already
 exists (same date, same title), append the next letter in alphabetical order
 (`_B`, `_C`, ...) to keep them ordered.
 
-Start the file with this metadata header, every field filled, one
-`Key: value` line per field and nothing else in it. A script parses this
-header to build the library index, so the values must be bare: no
-parentheses, no commentary, no wrapped lines. Anything you want to explain
-goes in the body, not in a field.
+Start the file with this metadata header. A script parses it to build the
+library index: one `Key: value` line per field, nothing else in the block,
+and anything you want to explain goes in the body rather than in a field.
 
     Session: DD-MM-YY <short title>
     Date: YYYY-MM-DD
@@ -32,14 +30,15 @@ goes in the body, not in a field.
     Summary: <one line, and no "|" character in it>
 
 `Areas` is what lets a future session on another branch discover that you
-were here. Derive it from the commit range, do not guess it:
+were here. Derive it from git, do not guess it, and do not hand-roll the
+pipeline: the range in the header is inclusive of `<first>` while git's
+`a..b` excludes `a`, so this script exists to get that right for you.
 
-    git log --format= --name-only <first>^..<last> | cut -d/ -f1-2 | sort -u
+    S="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/.claude}/scripts"
+    bash "$S/relevio-areas.sh" <first>..<last>
 
-Collapse those to their top-level directory if the list runs past a dozen
-items, and keep every item a real path in the repo. If `Commits` is `none`,
-`Areas` is `none`. Note the `^`: the range in the header is inclusive of
-`<first>`, while git's `a..b` excludes `a`.
+Paste what it prints after `Areas: `. If it reports that the range no longer resolves,
+say so to the user and set the field by hand.
 
 To find <session-id>: this session's transcript is the most recently modified
 `.jsonl` file in `~/.claude/projects/<slug>/`, where `<slug>` is this
@@ -79,17 +78,18 @@ After writing the handoff, REGENERATE the library index. Never edit
 header of every handoff on every branch, and a hand-added row would be
 discarded by the next regeneration.
 
-    S="${CLAUDE_PLUGIN_ROOT}/scripts"
-    [ -x "$S/relevio-index.sh" ] || S="$(git rev-parse --show-toplevel)/.claude/scripts"
-    if [ -x "$S/relevio-index.sh" ]; then bash "$S/relevio-index.sh"; else
-      echo "relevio: relevio-index.sh is in neither \${CLAUDE_PLUGIN_ROOT}/scripts nor .claude/scripts. This relevio predates v0.22, or the script install is incomplete: bash <relevio>/install.sh --update" >&2
-    fi
+    S="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/.claude}/scripts"
+    bash "$S/relevio-index.sh"
 
-The script FAILS LOUD naming the file and the field when a header is
-malformed. If it fails on the handoff you just wrote, fix that header and
-rerun. If it fails on somebody else's handoff, tell the user and leave the
-file alone; if the message says the header predates v0.22, the fix is
-`bash "$S/relevio-migrate.sh"`, which is the user's call, not yours.
+That one line finds the scripts in either install: the plugin sets
+`CLAUDE_PLUGIN_ROOT`, a script install puts them in `.claude/scripts`. If it
+reports no such file, this relevio predates v0.22: stop and tell the user to
+run `bash <relevio>/install.sh --update`. The script FAILS LOUD naming the
+file and the field when a header is malformed. If it fails on the handoff you
+just wrote, fix that header and rerun. If it fails on somebody else's handoff,
+tell the user and leave the file alone; if the message says the header
+predates v0.22, the fix is `relevio-migrate.sh` (same `$S`), which is the
+user's call, not yours.
 
 Finally, close with LITERAL instructions the user can copy (assume an
 inexperienced user):

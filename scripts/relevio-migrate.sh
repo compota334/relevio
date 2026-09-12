@@ -35,7 +35,7 @@ DRY=no
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=yes; shift ;;
-    -h|--help) sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) relevio_usage "${BASH_SOURCE[0]}"; exit 0 ;;
     *) die "unknown argument: $1 (usage: relevio-migrate.sh [--dry-run])" ;;
   esac
 done
@@ -44,9 +44,20 @@ TOP="$(relevio_top)"
 cd "$TOP"
 [ -d docs/handoff ] || die "docs/handoff/ does not exist: nothing to migrate"
 
-# Header value of a field, empty if absent. Only the block above the first
-# blank line is searched, so a body line starting with "Branch:" cannot win.
-hdr() { awk -v k="$1" '/^[ \t]*$/ { exit } index($0, k ": ") == 1 { sub(/^[^:]*: /, ""); sub(/[ \t]+$/, ""); print; exit }' "$2"; }
+# The three fields the migration reads, in one pass. Only the block above the
+# first blank line is searched, so a body line starting with "Branch:" cannot
+# win. This is the tolerant reader; parse_header in the library is the strict
+# one, and the two agree on where the header block ends.
+read_legacy_header() {
+  awk '
+    /^[ \t]*$/ { exit }
+    index($0, "Branch: ") == 1 || index($0, "Commits: ") == 1 || index($0, "Areas: ") == 1 {
+      k = $0; sub(/:.*/, "", k)
+      v = $0; sub(/^[^:]*: /, "", v); sub(/[ \t]+$/, "", v)
+      if (!(k in seen)) { seen[k] = 1; val[k] = v }
+    }
+    END { printf("%s\t%s\t%s\n", val["Branch"], val["Commits"], val["Areas"]) }' "$1"
+}
 
 PROBLEMS=0
 CONVERTED=0
@@ -54,8 +65,7 @@ SKIPPED=0
 
 for f in docs/handoff/*.md; do
   [ -f "$f" ] || continue
-  case "${f##*/}" in INDEX.md) continue ;; esac
-  case "${f##*/}" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_*) ;; *) continue ;; esac
+  case "${f##*/}" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_*.md) ;; *) continue ;; esac
 
   # Already current? Then it is not this script's business.
   if parse_header "$f" < "$f" >/dev/null 2>&1; then
@@ -64,8 +74,9 @@ for f in docs/handoff/*.md; do
     continue
   fi
 
-  raw_branch="$(hdr Branch "$f")"
-  raw_commits="$(hdr Commits "$f")"
+  IFS='	' read -r raw_branch raw_commits areas <<EOF
+$(read_legacy_header "$f")
+EOF
   if [ -z "$raw_branch" ] || [ -z "$raw_commits" ]; then
     echo "  PROBLEM   ${f##*/}: no Branch or no Commits line in the header; this is not a pre-v0.22 handoff, fix it by hand" >&2
     PROBLEMS=$((PROBLEMS + 1)); continue
@@ -93,27 +104,9 @@ for f in docs/handoff/*.md; do
 
   # Areas comes from git or not at all. Inventing it would put a wrong answer
   # into the one field the lane board uses to say what a branch is touching.
-  areas="$(hdr Areas "$f")"
-  if [ -z "$areas" ]; then
-    if [ "$commits" = none ]; then
-      areas=none
-    else
-      range="$(range_of "$commits")"
-      if [ -z "$range" ]; then
-        echo "  PROBLEM   ${f##*/}: the range $commits no longer resolves (rebased or squashed?), so Areas cannot be derived; add an \"Areas:\" line by hand (or \"Areas: none\")" >&2
-        PROBLEMS=$((PROBLEMS + 1)); continue
-      fi
-      # git log, not git diff: range_of collapses a root commit to a single
-      # revision, which `git diff X X` would read as an empty change.
-      areas="$(git log --format= --name-only "$range" 2>/dev/null | cut -d/ -f1-2 | sort -u | grep -v '^$' || true)"
-      # A session that touched fifty files makes an unreadable board row;
-      # collapse those to their top-level directory.
-      if [ "$(printf '%s\n' "$areas" | grep -c '')" -gt 12 ]; then
-        areas="$(printf '%s\n' "$areas" | cut -d/ -f1 | sort -u)"
-      fi
-      areas="$(printf '%s' "$areas" | paste -sd, - | sed 's/,/, /g')"
-      [ -n "$areas" ] || areas=none
-    fi
+  if [ -z "$areas" ] && ! areas="$(areas_for_range "$commits")"; then
+    echo "  PROBLEM   ${f##*/}: the range $commits no longer resolves (rebased or squashed?), so Areas cannot be derived; add an \"Areas:\" line by hand (or \"Areas: none\")" >&2
+    PROBLEMS=$((PROBLEMS + 1)); continue
   fi
 
   if [ "$DRY" = yes ]; then
@@ -124,21 +117,21 @@ for f in docs/handoff/*.md; do
   fi
 
   tmp="$f.relevio-tmp.$$"
+  # Commits is guaranteed present (checked above), so Areas is always emitted
+  # right after it, in the canonical field order.
   awk -v branch="$branch" -v commits="$commits" -v areas="$areas" -v note="$note" '
     BEGIN { inhdr = 1 }
     inhdr && /^[ \t]*$/ {
       inhdr = 0
-      # Areas sits right after Commits in the canonical order.
-      if (!seen_areas) print "Areas: " areas
       print ""
       if (note != "") { print "Branch note: " note; print "" }
       next
     }
     inhdr {
       line = $0; sub(/[ \t]+$/, "", line)
+      if (index(line, "Areas: ")   == 1) next   # re-emitted after Commits
       if (index(line, "Branch: ")  == 1) { print "Branch: "  branch;  next }
-      if (index(line, "Commits: ") == 1) { print "Commits: " commits; print "Areas: " areas; seen_areas = 1; next }
-      if (index(line, "Areas: ")   == 1) { if (seen_areas) next; print "Areas: " areas; seen_areas = 1; next }
+      if (index(line, "Commits: ") == 1) { print "Commits: " commits; print "Areas: " areas; next }
       print line; next
     }
     { print }
