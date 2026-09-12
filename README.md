@@ -54,12 +54,16 @@ Nothing is ever lost to compaction again.
 |------|---------|
 | `.claude/hooks/context-warn.sh` | PostToolUse hook: reads token usage from the transcript and keeps the agent aware of its window. Informational checkpoints every 10% (10-60%), close-out warnings at 70% and 80%, revisit guards at 85/90/95/99% (each once per session). |
 | `.claude/settings.json` | Hook registration (merged into your existing settings, never clobbered). |
-| `.claude/commands/kickoff.md` | The `/kickoff` slash command: opens a session (reads the index and the latest handoff, checks git state, summarizes where things stand). |
-| `.claude/commands/handoff.md` | The `/handoff` slash command: closes a session (writes the dated handoff with its metadata header, appends the index row, hands over the literal close-out steps). |
+| `.claude/commands/kickoff.md` | The `/kickoff` slash command: opens a session (regenerates the index, shows the lane board, reads the latest handoff **of your branch**, traces who else has touched the surfaces you are about to work on, checks git state, summarizes where things stand). |
+| `.claude/commands/handoff.md` | The `/handoff` slash command: closes a session (writes the dated handoff with its metadata header, regenerates the index, hands over the literal close-out steps). |
 | `.claude/commands/revisit.md` | The `/revisit` slash command: finds an old session in the library and returns the `claude --resume <session-id>` command to reopen its conversation. |
 | `.claude/hooks/session-start.sh` | SessionStart hook: tells the agent the session cycle at the start of every session (open with `/kickoff`; a hook will speak when it needs something). It deliberately says NOTHING about closing: every close-out instruction travels inside the warning that triggers it, so the agent cannot anticipate it. A REOPENED conversation gets the revisit rules instead; one that just auto-compacted is told to salvage what remains into a handoff. |
 | `docs/handoff/` | Where handoffs live. They accumulate; the newest one is the next session's starting point. |
-| `docs/handoff/INDEX.md` | The library index: one append-only row per session (date, conversation name, handoff file, commit range, topics, summary). Never overwritten, not even with `--force`. |
+| `.claude/scripts/relevio-index.sh` | Regenerates `docs/handoff/INDEX.md` from the header of every handoff on every branch. Fails loud naming the file and field if a header is malformed. |
+| `.claude/scripts/relevio-trace.sh` | Answers "which sessions touched this path, and who has unmerged work on it right now". |
+| `.claude/scripts/relevio-migrate.sh` | One-time conversion of pre-v0.22 handoff headers. Run once per repo when upgrading. |
+| `.claude/scripts/relevio-handoffs-lib.sh` | Shared library for the three scripts above (sourced, not run). |
+| `docs/handoff/INDEX.md` | The library index, **generated** by `relevio-index.sh`: an **Active lanes** board (branches with open work) plus the full **Catalog** (date, conversation name, handoff file, dev, branch, areas, commit range, topics, summary). Never edited by hand, never overwritten by the installer. |
 
 ## What the methodology makes your agent do
 
@@ -218,8 +222,14 @@ that is simply wrong.
 
 ```
 new session, first message: /kickoff
-  -> agent finds the latest handoff ACROSS ALL BRANCHES (not just the current
-     one) and reads it, plus INDEX.md
+  -> agent regenerates INDEX.md from every handoff on every branch and shows
+     you the Active lanes board: who has open work, on which branch, on which
+     areas
+  -> agent reads the latest handoff OF YOUR BRANCH (not the newest in the
+     repo, which is probably somebody else's lane); on a brand new branch it
+     reads main's and says so
+  -> agent asks which files you will touch and traces them: earlier sessions
+     that changed them, and unmerged branches sitting on them right now
   -> agent reconciles the branch: it reads the handoff's Branch field, tells
      you where the last session worked and whether that work is on main yet,
      and ASKS whether to continue there or start a new branch (never switches
@@ -235,7 +245,7 @@ new session, first message: /kickoff
      commit comes AFTER the handoff, never cutting work mid-change
   -> agent writes docs/handoff/YYYY-MM-DD_<short-title>.md (same title as the
      session name; metadata header: Session, Date, Dev, Branch, Commits,
-     Resume, Topics, Summary), appends the INDEX.md row, commits, pushes
+     Areas, Resume, Topics, Summary), regenerates INDEX.md, commits, pushes
   -> you rename the session (/rename DD-MM-YY short-title, the exact Session
      name from the header) and open a new one with /kickoff
   -> the old conversation stays intact in your list: reopen it any time
@@ -271,22 +281,62 @@ Handoff rules (the agent gets them from the 80% warning and `/handoff`):
   block (rename the session with `/rename`; open a new one whose first message
   is `/kickoff`). The close-out also names the branch it worked on (see below).
 
-### Handoffs live on the branch you worked on
+### One lane per branch, and a board for the team
 
 A handoff is committed like any other file, so it lands on whatever branch the
-session was working on. If that was a feature branch and your next session
-opens on `main` (or in a different git worktree), the newest handoff is simply
-**not in that branch's working tree**: a naive `ls docs/handoff/` would miss
-it and the new session would read a stale one and lose track of the branch.
-`/kickoff` handles this: it looks for the latest handoff across **all** branches
-(`git log --all` by filename date), reads it from its ref with `git show` when
-it is not checked out, then reconciles: it reports the branch the last session
-worked on (the handoff's `Branch:` field), whether that work already reached
-main, and **asks you** whether to continue there or branch off. It never
-switches branches on its own, and if the branch is checked out in another
-worktree it tells you to open the session there. Two things make this reliable:
-the handoff always records its `Branch:`, and the close-out always commits and
-pushes before handing over.
+session was working on. With one dev on one branch that is invisible. With a
+team it is the whole problem: the newest handoff in the repo belongs to
+whoever closed last, which is usually not you, and it is often not even in
+your working tree.
+
+So relevio does not have "the latest handoff". It has **one lane per branch**,
+plus a board listing the lanes. `docs/handoff/INDEX.md` is generated from the
+header of every handoff found across `git log --all`, and has two parts:
+
+- **Active lanes**: one row per branch that still has open work (it exists and
+  is not merged into `origin/main`), with the dev who owns it, the areas it
+  touches and how far ahead of main it is. This is the team board.
+- **Catalog**: every session ever closed, on any branch, oldest first.
+
+`/kickoff` reads the row for **your** branch. On a brand new branch there is no
+such row, so it reads main's last handoff and says in plain words that it is
+doing so, instead of handing you a stranger's lane as if it were yours.
+
+Because the file is generated, nobody edits it and nobody resolves merge
+conflicts on it. When git reports a conflict there, the fix is to rerun the
+script and commit the result. The index on a feature branch legitimately lists
+sessions from other branches: it is a view of the repository as you last
+fetched it, not of your branch.
+
+One trade-off, stated plainly: a handoff survives only while git can reach it.
+Delete an unmerged branch and its handoff leaves the index with it. Push and
+merge, or lose it. That was already true when the index was hand-written, since
+the row lived on that branch too.
+
+### Tracing who touched a surface
+
+The other half of the problem is time, not just branches. When you open a new
+branch you are usually about to edit code that other sessions, on other
+branches, touched weeks ago. Their reasoning is in their handoffs, and you have
+no way to know which ones. `relevio-trace.sh` answers exactly that:
+
+```
+$ bash .claude/scripts/relevio-trace.sh src/auth
+
+## src/auth
+
+| Kind      | Branch      | Handoff / tip                | Dev  | Commits touching | Note           |
+|-----------|-------------|------------------------------|------|------------------|----------------|
+| OPEN WORK | `feat-sso`  | origin/feat-sso              | ANA  | 6                | collision risk |
+| handoff   | `main`      | 2026-08-17_auth-rewrite.md   | NICO | 11               | merged         |
+```
+
+Two kinds of row. `handoff` rows are past sessions whose commit range touched
+that path: read them before you undo their reasoning. `OPEN WORK` rows are
+unmerged branches changing the same surface right now, which is the collision
+you cannot see from your own branch because their commits are not in main and
+therefore not in yours either. `/kickoff` runs this for the areas you say you
+will touch, before any code.
 
 ### Worktrees and parallel sessions
 
@@ -472,7 +522,36 @@ that the migrations keep the user's text intact, that nothing the agent
 receives before a close-out warning names the thresholds or teaches the
 close-out (the anti-anticipation rule), and that every injected message stays
 under the size Claude Code will deliver (past that cap the tail is dropped with
-no error).
+no error). Since v0.22 it also builds a small team repository (a bare origin,
+one merged branch and one open one, each closing a session) and asserts what
+the lane board, the catalog, the trace and the header parser do with it,
+including that a malformed header aborts the run naming the file and the field
+and leaves the previous index untouched.
+
+## Upgrading from v0.21 or older
+
+Until v0.21 the handoff header was read by people only, so `Branch:` could
+carry prose and `Commits:` a `(10 commits)` suffix. Since v0.22 that header is
+parsed, and it needs those values bare plus a new `Areas:` field. There is no
+tolerant parser for the old shape: there is one migration, run once per repo.
+
+```
+bash .claude/scripts/relevio-migrate.sh
+```
+
+It leaves `Branch` bare and moves the explanation into the body as a
+`Branch note:` line, drops the `Commits` suffix, and derives `Areas` from the
+commit range with git. It never invents a value: if a range no longer resolves
+because the history was rebased or squashed, it reports that file and leaves it
+for you. Then rebuild the index and commit both:
+
+```
+bash .claude/scripts/relevio-index.sh
+```
+
+Handoffs that live on other branches are migrated by running the same pair on
+each of those branches, which is also where that fix belongs: the commit that
+carries a handoff is the commit that should carry its migration.
 
 ## Uninstall
 
@@ -481,7 +560,7 @@ cd /path/to/your/project
 curl -fsSL https://raw.githubusercontent.com/compota334/relevio/main/uninstall.sh | bash
 ```
 
-Removes the hooks, the commands, the settings entries and the private-mode
+Removes the hooks, the commands, the scripts, the settings entries and the private-mode
 `.gitignore` block, preserving everything else you had in those files (plus
 the legacy `relevio.md` of v0.18-0.19 installs, removed only when its title
 line proves it is relevio's). `docs/handoff/` is always KEPT: it is your

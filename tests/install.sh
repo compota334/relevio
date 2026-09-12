@@ -141,6 +141,8 @@ check "clean install: CLAUDE.md untouched" "$(diff_is_empty "$d" CLAUDE.md)" "em
 # Since v0.20 the hooks carry the methodology themselves: no relevio.md.
 check "clean install: no relevio.md is created" \
   "$(yesno "$([ -f "$d/relevio.md" ]; echo $?)")" "no"
+check "clean install: the index script is installed and executable" \
+  "$(yesno "$([ -x "$d/.claude/scripts/relevio-index.sh" ]; echo $?)")" "yes"
 check "clean install: both hooks installed" \
   "$(yesno "$([ -f "$d/.claude/hooks/session-start.sh" ] && [ -f "$d/.claude/hooks/context-warn.sh" ]; echo $?)")" "yes"
 check "clean install: no markers written into CLAUDE.md" \
@@ -661,6 +663,8 @@ check "uninstall: legacy relevio.md gone" "$(yesno "$([ -f "$d/relevio.md" ]; ec
 check "uninstall: hooks gone" "$(yesno "$([ -d "$d/.claude/hooks" ]; echo $?)")" "no"
 check "uninstall: the user's CLAUDE.md survived" \
   "$(grep -c 'A rule of my own' "$d/CLAUDE.md")" "1"
+check "uninstall: the scripts are gone too" \
+  "$(yesno "$([ -d "$d/.claude/scripts" ]; echo $?)")" "no"
 check "uninstall: docs/handoff kept" \
   "$(yesno "$([ -d "$d/docs/handoff" ]; echo $?)")" "yes"
 rm -rf "$d"
@@ -671,6 +675,10 @@ rm -rf "$d"
 # the messages become invisible to users without opening the scripts.
 check "README: documents the injected messages" \
   "$(grep -c 'What relevio says to the agent' "$REPO/README.md")" "1"
+check "README: documents the lane board and the trace" \
+  "$(grep -c 'One lane per branch, and a board for the team' "$REPO/README.md")" "1"
+check "README: documents the one-time migration for older installs" \
+  "$(grep -c 'Upgrading from v0.21 or older' "$REPO/README.md")" "1"
 check "README: no longer lists relevio.md as an installed file" \
   "$(grep -c '| \`relevio.md\`' "$REPO/README.md")" "0"
 

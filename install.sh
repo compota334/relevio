@@ -15,6 +15,10 @@ set -euo pipefail
 VERSION="0.21.5"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh session-start.sh handoff.md kickoff.md revisit.md INDEX.md)
+# Since v0.22 docs/handoff/INDEX.md is generated rather than hand-edited, so
+# the commands need the generator next to them. These live in scripts/, not
+# templates/: both install channels ship the same copy.
+SCRIPTS=(relevio-handoffs-lib.sh relevio-index.sh relevio-trace.sh relevio-migrate.sh)
 STAMPED=(context-warn.sh session-start.sh)
 # Legacy markers: only ever used to REMOVE the pre-v0.18 block from CLAUDE.md.
 MARK_START="<!-- relevio:start -->"
@@ -48,9 +52,9 @@ Options:
              files are left for you to commit (team mode).
   --help     This text.
 
-WHAT BELONGS TO WHOM: the hooks in .claude/hooks/ and the slash commands in
-.claude/commands/ are relevio's and are REPLACED whole on --update, so never
-write your own instructions in them. CLAUDE.md is yours and relevio does not
+WHAT BELONGS TO WHOM: the hooks in .claude/hooks/, the slash commands in
+.claude/commands/ and the scripts in .claude/scripts/ are relevio's and are
+REPLACED whole on --update, so never write your own instructions in them. CLAUDE.md is yours and relevio does not
 touch it.
 
 Uninstall:
@@ -122,6 +126,7 @@ fi
 SRC="${BASH_SOURCE[0]:-}"
 if [ -n "$SRC" ] && [ -f "$(dirname "$SRC")/templates/context-warn.sh" ]; then
   TPL="$(cd "$(dirname "$SRC")/templates" && pwd)"
+  SCR="$(cd "$(dirname "$SRC")/scripts" && pwd)"
   [ "$(dirname "$TPL")" = "$(pwd)" ] && fail "you are running the installer inside the relevio repo itself.
        cd into YOUR project first, then run: bash $(pwd)/install.sh"
   info "using local templates: $TPL"
@@ -131,6 +136,12 @@ else
   trap 'rm -rf "$TPL"' EXIT
   for f in "${TEMPLATES[@]}"; do
     curl -fsSL "$REPO_RAW/templates/$f" -o "$TPL/$f" \
+      || fail "could not download $f from $REPO_RAW"
+  done
+  SCR="$TPL/scripts"
+  mkdir -p "$SCR"
+  for f in "${SCRIPTS[@]}"; do
+    curl -fsSL "$REPO_RAW/scripts/$f" -o "$SCR/$f" \
       || fail "could not download $f from $REPO_RAW"
   done
   info "downloaded templates from GitHub"
@@ -187,6 +198,11 @@ install_file "$TPL/session-start.sh" .claude/hooks/session-start.sh 755
 install_file "$TPL/handoff.md" .claude/commands/handoff.md 644
 install_file "$TPL/kickoff.md" .claude/commands/kickoff.md 644
 install_file "$TPL/revisit.md" .claude/commands/revisit.md 644
+mkdir -p .claude/scripts
+install_file "$SCR/relevio-handoffs-lib.sh" .claude/scripts/relevio-handoffs-lib.sh 644
+install_file "$SCR/relevio-index.sh" .claude/scripts/relevio-index.sh 755
+install_file "$SCR/relevio-trace.sh" .claude/scripts/relevio-trace.sh 755
+install_file "$SCR/relevio-migrate.sh" .claude/scripts/relevio-migrate.sh 755
 
 # --- 2. Register both hooks in .claude/settings.json (merge, don't clobber) --
 # PostToolUse/context-warn.sh keeps the agent aware of its context window;
@@ -306,6 +322,21 @@ mkdir -p docs/handoff
 touch docs/handoff/.gitkeep
 if [ -f docs/handoff/INDEX.md ]; then
   info "unchanged: docs/handoff/INDEX.md (never overwritten: it holds your history)"
+  # Since v0.22 the index is generated from the handoff headers instead of
+  # being appended to by hand. An index still carrying the old "append-only"
+  # prose belongs to a pre-v0.22 install, whose handoff headers need the
+  # one-time migration before the generator will accept them. The installer
+  # does not run either script: rewriting a project's handoff history is the
+  # user's decision, not a side effect of an upgrade.
+  if grep -qF 'append-only' docs/handoff/INDEX.md; then
+    info "NOTE: docs/handoff/INDEX.md is hand-written, from relevio v0.21 or
+        older. Since v0.22 it is GENERATED from the handoff headers. To
+        convert this project, once, from its root:
+          bash .claude/scripts/relevio-migrate.sh   # updates the handoff headers
+          bash .claude/scripts/relevio-index.sh     # rebuilds INDEX.md
+        Review the diff and commit it. Handoffs that live on other branches
+        are migrated by running the same pair on each of those branches."
+  fi
 else
   cp "$TPL/INDEX.md" docs/handoff/INDEX.md
   info "installed: docs/handoff/INDEX.md"
@@ -348,11 +379,11 @@ Done. Next steps:
          instead. Force percentage with "env": {"CLAUDE_CONTEXT_LIMIT": "..."}
        - custom warning thresholds? "CLAUDE_CONTEXT_WARN": "60,75"
   3. Team mode (default): commit .claude/settings.json, .claude/commands/,
-     .claude/hooks/ and docs/handoff/ so every dev's agent follows the same
-     rules and shares the session history. Solo/private mode: re-run with
+     .claude/hooks/, .claude/scripts/ and docs/handoff/ so every dev's agent
+     follows the same rules and shares the session history. Solo/private mode: re-run with
      --private to gitignore all of it instead.
-  4. The hooks and slash commands are relevio's files and --update replaces
-     them whole: put your own project instructions in CLAUDE.md, which relevio
+  4. The hooks, slash commands and scripts are relevio's files and --update
+     replaces them whole: put your own project instructions in CLAUDE.md, which relevio
      never touches. The exact messages relevio sends the agent are readable in
      .claude/hooks/*.sh (and documented in the README).
 
