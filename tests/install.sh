@@ -547,6 +547,27 @@ check "plugin-on-claude: hard close-out keeps /rename" \
   "$(printf '%s' "$out" | grep -q '/rename DD-MM-YY' && echo yes || echo no)" "yes"
 check "plugin-on-claude: hard close-out namespaced kickoff present" \
   "$(printf '%s' "$out" | grep -q "'/relevio:kickoff'" && echo yes || echo no)" "yes"
+# INDEX.md is generated since v0.22, so the close-out must send the agent to
+# the script rather than telling it to append a row by hand, and the path it
+# names has to match the host it is running on.
+out="$(printf '{"source":"startup","transcript_path":"%s"}' "$REPO/VERSION" \
+  | CLAUDE_PLUGIN_ROOT="$REPO" bash "$REPO/hooks/context-warn.sh" >/dev/null 2>&1; \
+  printf '{"model":"claude-opus-5","message":{"usage":{"input_tokens":810000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}\n' > "$d/plug-transcript.jsonl"; \
+  printf '{"transcript_path":"%s","session_id":"relevio-test-%s-plugidx"}' "$d/plug-transcript.jsonl" "$$" \
+  | CLAUDE_PLUGIN_ROOT="$REPO" bash "$REPO/hooks/context-warn.sh" \
+  | jq -r '.hookSpecificOutput.additionalContext // ""')"
+check "plugin-on-claude: the close-out points at the plugin's index script" \
+  "$(printf '%s' "$out" | grep -c 'CLAUDE_PLUGIN_ROOT/scripts/relevio-index.sh')" "1"
+check "close-out: nobody is told to append an index row by hand any more" \
+  "$(grep -c 'append a row to docs/handoff/INDEX.md' "$REPO/hooks/context-warn.sh" "$REPO/hooks/session-start.sh" | awk -F: '{ s += $2 } END { print s }')" "0"
+check "close-out: the handoff header fields it names include Areas" \
+  "$(printf '%s' "$out" | grep -c 'Branch, Commits and Areas')" "1"
+rm -f /tmp/claude-ctx-warn-relevio-test-$$-plugidx
+out="$(cw 810000 scridx)"
+check "script install: the close-out points at .claude/scripts/relevio-index.sh" \
+  "$(printf '%s' "$out" | grep -c 'bash .claude/scripts/relevio-index.sh')" "1"
+check "session-start: the core describes kickoff as reading YOUR branch" \
+  "$(inject "$d" startup | grep -c 'latest handoff OF YOUR OWN BRANCH')" "1"
 check "hooks/ and templates/ scripts are identical (no more sed transform)" \
   "$(diff -q "$REPO/hooks/context-warn.sh" "$REPO/templates/context-warn.sh" >/dev/null && diff -q "$REPO/hooks/session-start.sh" "$REPO/templates/session-start.sh" >/dev/null && echo same)" "same"
 # The ZCode db default lives in TWO scripts that cannot share a variable; if

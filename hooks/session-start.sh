@@ -97,7 +97,7 @@ case "$SOURCE" in
     emit "relevio: this is a REOPENED conversation, part of the session archive. Its purpose is answering questions about what happened here, not doing new work: it sits near the top of its context window, and auto-compact would destroy the detail that makes it valuable. Keep answers brief, avoid reading files or starting tasks that consume significant context, and if the user wants new work done, suggest opening a fresh session with $KICKOFF. $SUBAGENT_LINE"
     ;;
   compact)
-    emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, append a row to docs/handoff/INDEX.md) with whatever detail remains, then recommend closing this session and opening a fresh one with $KICKOFF. $SUBAGENT_LINE"
+    emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, then regenerate docs/handoff/INDEX.md with relevio-index.sh) with whatever detail remains, then recommend closing this session and opening a fresh one with $KICKOFF. $SUBAGENT_LINE"
     ;;
   *)
     if [ -n "$HAVE_USAGE" ]; then
@@ -107,7 +107,7 @@ case "$SOURCE" in
     fi
     emit "relevio v0.21.5: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
-OPEN: sessions start with $KICKOFF, which reads docs/handoff/INDEX.md and the LATEST handoff before any code (it may live on another branch) and settles with the user which branch to work on. If the user skipped $KICKOFF and docs/handoff/ exists, suggest it.
+OPEN: sessions start with $KICKOFF, which regenerates docs/handoff/INDEX.md (the team board of branches with open work), reads the latest handoff OF YOUR OWN BRANCH before any code (it may live only in another branch history), traces who else has touched the surfaces you are about to work on, and settles with the user which branch to work on. If the user skipped $KICKOFF and docs/handoff/ exists, suggest it.
 
 $DURING
 

@@ -76,6 +76,11 @@ case "$TRANSCRIPT" in */zcode-claude-hook-*) HOST=zcode ;; esac
 [ "$HOST" = script ] && [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && HOST=plugin
 KICKOFF="/kickoff"
 [ "$HOST" = plugin ] && KICKOFF="/relevio:kickoff"
+# docs/handoff/INDEX.md is generated, so the close-out has to name the script
+# that generates it, and the script lives in a different place per host.
+INDEX_CMD='bash .claude/scripts/relevio-index.sh'
+[ "$HOST" = plugin ] && INDEX_CMD='bash "$CLAUDE_PLUGIN_ROOT/scripts/relevio-index.sh"'
+
 
 emit() {
   jq -n --arg msg "$1" \
@@ -93,7 +98,7 @@ once() {
 # later band will ever fire in this host to carry it.
 off_notice() {
   once foreign || exit 0
-  emit "relevio: $1 Usage reporting is OFF for this whole session: no token counts and no percentage warnings will arrive, and silence tells you NOTHING about the window. Never guess or invent a usage figure. You know your own model and window: use that knowledge to decide when to wrap up the session with a handoff (write it in docs/handoff/, append the INDEX.md row, commit and push, then a fresh session), and keep the user informed of where things stand."
+  emit "relevio: $1 Usage reporting is OFF for this whole session: no token counts and no percentage warnings will arrive, and silence tells you NOTHING about the window. Never guess or invent a usage figure. You know your own model and window: use that knowledge to decide when to wrap up the session with a handoff (write it in docs/handoff/, regenerate the index with $INDEX_CMD, commit and push, then a fresh session), and keep the user informed of where things stand."
   exit 0
 }
 
@@ -193,7 +198,7 @@ if [ -z "$LIMIT" ]; then
   HUNDREDS=$(( USED / 100000 ))
   [ "$HUNDREDS" -lt 1 ] && exit 0
   once "k${HUNDREDS}" || exit 0
-  emit "CONTEXT: ${USED} tokens of your context window used so far (past the $(( HUNDREDS * 100 ))k mark). relevio does not recognize this session's model, so it cannot compute a percentage of the context window, and it will not guess one (a wrong guess would either fire false alarms or stay silent past the real ceiling), so no percentage-based warnings will fire this session. You know your own window size: use this running count to decide when to close the session (write the handoff in docs/handoff/, append the INDEX.md row, commit and push, then a fresh session) and keep the user informed of where things stand. To switch to percentage warnings, set \"env\": {\"CLAUDE_CONTEXT_LIMIT\": \"<tokens>\"} in .claude/settings.local.json."
+  emit "CONTEXT: ${USED} tokens of your context window used so far (past the $(( HUNDREDS * 100 ))k mark). relevio does not recognize this session's model, so it cannot compute a percentage of the context window, and it will not guess one (a wrong guess would either fire false alarms or stay silent past the real ceiling), so no percentage-based warnings will fire this session. You know your own window size: use this running count to decide when to close the session (write the handoff in docs/handoff/, regenerate the index with $INDEX_CMD, commit and push, then a fresh session) and keep the user informed of where things stand. To switch to percentage warnings, set \"env\": {\"CLAUDE_CONTEXT_LIMIT\": \"<tokens>\"} in .claude/settings.local.json."
   exit 0
 fi
 
@@ -254,10 +259,10 @@ case "$TOP" in
 Nothing needs to be written down yet: a later message will tell you when to write the handoff, with complete instructions. Until then, keep working." ;;
   hard) emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free; you passed the ${HARD}% mark. Time to close the session, and ${FREE} tokens is enough room to do it well: no rushing, no skipped steps.
 1. Bring the work in progress to a coherent, safe stopping point at full quality (do not abandon anything mid-change). Start nothing new after this.
-2. Then write the handoff, while this session's understanding is still fully loaded, to docs/handoff/YYYY-MM-DD_<short-title>.md: what was done this session (cite the hashes of commits already made, so the next session can read the work with git log), lessons learned (only real problems that took several attempts to solve; never invent one), pending work in priority order, and for anything left open that depended on understanding built up this session (approaches you tried and ruled out, why the obvious fix does not work, a subtle coupling you found), the REASONING and not just the title: the next session can re-read files cheaply, but cannot cheaply re-derive your conclusions. Append a row to docs/handoff/INDEX.md (append-only: never edit or delete old rows).
+2. Then write the handoff, while this session's understanding is still fully loaded, to docs/handoff/YYYY-MM-DD_<short-title>.md: what was done this session (cite the hashes of commits already made, so the next session can read the work with git log), lessons learned (only real problems that took several attempts to solve; never invent one), pending work in priority order, and for anything left open that depended on understanding built up this session (approaches you tried and ruled out, why the obvious fix does not work, a subtle coupling you found), the REASONING and not just the title: the next session can re-read files cheaply, but cannot cheaply re-derive your conclusions. Fill its Branch, Commits and Areas fields with bare values (Areas from git log --format= --name-only <first>^..<last>), then regenerate the index with $INDEX_CMD: docs/handoff/INDEX.md is generated, never hand-edited, and the script names the file and field if a header is malformed.
 3. Run the project's checks (type-check, linter, tests: see CLAUDE.md), then commit everything, work and handoff included, and push.
 $STEP4" ;;
-  g85)  emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free. If a handoff has already been written for this session, keep answers short and do no new work: auto-compact is getting close. If NO handoff exists yet, write it NOW: docs/handoff/YYYY-MM-DD_<short-title>.md with what was done (commit hashes), lessons that cost real effort, pending work in order and the reasoning behind anything left open; append a row to docs/handoff/INDEX.md; commit and push." ;;
+  g85)  emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free. If a handoff has already been written for this session, keep answers short and do no new work: auto-compact is getting close. If NO handoff exists yet, write it NOW: docs/handoff/YYYY-MM-DD_<short-title>.md with what was done (commit hashes), lessons that cost real effort, pending work in order and the reasoning behind anything left open; then regenerate the index with $INDEX_CMD; commit and push." ;;
   g90)  emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free. Auto-compact is approaching. Answer briefly, do not read files or start anything new, and remind the user in your reply that this conversation is nearly full and new work belongs in a fresh session." ;;
   g95)  emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, only ${FREE} still free. Auto-compact is imminent. Give only short answers and warn the user in EVERY reply that this conversation is about to auto-compact." ;;
   g99)  emit "STOP: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, only ${FREE} still free. Do NOT answer the user's pending request. Reply ONLY, in the user's language, that this conversation reached 99% of its context window, that one more exchange may trigger auto-compact and destroy its remaining detail, and ask if they are SURE they want to continue. Then wait for their explicit confirmation before doing anything else." ;;
