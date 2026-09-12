@@ -597,8 +597,8 @@ check "zcode with a plugin install: no unexpanded variable is handed over" \
   "$(contains "$out" 'CLAUDE_PLUGIN_ROOT')" "no"
 rm -f /tmp/claude-ctx-warn-relevio-test-$$-zidx
 out="$(cw 810000 scridx)"
-check "script install: the close-out resolves to .claude/scripts when no plugin root is set" \
-  "$(contains "$out" 'show-toplevel)/.claude/scripts/relevio-index.sh')" "yes"
+check "script install: the close-out names the scripts beside its own hooks" \
+  "$(contains "$out" "$d/.claude/scripts/relevio-index.sh")" "yes"
 check "session-start: the core describes kickoff as reading YOUR branch" \
   "$(inject "$d" startup | grep -c 'latest handoff OF YOUR OWN BRANCH')" "1"
 check "hooks/ and templates/ scripts are identical (no more sed transform)" \
@@ -894,6 +894,45 @@ check "index: ... and its unmerged handoff leaves the catalog with it" \
   "$(catalog_of "$idx" | grep -c '2026-09-03_feat-open.md')" "0"
 rm -rf "$d"
 
+# --- Case 12a: finding the scripts on a host that hides CLAUDE_PLUGIN_ROOT --
+# Measured on ZCode (2026-09, plugin install): CLAUDE_PLUGIN_ROOT reaches
+# plugin HOOKS but is UNSET in the shell the agent's Bash tool opens, and ZCode
+# installs plugin files WITHOUT the executable bit. So the hooks locate the
+# scripts from their own path, announce it to the agent, and every caller runs
+# them through bash. This case builds that exact layout: hooks and scripts as
+# siblings, mode 644, and no environment variable in sight.
+zc="$(mktemp -d)"
+mkdir -p "$zc/hooks" "$zc/scripts"
+cp "$REPO"/hooks/*.sh "$zc/hooks/"; cp "$REPO"/scripts/*.sh "$zc/scripts/"
+chmod 644 "$zc"/hooks/*.sh "$zc"/scripts/*.sh
+zcinject() {  # $1 = source
+  printf '{"source":"%s","transcript_path":"/tmp/zcode-claude-hook-x/t.jsonl","model":"builtin:zai/GLM-5.3"}' "$1" \
+    | env -u CLAUDE_PLUGIN_ROOT bash "$zc/hooks/session-start.sh" | jq -r '.hookSpecificOutput.additionalContext // ""'
+}
+out="$(zcinject startup)"
+check "zcode layout: session-start tells the agent where the scripts are" \
+  "$(contains "$out" "relevio's handoff scripts live at $zc/scripts")" "yes"
+check "zcode layout: it does not depend on CLAUDE_PLUGIN_ROOT being set" \
+  "$(contains "$out" 'UNSET')" "no"
+check "zcode layout: a compacted session is told too" \
+  "$(contains "$(zcinject compact)" "$zc/scripts")" "yes"
+# The executable bit is not evidence: ZCode strips it. Everything runs via bash.
+check "zcode layout: a non-executable script still runs" \
+  "$(bash "$zc/scripts/relevio-index.sh" --help >/dev/null 2>&1 && echo yes || echo no)" "yes"
+# Move the scripts away and the hook must say so, not name a path that is gone.
+mv "$zc/scripts" "$zc/scripts-gone"
+check "zcode layout: with no scripts beside the hooks it says exactly that" \
+  "$(contains "$(zcinject startup)" 'NOT installed beside its hooks')" "yes"
+mv "$zc/scripts-gone" "$zc/scripts"
+# The plugin manifest must run the hooks through an interpreter, or ZCode's
+# stripped executable bit makes every hook fail with permission denied.
+check "plugin manifest: hooks are invoked through bash, not executed directly" \
+  "$(grep -c '"command": "bash ' "$REPO/hooks/hooks.json")" "2"
+# The commands' fallback must not test for executability either.
+check "kickoff fallback: it tests readability, not the executable bit" \
+  "$(grep -c '\[ -r "\$c/relevio-index.sh" \]' "$REPO/commands/kickoff.md")" "1"
+rm -rf "$zc"
+
 # --- Case 12b: the format has one definition, not four ----------------------
 # The header is described in three languages: the awk parser, the /handoff
 # prose (twice, once per install channel) and these fixtures. Nothing stops
@@ -914,12 +953,16 @@ done
 # both templates: the plugin sets CLAUDE_PLUGIN_ROOT, a script install does
 # not. If the two channels ever disagree here, one of them silently stops
 # finding the generator.
-RESOLVER="$(grep -h 'CLAUDE_PLUGIN_ROOT:-' "$REPO/commands/handoff.md" "$REPO/commands/kickoff.md" \
-  "$REPO/templates/handoff.md" "$REPO/templates/kickoff.md" | sed 's/^ *//' | sort -u)"
-check "format: the script resolver is one line, identical in both channels" \
-  "$(printf '%s' "$RESOLVER" | grep -c '')" "1"
-check "format: the hooks build the script path from the same two candidates" \
-  "$(grep -c 'RELEVIO_SCRIPTS=' "$REPO/hooks/context-warn.sh")" "2"
+# The commands must NOT derive the scripts path themselves: on ZCode the
+# agent's shell has no CLAUDE_PLUGIN_ROOT, and guessing produced a false
+# "this install predates v0.22" every time. They quote what the hook said.
+check "format: the commands take the scripts path from the session-start line" \
+  "$(grep -c 'WHERE THE SCRIPTS ARE' "$REPO/commands/handoff.md" "$REPO/commands/kickoff.md" \
+     "$REPO/templates/handoff.md" "$REPO/templates/kickoff.md" | awk -F: '{ s += $2 } END { print (s >= 4) }')" "1"
+check "format: no command concludes an install is old from a missing file" \
+  "$(grep -c 'predates v0.22 (' "$REPO/commands/kickoff.md" "$REPO/templates/kickoff.md" | awk -F: '{ s += $2 } END { print s }')" "0"
+check "format: both hooks locate the scripts from their own path" \
+  "$(grep -c 'dirname "${BASH_SOURCE\[0\]}")/../scripts' "$REPO/hooks/context-warn.sh" "$REPO/hooks/session-start.sh" | awk -F: '{ s += $2 } END { print s }')" "2"
 check "format: nobody re-types the Areas pipeline by hand any more" \
   "$(grep -c 'name-only' "$REPO/commands/handoff.md" "$REPO/templates/handoff.md" | awk -F: '{ s += $2 } END { print s }')" "0"
 

@@ -29,7 +29,7 @@ were here. Derive it from git, do not guess it, and do not hand-roll the
 pipeline: the range in the header is inclusive of `<first>` while git's
 `a..b` excludes `a`, so this script exists to get that right for you.
 
-    S="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/.claude}/scripts"
+    S=<the path from relevio's "WHERE THE SCRIPTS ARE" line>
     bash "$S/relevio-areas.sh" <first>..<last>
 
 Paste what it prints after `Areas: `. If it reports that the range no longer resolves,
@@ -73,14 +73,16 @@ After writing the handoff, REGENERATE the library index. Never edit
 header of every handoff on every branch, and a hand-added row would be
 discarded by the next regeneration.
 
-    S="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/.claude}/scripts"
+    S=<the path from relevio's "WHERE THE SCRIPTS ARE" line>
     bash "$S/relevio-index.sh"
 
-That one line finds the scripts in either install: the plugin sets
-`CLAUDE_PLUGIN_ROOT`, a script install puts them in `.claude/scripts`. If it
-reports no such file, this relevio predates v0.22: stop and tell the user to
-run `bash <relevio>/install.sh --update`. The script FAILS LOUD naming the
-file and the field when a header is malformed. If it fails on the handoff you
+`$S` is the path relevio named at session start, on the line beginning "WHERE
+THE SCRIPTS ARE". Use it verbatim rather than deriving it from an environment
+variable: on some hosts (ZCode, measured) the shell your Bash tool opens has
+none. If that line is missing from your context, find the directory with the
+fallback loop in the kickoff command, and if nothing is found say so and stop
+instead of concluding the install is out of date. The script FAILS LOUD naming
+the file and the field when a header is malformed. If it fails on the handoff you
 just wrote, fix that header and rerun. If it fails on somebody else's handoff,
 tell the user and leave the file alone; if the message says the header
 predates v0.22, the fix is `relevio-migrate.sh` (same `$S`), which is the

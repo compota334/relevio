@@ -102,3 +102,46 @@ A path plus a listing means the commands work as written. `UNSET` means the
 command bodies need a ZCode-specific way to find the plugin directory (or the
 scripts have to reach the project some other way on that host), and the hook's
 close-out is the only path that keeps working.
+
+## Settled (v0.22.1): two ZCode facts, both measured on a real plugin install
+
+A ZCode agent ran the probe in a live session with relevio v0.22.0 installed
+as a plugin (user scope, `~/.zcode/cli/plugins/cache/relevio/relevio/0.22.0/`).
+Two findings, and both broke v0.22.0:
+
+1. **`CLAUDE_PLUGIN_ROOT` does NOT reach the agent's shell.** It is injected
+   for plugin HOOKS (ZCode's own hook guide says so, and it is how the hooks
+   are invoked), but `echo "${CLAUDE_PLUGIN_ROOT:-UNSET}"` from the agent's
+   Bash tool prints `UNSET`. So a slash command's static body can never
+   resolve it: v0.22.0's commands fell through to `.claude/scripts`, which a
+   plugin install does not create, and their own prose then told the agent to
+   conclude "this relevio predates v0.22" and recommend `install.sh --update`
+   on a perfectly good install.
+
+2. **ZCode installs plugin files without the executable bit.** Every file in
+   the cache is `-rw-rw-r--`, hooks included. ZCode's `diagnosing-hooks` skill
+   lists this as a known pitfall and prescribes the fix: invoke through an
+   interpreter so the bit is irrelevant. relevio's `hooks/hooks.json` was
+   executing its hooks directly.
+
+### What v0.22.1 does about it
+
+- Both hooks locate the scripts from their OWN path
+  (`dirname "${BASH_SOURCE[0]}"/../scripts`). hooks/ and scripts/ are siblings
+  in both install channels, so this needs no environment variable and works on
+  every host. `session-start.sh` then announces the resolved path to the agent
+  on a "WHERE THE SCRIPTS ARE" line, which is the only channel proven to work
+  here, and the commands quote that path instead of deriving one.
+- `hooks/hooks.json` invokes both hooks as `bash "${CLAUDE_PLUGIN_ROOT}"/...`.
+  The script channel keeps its direct invocation: `install.sh` chmods those
+  itself, and changing the command string would make `register_hook` append a
+  second entry to an existing `.claude/settings.json` instead of replacing it.
+- Every readiness test is `-r`, never `-x`: on ZCode executability proves
+  nothing.
+- The commands carry a fallback that reads `installPath` from
+  `~/.zcode/cli/plugins/installed_plugins.json`, for the case where the
+  session-start line is not in the agent's context.
+
+Still unverified: whether v0.21.5 and earlier ever ran their hooks at all on a
+ZCode PLUGIN install, given the stripped executable bit. The 0.21.5 cache was
+replaced by the upgrade, so it can no longer be inspected.

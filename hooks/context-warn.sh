@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.22.0
+# relevio v0.22.1
 # relevio: context warning for the agent.
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
@@ -76,24 +76,29 @@ case "$TRANSCRIPT" in */zcode-claude-hook-*) HOST=zcode ;; esac
 [ "$HOST" = script ] && [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && HOST=plugin
 KICKOFF="/kickoff"
 [ "$HOST" = plugin ] && KICKOFF="/relevio:kickoff"
-# The close-out has to name relevio's scripts, and they sit in a different
-# place per install channel. Do NOT branch on $HOST for that: HOST says which
-# product is running (ZCode never becomes "plugin" above, yet ZCode runs
-# relevio as a plugin), while the question here is which CHANNEL installed it,
-# and CLAUDE_PLUGIN_ROOT answers that on its own.
-# Resolve it HERE when it is known, rather than handing the agent the variable
-# to expand: this hook runs inside the host, so it sees the plugin root even
-# if the shell the agent later opens does not inherit it. The /handoff and
-# /kickoff commands are static text and cannot do this, so they carry the
-# variable form; same rule, applied as early as each one can apply it.
-if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
-  RELEVIO_SCRIPTS="$CLAUDE_PLUGIN_ROOT/scripts"
-else
-  # A script install: the agent's own shell expands this from the repo root.
-  RELEVIO_SCRIPTS='$(git rev-parse --show-toplevel)/.claude/scripts'
-fi
+# --- Where relevio's handoff scripts live -----------------------------------
+# Resolved from THIS script's own location, which needs no environment
+# variable and is therefore the one method that works on every host: the hooks
+# and the scripts are siblings in BOTH install channels, <plugin root>/hooks
+# beside <plugin root>/scripts, or .claude/hooks beside .claude/scripts.
+# Measured on ZCode (2026-09, plugin install of v0.22.0): CLAUDE_PLUGIN_ROOT
+# reaches plugin HOOKS but is UNSET in the shell the agent's Bash tool opens,
+# so the slash commands cannot resolve this for themselves. They are told the
+# path from here instead. Empty means the scripts are not installed beside
+# these hooks, and the messages say so rather than naming a path that is not
+# there.
+RELEVIO_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" 2>/dev/null && pwd)"
+# -r, not -x: ZCode installs plugin files WITHOUT the executable bit (its own
+# hook guide lists that as a known pitfall and says to run them through an
+# interpreter, which is what every caller here does), so executability is
+# not evidence of anything.
+[ -r "${RELEVIO_SCRIPTS:-/nonexistent}/relevio-index.sh" ] || RELEVIO_SCRIPTS=""
 INDEX_CMD="bash \"$RELEVIO_SCRIPTS/relevio-index.sh\""
 AREAS_CMD="bash \"$RELEVIO_SCRIPTS/relevio-areas.sh\""
+if [ -z "$RELEVIO_SCRIPTS" ]; then
+  INDEX_CMD="relevio-index.sh (NOT FOUND beside relevio's hooks: report that, do not hand-edit INDEX.md and do not assume the install is out of date)"
+  AREAS_CMD="relevio-areas.sh (NOT FOUND beside relevio's hooks)"
+fi
 
 
 emit() {

@@ -10,15 +10,28 @@ Act on its messages when they arrive, never in anticipation.
    a. `git fetch --all --prune` (fall back to `git fetch origin`).
    b. Regenerate and read the library index. It is a GENERATED file: never
       edit it by hand and never resolve a merge conflict on it by hand.
+      relevio told you where its scripts are in the message it injected at
+      session start, on the line beginning "WHERE THE SCRIPTS ARE". Use that
+      path verbatim:
 
-          S="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/.claude}/scripts"
+          S=<the path from relevio's "WHERE THE SCRIPTS ARE" line>
           bash "$S/relevio-index.sh"
 
-      That line finds the scripts in either install: the plugin sets
-      `CLAUDE_PLUGIN_ROOT`, a script install puts them in `.claude/scripts`.
-      Whatever it prints, report it and change nothing on your own: no such
-      file means this relevio predates v0.22 (`bash <relevio>/install.sh
-      --update`), and a failure names the file and field at fault. If that
+      Do not try to derive that path from an environment variable: on some
+      hosts (ZCode, measured) the shell your Bash tool opens has none. If the
+      line is missing from your context, find the directory instead of
+      guessing, and use whatever this prints as `$S`:
+
+          for c in "${CLAUDE_PLUGIN_ROOT:-/nonexistent}/scripts" \
+                   "$(git rev-parse --show-toplevel)/.claude/scripts" \
+                   $(sed -n 's/.*"installPath": *"\([^"]*\)".*/\1/p' ~/.zcode/cli/plugins/installed_plugins.json 2>/dev/null | grep '/relevio/' | sed 's|$|/scripts|'); do
+            [ -r "$c/relevio-index.sh" ] && { echo "$c"; break; }
+          done
+
+      If nothing is found, tell the user that relevio's scripts are not
+      reachable from this session and STOP. Do NOT conclude the install is out
+      of date, and do not hand-edit INDEX.md. When the script instead FAILS on
+      a malformed header it names the file and the field: report both. If that
       header predates v0.22, propose `relevio-migrate.sh` (same `$S`) and wait
       for the user's OK. Never patch a handoff header silently, least of all
       another dev's.
@@ -38,7 +51,6 @@ Act on its messages when they arrive, never in anticipation.
    f. Ask the user which files or directories this session will touch, then
       trace them BEFORE any code:
 
-          S="${CLAUDE_PLUGIN_ROOT:-$(git rev-parse --show-toplevel)/.claude}/scripts"
           bash "$S/relevio-trace.sh" <path> [<path> ...]
 
       Rows marked `OPEN WORK` are unmerged branches sitting on that same

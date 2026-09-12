@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.22.0
+# relevio v0.22.1
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -57,6 +57,27 @@ case "$TRANSCRIPT" in */zcode-claude-hook-*) HOST=zcode ;; esac
 KICKOFF="/kickoff"
 [ "$HOST" = plugin ] && KICKOFF="/relevio:kickoff"
 
+# --- Where relevio's handoff scripts live -----------------------------------
+# Resolved from THIS script's own location, which needs no environment
+# variable and is therefore the one method that works on every host: the hooks
+# and the scripts are siblings in BOTH install channels, <plugin root>/hooks
+# beside <plugin root>/scripts, or .claude/hooks beside .claude/scripts.
+# Measured on ZCode (2026-09, plugin install of v0.22.0): CLAUDE_PLUGIN_ROOT
+# reaches plugin HOOKS but is UNSET in the shell the agent's Bash tool opens,
+# so the slash commands cannot resolve this for themselves. Telling them the
+# path here is the whole point of this block.
+RELEVIO_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" 2>/dev/null && pwd)"
+# -r, not -x: ZCode installs plugin files WITHOUT the executable bit (its own
+# hook guide lists that as a known pitfall and says to run them through an
+# interpreter, which is what every caller here does), so executability is
+# not evidence of anything.
+[ -r "${RELEVIO_SCRIPTS:-/nonexistent}/relevio-index.sh" ] || RELEVIO_SCRIPTS=""
+if [ -n "$RELEVIO_SCRIPTS" ]; then
+  SCRIPTS_LINE="WHERE THE SCRIPTS ARE: relevio's handoff scripts live at $RELEVIO_SCRIPTS. Whenever a relevio command tells you to run one, that is the path, used verbatim. Do not derive it from an environment variable: the shell your Bash tool opens does not necessarily carry one, and guessing produces a wrong answer that looks like a broken install."
+else
+  SCRIPTS_LINE="WHERE THE SCRIPTS ARE: relevio's handoff scripts are NOT installed beside its hooks, so the index cannot be regenerated in this project. Say that to the user if it comes up, and never hand-edit docs/handoff/INDEX.md instead."
+fi
+
 # The core must not promise a report cadence that will never arrive: the
 # agent would read the structural silence as "usage is low"
 # (silence-as-information only works if reports actually flow). HAVE_USAGE
@@ -97,7 +118,7 @@ case "$SOURCE" in
     emit "relevio: this is a REOPENED conversation, part of the session archive. Its purpose is answering questions about what happened here, not doing new work: it sits near the top of its context window, and auto-compact would destroy the detail that makes it valuable. Keep answers brief, avoid reading files or starting tasks that consume significant context, and if the user wants new work done, suggest opening a fresh session with $KICKOFF. $SUBAGENT_LINE"
     ;;
   compact)
-    emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, then regenerate docs/handoff/INDEX.md with relevio-index.sh) with whatever detail remains, then recommend closing this session and opening a fresh one with $KICKOFF. $SUBAGENT_LINE"
+    emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, then regenerate docs/handoff/INDEX.md with relevio-index.sh) with whatever detail remains, then recommend closing this session and opening a fresh one with $KICKOFF. $SCRIPTS_LINE $SUBAGENT_LINE"
     ;;
   *)
     if [ -n "$HAVE_USAGE" ]; then
@@ -105,11 +126,13 @@ case "$SOURCE" in
     else
       DURING="DURING THE SESSION: this host agent does not give relevio access to your context-window usage, so NO usage reports will arrive this session, and silence tells you NOTHING about the window. Never guess or invent a usage figure. You know your own model and window size: rely on that knowledge, keep the user informed of where the work stands, and let the user's request, not the window, decide what you do and when you are done."
     fi
-    emit "relevio v0.22.0: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+    emit "relevio v0.22.1: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 OPEN: sessions start with $KICKOFF, which regenerates docs/handoff/INDEX.md (the team board of branches with open work), reads the latest handoff OF YOUR OWN BRANCH before any code (it may live only in another branch history), traces who else has touched the surfaces you are about to work on, and settles with the user which branch to work on. If the user skipped $KICKOFF and docs/handoff/ exists, suggest it.
 
 $DURING
+
+$SCRIPTS_LINE
 
 $SUBAGENT_LINE"
     ;;
