@@ -724,6 +724,18 @@ check "index: an uncommitted handoff in the working tree is catalogued" \
   "$(catalog_of "$idx" | grep -c '2026-09-04_uncommitted.md')" "1"
 rm "$d/docs/handoff/2026-09-04_uncommitted.md"
 
+# The board is for scanning. A session that touched twenty paths must not turn
+# its lane into an unreadable wall; the full list stays in the catalog row.
+write_handoff "$d" 2026-09-04_wide.md "04-09-26 wide" JUAN feat-open none \
+  "a1, a2, a3, a4, a5, a6, a7, a8, a9" "touched a lot"
+( cd "$d" && bash "$IDX" >/dev/null 2>&1 )
+check "index: a lane with many areas is summarised, not dumped" \
+  "$(board_of "$idx" | grep -c 'a1, a2, a3, a4, a5, a6, +4 more')" "1"
+check "index: ... while the catalog row keeps every one of them" \
+  "$(catalog_of "$idx" | grep -c 'a1, a2, a3, a4, a5, a6, a7, a8, a9')" "1"
+rm "$d/docs/handoff/2026-09-04_wide.md"
+( cd "$d" && bash "$IDX" >/dev/null 2>&1 )
+
 # Idempotency: the generated file carries no timestamp, so regenerating it
 # without new sessions must produce a byte-identical file. A file that always
 # reports a change is a file whose diff people stop reading.

@@ -266,6 +266,15 @@ board_rows() {
     areas="$(printf '%s' "$CATALOG" | awk -F'\t' -v b="$b" '$5 == b && $6 != "none" { print $6 }' \
       | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' | sort -u | paste -sd, - | sed 's/,/, /g')"
     [ -n "$areas" ] || areas="none"
+    # The board is meant to be scanned. A session that touched thirty paths
+    # would make its row unreadable, so the row shows the first few and says
+    # how many it left out; the catalog below still carries the full list.
+    areas="$(printf '%s' "$areas" | awk -F', ' '{
+      if (NF <= 6) { print; next }
+      out = $1
+      for (i = 2; i <= 6; i++) out = out ", " $i
+      printf("%s, +%d more\n", out, NF - 6)
+    }')"
     last_date="$(printf '%s' "$CATALOG" | awk -F'\t' -v b="$b" '$5 == b { d = $2 } END { print d }')"
     last_file="$(printf '%s' "$CATALOG" | awk -F'\t' -v b="$b" '$5 == b { p = $1 } END { sub(/.*\//, "", p); print p }')"
     note=""
