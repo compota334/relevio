@@ -61,7 +61,7 @@ cuenta AIDeepEconomics para Agrotrack360).
 
 Además: submission del plugin al directorio community de Anthropic (formulario
 de Console, nombre "Relevio", solo claude code, licencia MIT, sin privacy
-policy, contacto compota334@gmail.com) — enviada por el usuario, pendiente de
+policy, contacto compota334@gmail.com), enviada por el usuario, pendiente de
 review; el pipeline toma los commits nuevos automáticamente.
 
 ## 3. Archivos clave
