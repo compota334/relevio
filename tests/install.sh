@@ -599,6 +599,12 @@ rm -f /tmp/claude-ctx-warn-relevio-test-$$-zidx
 out="$(cw 810000 scridx)"
 check "script install: the close-out names the scripts beside its own hooks" \
   "$(contains "$out" "$d/.claude/scripts/relevio-index.sh")" "yes"
+# relevio's users are not all developers, and the agent has no other way to
+# know that. One rule, stated once, in the place that reaches every session.
+check "session-start: the core tells the agent how to talk to a non-developer" \
+  "$(contains "$(inject "$d" startup)" 'may not be a developer')" "yes"
+check "session-start: ... and to recommend an option when it asks a question" \
+  "$(contains "$(inject "$d" startup)" 'which option you would pick')" "yes"
 check "session-start: the core describes kickoff as reading YOUR branch" \
   "$(inject "$d" startup | grep -c 'latest handoff OF YOUR OWN BRANCH')" "1"
 check "hooks/ and templates/ scripts are identical (no more sed transform)" \
@@ -814,6 +820,10 @@ err="$( (cd "$d2" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
 check "index: no origin/main fails loud instead of guessing" "$rc" "2"
 check "index: ... saying this repository has no remote" \
   "$(contains "$err" 'has no remote')" "yes"
+# This message is read by a person, once per project, and it was the one that
+# confused a real user: it has to explain what a main branch is, not assume it.
+check "index: the main-branch error explains what a main branch is" \
+  "$(contains "$err" 'holds')" "yes"
 check "index: ... and a repo with no remote is told to record its branch" \
   "$(contains "$err" 'git config relevio.main')" "yes"
 check "index: ... without being told to fetch a remote it does not have" \

@@ -504,6 +504,16 @@ they do NOT interfere:
 - The context hooks do not reach subagents: warnings are injected into the
   main agent only, so a subagent will never try to close your session.
 
+### Who is reading
+
+relevio tells the agent, once per session, that the person reading may not be a
+developer: define a technical term the first time a session uses it, in half a
+sentence, then use it normally; and when asking the user to choose, say which
+option you would pick and why. That is the whole rule. It is one line in the
+injected core rather than explanations sprinkled through every command, because
+the agent already knows how to explain things and only needs to be told that it
+should.
+
 ## Agent operators: when the "user" is itself an agent
 
 The framework also works when Claude Code is driven not by a human but by

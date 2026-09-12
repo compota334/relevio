@@ -82,20 +82,31 @@ resolve_main() {
       if [ -z "$(git remote 2>/dev/null)" ]; then
         # No remote at all, so "fetch first" would be useless advice. Tell it
         # to record its own integration branch once, in the repo.
-        die "this repository has no remote, so relevio cannot tell which branch
-  the work is integrated into. Record it once, and every future session in
-  this project will use it:
+        die "relevio needs to know this project's MAIN branch: the one that holds
+  the finished work, which the others are eventually merged into. It compares
+  every branch against that one to tell open work from work that is already
+  done, and it will not guess, because guessing wrong would report unfinished
+  work as finished.
+
+  This repository has no remote, so there is nowhere to read it from. Say it
+  once and every future session in this project will use the answer:
 
     git config relevio.main $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
 
-  For a one-off run instead, pass --main <branch> or set RELEVIO_MAIN."
+  (that is your current branch, and it is usually the right one). For a single
+  run instead, pass --main <branch> or set RELEVIO_MAIN."
       fi
-      die "integration branch not found: expected refs/remotes/origin/main.
-  Run 'git fetch origin' first, or name it, once and for this repository:
+      die "relevio needs to know this project's MAIN branch: the one that holds
+  the finished work, which the others are eventually merged into. It looked for
+  refs/remotes/origin/main and there is none.
+
+  If the remote simply has not been read yet, 'git fetch origin' may be all it
+  takes. If this project's main branch has another name, say it once and every
+  future session will use the answer:
 
     git config relevio.main origin/master
 
-  For a one-off run instead, pass --main <ref> or set RELEVIO_MAIN."
+  For a single run instead, pass --main <ref> or set RELEVIO_MAIN."
     fi
   fi
   git rev-parse --verify -q "$MAIN^{commit}" >/dev/null \
