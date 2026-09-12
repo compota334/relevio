@@ -49,14 +49,20 @@ cd "$TOP"
 # win. This is the tolerant reader; parse_header in the library is the strict
 # one, and the two agree on where the header block ends.
 read_legacy_header() {
-  awk '
+  awk -v none="$RELEVIO_NONE" '
     /^[ \t]*$/ { exit }
     index($0, "Branch: ") == 1 || index($0, "Commits: ") == 1 || index($0, "Areas: ") == 1 {
       k = $0; sub(/:.*/, "", k)
       v = $0; sub(/^[^:]*: /, "", v); sub(/[ \t]+$/, "", v)
       if (!(k in seen)) { seen[k] = 1; val[k] = v }
     }
-    END { printf("%s\t%s\t%s\n", val["Branch"], val["Commits"], val["Areas"]) }' "$1"
+    END {
+      # Never an empty field: tab is IFS whitespace, so bash would swallow one
+      # and shift every later value left, making the run blame the wrong field.
+      printf("%s\t%s\t%s\n",
+             val["Branch"]  == "" ? none : val["Branch"],
+             val["Commits"] == "" ? none : val["Commits"],
+             val["Areas"]   == "" ? none : val["Areas"]) }' "$1"
 }
 
 PROBLEMS=0
@@ -77,6 +83,9 @@ for f in docs/handoff/*.md; do
   IFS='	' read -r raw_branch raw_commits areas <<EOF
 $(read_legacy_header "$f")
 EOF
+  [ "$raw_branch" = "$RELEVIO_NONE" ] && raw_branch=""
+  [ "$raw_commits" = "$RELEVIO_NONE" ] && raw_commits=""
+  [ "$areas" = "$RELEVIO_NONE" ] && areas=""
   if [ -z "$raw_branch" ] || [ -z "$raw_commits" ]; then
     echo "  PROBLEM   ${f##*/}: no Branch or no Commits line in the header; this is not a pre-v0.22 handoff, fix it by hand" >&2
     PROBLEMS=$((PROBLEMS + 1)); continue

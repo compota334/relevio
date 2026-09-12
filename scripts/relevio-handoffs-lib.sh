@@ -22,6 +22,14 @@
 # what the /handoff command documents.
 RELEVIO_FIELDS="Session Date Dev Branch Commits Areas Resume Topics Summary"
 
+# INVARIANT for every tab-separated record in these scripts: NO FIELD IS EVER
+# EMPTY. Tab is an IFS *whitespace* character, so bash's `read` collapses runs
+# of tabs into one delimiter and silently shifts every later field left. A
+# record with an empty field is therefore misread, not merely blank. Where a
+# value can legitimately be absent, emit RELEVIO_NONE and map it back after
+# reading.
+RELEVIO_NONE="-"
+
 # Byte ordering everywhere. `sort` collates differently per locale, so without
 # this two devs regenerating the same index on the same commits would produce
 # two different files and a pointless merge conflict.
@@ -85,23 +93,65 @@ resolve_main() {
 # handoffs live on each other's branches.
 # Sets HANDOFF_REFS to "path<TAB>commit" lines, sorted by path.
 scan_handoffs() {
-  local worktree
-  worktree="$( cd "$TOP" && ls docs/handoff/*.md 2>/dev/null || true )"
+  local worktree pairs wt
+  worktree="$( cd "$TOP" && ls docs/handoff/*.md 2>/dev/null | grep -E '^docs/handoff/[0-9]{4}-[0-9]{2}-[0-9]{2}_[^/]+\.md$' || true )"
+
+  # Every handoff at the TIP of every ref, as "path<TAB>blob".
+  #
+  # Tips, not history: an older version of a handoff is superseded by the
+  # branch that carries it, so walking history would resurrect pre-edit copies
+  # as if they were separate sessions.
+  #
+  # Per ref rather than per path: two devs on two branches routinely choose the
+  # same filename, since it is only the date plus a title slug and neither can
+  # see the other's branch. Collapsing by path would drop one of those
+  # sessions, and with it its whole lane, which is the one thing this index
+  # must never do. Deduping by (path, blob) instead means the same handoff seen
+  # from five refs collapses to one row, while two different handoffs sharing a
+  # filename both survive, told apart by their Branch and Dev columns.
+  # ONE ref per branch NAME, remote-tracking preferred (branch_tip's rule, for
+  # the same reason: the remote is what the team can see). Scanning both
+  # refs/heads/x and refs/remotes/origin/x would resurrect the older side of a
+  # stale local branch as though it were a second session.
+  pairs="$(
+    { git for-each-ref --format='%(refname:short)' refs/heads
+      git for-each-ref --format='%(refname:short)' refs/remotes/origin | sed 's|^origin/||'
+    } 2>/dev/null | sort -u \
+      | while IFS= read -r b; do
+          [ -n "$b" ] && [ "$b" != HEAD ] || continue
+          r="$(branch_tip "$b")"
+          [ -n "$r" ] || continue
+          git ls-tree -r "$r" -- docs/handoff/ 2>/dev/null \
+            | awk '$2 == "blob" { oid = $3; sub(/^[^	]*	/, ""); print $0 "	" oid }'
+        done \
+      | grep -E '^docs/handoff/[0-9]{4}-[0-9]{2}-[0-9]{2}_[^/]+\.md	' || true
+  )"
+
+  # A handoff being written right now exists only in the working tree:
+  # /handoff regenerates the index before it commits. Its source field holds
+  # the sentinel, never an empty string (see the RELEVIO_NONE invariant).
+  # Each line is "path<TAB>source<TAB>blob": source is the sentinel for the
+  # working tree and a blob oid for a ref, while the third column is always the
+  # content hash, which is what the dedupe below keys on.
+  wt=""
+  if [ -n "$worktree" ]; then
+    wt="$(paste -d'	' \
+      <(printf '%s\n' "$worktree" | sed "s|\$|	$RELEVIO_NONE|") \
+      <(cd "$TOP" && printf '%s\n' "$worktree" | git hash-object --stdin-paths))"
+  fi
+
+  # Working-tree entries first, so a handoff present on disk is read from disk
+  # rather than from whatever a ref happens to hold.
+  # Working-tree entries first, so identical content on disk wins over a ref
+  # copy and is read from disk. Note what is NOT done here: a path present in
+  # the working tree does not suppress OTHER content at the same path, because
+  # that other content may be a different dev's session under the same name.
   HANDOFF_REFS="$(
-    {
-      git log --all --format='%H' --name-only --diff-filter=d -- 'docs/handoff/*.md' 2>/dev/null \
-        | awk '
-            # Commit lines have no slash; path lines do. Newest first, so the
-            # first sighting of a path is the commit to read it from.
-            NF && $0 !~ /\// { c = $0; next }
-            NF && !($0 in seen) { seen[$0] = 1; print $0 "\t" c }'
-      # A handoff being written right now exists only in the working tree:
-      # /handoff regenerates the index before it commits.
-      printf '%s\n' "$worktree" | awk 'NF { print $0 "\t" }'
-    } | grep -E '^docs/handoff/[0-9]{4}-[0-9]{2}-[0-9]{2}_[^/]+\.md	' \
-      | sort -u -t'	' -k1,1 || true
-    # `|| true`: a project with no handoffs yet is not an error, but grep exits
-    # 1 on no match and the callers run under `set -o pipefail`.
+    { [ -n "$wt" ] && printf '%s\n' "$wt"
+      [ -n "$pairs" ] && printf '%s\n' "$pairs" | awk -F'	' 'NF == 2 { print $1 "	" $2 "	" $2 }'
+      true; } \
+      | awk -F'	' 'NF == 3 && $3 != "" && !seen[$1 FS $3]++ { print $1 "	" $2 }' \
+      | sort -t'	' -k1,1 -s
   )"
 }
 
@@ -189,27 +239,58 @@ EOF
 # (which starts with the date, so it is chronological). Any parse failure
 # aborts the whole load: a partial catalog would silently drop a session.
 load_catalog() {
-  local p c content rec
+  local p c content out rec ident idents="" ok="" failed="" bad=""
   scan_handoffs
   CATALOG=""
   CATALOG_COUNT=0
   [ -n "$HANDOFF_REFS" ] || return 0
   while IFS='	' read -r p c; do
     [ -n "$p" ] || continue
-    # Read first, parse second: chaining them in a pipe would run the parser
-    # on empty input after a read failure and print a second, bogus error.
-    if [ -n "$c" ] && [ ! -f "$TOP/$p" ]; then
-      content="$(git show "$c:$p")" || exit 2
-    else
+    if [ "$c" = "$RELEVIO_NONE" ]; then
       content="$(cat "$TOP/$p")" || exit 2
+    else
+      content="$(git cat-file blob "$c")" || exit 2
     fi
-    rec="$(printf '%s\n' "$content" | parse_header "$p")" || exit 2
+    # parse_header prints the record on stdout OR the reason on stderr, never
+    # both, so one capture serves for either outcome.
+    # An `if` condition, not a bare assignment: under `set -e` a failing
+    # command substitution would abort the whole run before the failure could
+    # be judged.
+    if out="$(printf '%s\n' "$content" | parse_header "$p" 2>&1)"; then
+      :
+    else
+      # Not fatal yet. The same handoff can sit at several branch tips, and an
+      # older branch may still carry a pre-v0.22 copy of a session that has
+      # since been migrated. Blocking on that would let one stale branch break
+      # the index for the whole team. It only becomes an error if NO copy of
+      # this file parses anywhere.
+      case "$failed" in *"<$p>"*) ;; *) failed="$failed<$p>"; bad="$bad$p	$out
+" ;; esac
+      continue
+    fi
+    rec="$out"
+    # A session is identified by its date, its conversation name and its dev.
+    # Two devs who happen to choose the same filename on different branches
+    # differ here and both belong in the catalog; the same session found at
+    # five branch tips, or in a pre- and a post-migration copy, does not.
+    ident="$(printf '%s' "$rec" | cut -f2,3,4)"
+    case "$idents" in *"<$ident>"*) continue ;; esac
+    idents="$idents<$ident>"
+    ok="$ok<$p>"
     CATALOG="${CATALOG}${rec}
 "
     CATALOG_COUNT=$((CATALOG_COUNT + 1))
   done <<EOF
 $HANDOFF_REFS
 EOF
+  # A file that failed to parse everywhere it exists is a real malformed
+  # handoff: report it with the parser's own words and write nothing.
+  if [ -n "$bad" ]; then
+    printf '%s' "$bad" | while IFS='	' read -r p out; do
+      case "$ok" in *"<$p>"*) ;; *) echo "$out" >&2; echo "FATAL" ;; esac
+    done | grep -q FATAL && exit 2
+  fi
+  return 0
 }
 
 # --- branches ---------------------------------------------------------------

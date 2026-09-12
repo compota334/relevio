@@ -721,6 +721,7 @@ check "README: no longer lists relevio.md as an installed file" \
 # surface, and who is on it right now".
 IDX="$REPO/scripts/relevio-index.sh"
 TRC="$REPO/scripts/relevio-trace.sh"
+MIG="$REPO/scripts/relevio-migrate.sh"
 d="$(team_fixture)"
 idx="$d/docs/handoff/INDEX.md"
 
@@ -894,6 +895,72 @@ check "index: ... and its unmerged handoff leaves the catalog with it" \
   "$(catalog_of "$idx" | grep -c '2026-09-03_feat-open.md')" "0"
 rm -rf "$d"
 
+# --- Case 12d: records survive an empty field, and sessions survive a name --
+# Tab is an IFS *whitespace* character, so bash collapses runs of tabs and an
+# empty field shifts every later one left. Every tab-separated record in these
+# scripts therefore uses a sentinel instead of an empty value. Both cases below
+# were real bugs that this pins.
+d8="$(team_fixture)"
+# A handoff whose commit range no longer resolves must be REPORTED, not
+# dropped: its empty range field used to swallow the note and skip the row.
+write_handoff "$d8" 2026-09-05_rebased.md "05-09-26 rebased" NICO main \
+  "deadbee..f00dcaf" src "history was rewritten under it"
+out="$( (cd "$d8" && bash "$TRC" src) 2>&1 )"
+check "trace: a handoff whose range is gone is reported, not skipped" \
+  "$(contains "$out" '2026-09-05_rebased.md')" "yes"
+check "trace: ... and says why its commit count is unknown" \
+  "$(contains "$out" 'range unresolvable')" "yes"
+rm "$d8/docs/handoff/2026-09-05_rebased.md"
+
+# Two devs on two branches pick the same filename: it is only a date plus a
+# title slug, and neither can see the other's branch. Both sessions must
+# survive, and so must both lanes.
+git -C "$d8" checkout -q -b dup-a main
+write_handoff "$d8" 2026-09-06_same.md "06-09-26 ana" ANA dup-a none none "sesion de ANA"
+git -C "$d8" add -A >/dev/null 2>&1; git -C "$d8" commit -qm dup-a >/dev/null 2>&1
+git -C "$d8" push -q origin dup-a >/dev/null 2>&1
+git -C "$d8" checkout -q -b dup-b main
+write_handoff "$d8" 2026-09-06_same.md "06-09-26 juan" JUAN dup-b none none "sesion de JUAN"
+git -C "$d8" add -A >/dev/null 2>&1; git -C "$d8" commit -qm dup-b >/dev/null 2>&1
+git -C "$d8" push -q origin dup-b >/dev/null 2>&1
+git -C "$d8" checkout -q main; git -C "$d8" fetch -q origin
+( cd "$d8" && bash "$IDX" >/dev/null 2>&1 )
+idx8="$d8/docs/handoff/INDEX.md"
+check "index: two devs sharing a filename both keep their session" \
+  "$(catalog_of "$idx8" | grep -c '2026-09-06_same.md')" "2"
+check "index: ... and both lanes are on the board" \
+  "$(board_of "$idx8" | grep -c '^| `dup-')" "2"
+# The same session seen from several branch tips is still ONE row: dup-a is
+# also reachable from its own remote, and main's handoffs from every branch.
+check "index: the same handoff on many refs is still one row" \
+  "$(catalog_of "$idx8" | grep -c '2026-09-01_base.md')" "1"
+
+# A stale branch carrying a pre-v0.22 copy of a session that has since been
+# migrated must not break the index for everyone.
+git -C "$d8" checkout -q -b stale main
+printf 'Session: 01-09-26 base\nDate: 2026-09-01\nDev: NICO\nBranch: main (via worktree)\nCommits: none\nResume: r\nTopics: t\nSummary: base session\n\nOld.\n' \
+  > "$d8/docs/handoff/2026-09-01_base.md"
+git -C "$d8" add -A >/dev/null 2>&1; git -C "$d8" commit -qm stale >/dev/null 2>&1
+git -C "$d8" checkout -q main
+( cd "$d8" && bash "$IDX" >/dev/null 2>&1 )
+check "index: a stale branch with a pre-v0.22 copy does not break the index" "$?" "0"
+check "index: ... and the migrated copy is the one catalogued" \
+  "$(catalog_of "$idx8" | grep -c '2026-09-01_base.md')" "1"
+rm -rf "$d8"
+
+# The tolerant reader in the migration obeys the same invariant: a header
+# missing one field must not shift the others and blame the wrong one.
+d9="$(fixture '')"
+mkdir -p "$d9/docs/handoff"
+printf 'Session: s\nDate: 2026-08-01\nDev: N\nCommits: abc1234..def5678\nAreas: src\nResume: r\nTopics: t\nSummary: s\n\nB.\n' \
+  > "$d9/docs/handoff/2026-08-01_nobranch.md"
+out="$( (cd "$d9" && bash "$MIG" --dry-run) 2>&1 )"
+check "migrate: a header with no Branch line says so" \
+  "$(contains "$out" 'no Branch or no Commits line')" "yes"
+check "migrate: ... instead of blaming the Commits value as a branch name" \
+  "$(contains "$out" 'Branch starts with "abc1234')" "no"
+rm -rf "$d9"
+
 # --- Case 12a: finding the scripts on a host that hides CLAUDE_PLUGIN_ROOT --
 # Measured on ZCode (2026-09, plugin install): CLAUDE_PLUGIN_ROOT reaches
 # plugin HOOKS but is UNSET in the shell the agent's Bash tool opens, and ZCode
@@ -1026,7 +1093,6 @@ rm -rf "$c2" "$d7"
 # Branch could carry prose and Commits a "(N commits)" suffix. There is no
 # tolerant parser for that: there is one migration, run once per repo, and
 # after it there is a single header format.
-MIG="$REPO/scripts/relevio-migrate.sh"
 d="$(fixture '')"
 mkdir -p "$d/docs/handoff" "$d/src" "$d/lib"
 echo a > "$d/src/a.txt"; echo b > "$d/lib/b.txt"

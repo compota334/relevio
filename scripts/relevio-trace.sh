@@ -64,8 +64,14 @@ while IFS='	' read -r p _date _session dev branch _areas commits _rest; do
   esac
   range="$(range_of "$commits")"
   # The hashes no longer resolve. Say so rather than silently omitting a
-  # session that may well have touched this path.
-  [ -n "$range" ] || note="range unresolvable (rebased or squashed?)"
+  # session that may well have touched this path. The sentinel matters: tab is
+  # an IFS whitespace character, so an empty field here would be swallowed on
+  # the way back in and shift the note into range, which silently discarded
+  # exactly the row this branch exists to print.
+  if [ -z "$range" ]; then
+    range="$RELEVIO_NONE"
+    note="range unresolvable (rebased or squashed?)"
+  fi
   ROWS="${ROWS}${p##*/}	${dev}	${branch}	${range}	${note}
 "
 done <<EOF
@@ -76,7 +82,7 @@ trace_one() {
   local p="$1" file dev branch range note hits b rows="" open_rows=""
   while IFS='	' read -r file dev branch range note; do
     [ -n "$file" ] || continue
-    if [ -z "$range" ]; then
+    if [ "$range" = "$RELEVIO_NONE" ]; then
       rows="${rows}handoff	${branch}	${file}	${dev}	?	${note}
 "
       continue

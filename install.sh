@@ -12,7 +12,7 @@
 # leftovers so you are not left running two copies of the rules.
 set -euo pipefail
 
-VERSION="0.22.1"
+VERSION="0.22.2"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh session-start.sh handoff.md kickoff.md revisit.md INDEX.md)
 # Since v0.22 docs/handoff/INDEX.md is generated rather than hand-edited, so
@@ -347,15 +347,23 @@ fi
 # never abort an install, and the installer never runs the conversion itself:
 # rewriting a project's handoff history is the user's decision, not a side
 # effect of an upgrade.
-if ! why="$(bash .claude/scripts/relevio-index.sh --stdout 2>&1 >/dev/null)"; then
+# Only when there is something to index. A brand new project has no handoffs,
+# and telling it that its history needs converting would be a lie told at the
+# worst possible moment.
+if ls docs/handoff/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]_*.md >/dev/null 2>&1 \
+   && ! why="$(bash .claude/scripts/relevio-index.sh --stdout 2>&1 >/dev/null)"; then
+  # The reason is quoted rather than assumed: a stale header is the common
+  # cause, but so is a repo with no origin/main yet, and the two need
+  # different fixes.
   info "NOTE: this project's handoffs cannot be indexed yet. The generator says:
           $(printf '%s' "$why" | head -1)
-        A header written by relevio v0.21 or older is the usual cause, and it
-        is converted once, from this project's root:
+        If that line names a handoff file and a field, its header was written
+        by relevio v0.21 or older. Convert this project once, from its root:
           bash .claude/scripts/relevio-migrate.sh   # updates the handoff headers
           bash .claude/scripts/relevio-index.sh     # rebuilds INDEX.md
         Review the diff and commit it. Handoffs that live on other branches
-        are migrated by running the same pair on each of those branches."
+        are migrated by running the same pair on each of those branches.
+        If it names a ref instead, fetch or set RELEVIO_MAIN as it says."
 fi
 
 # --- 5. Private mode (optional): keep the methodology out of the repo -------
