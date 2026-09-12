@@ -33,12 +33,76 @@ yesno() { [ "$1" -eq 0 ] && echo yes || echo no; }
 fixture() {
   local dir; dir="$(mktemp -d)"
   git -C "$dir" init -q .
+  # Pin the initial branch name: the host's git may default to master, and
+  # these fixtures write `Branch: main` into their handoff headers.
+  git -C "$dir" symbolic-ref HEAD refs/heads/main
+  # Point git at an empty hooks directory: the developer's own global hooks
+  # (a commit-author guard, for instance) must not be able to change what
+  # these fixtures do.
+  mkdir -p "$dir/.nohooks"
+  git -C "$dir" config core.hooksPath "$dir/.nohooks"
   git -C "$dir" config user.email test@relevio.local
   git -C "$dir" config user.name relevio-test
   git -C "$dir" config commit.gpgsign false
   [ -n "${1:-}" ] && printf '%s' "$1" > "$dir/CLAUDE.md"
   echo "$dir"
 }
+
+# A team repo: a bare origin, main, one MERGED feature branch and one OPEN
+# one, each closing a session with a handoff. This is the shape the lane board
+# and the trace exist for, and the only way to test them is to build it.
+# core.hooksPath is pointed at an empty directory so the developer's own global
+# git hooks (a commit-author guard, for instance) cannot block the fixture.
+team_fixture() {
+  local d r
+  d="$(mktemp -d)"; r="$d/repo"
+  git init -q --bare "$d/origin.git"
+  git init -q "$r"
+  git -C "$r" symbolic-ref HEAD refs/heads/main
+  mkdir -p "$d/nohooks"
+  git -C "$r" config core.hooksPath "$d/nohooks"
+  git -C "$r" config user.email test@relevio.local
+  git -C "$r" config user.name relevio-test
+  git -C "$r" config commit.gpgsign false
+  git -C "$r" remote add origin "$d/origin.git"
+  mkdir -p "$r/src" "$r/lib" "$r/docs/handoff"
+
+  echo a > "$r/src/a.txt"
+  git -C "$r" add -A; git -C "$r" commit -qm base
+  write_handoff "$r" 2026-09-01_base.md "01-09-26 base" NICO main \
+    "$(git -C "$r" rev-parse --short HEAD)..$(git -C "$r" rev-parse --short HEAD)" src "base session"
+  git -C "$r" add -A; git -C "$r" commit -qm "handoff base"; git -C "$r" push -q origin main
+
+  git -C "$r" checkout -q -b feat-merged
+  echo b >> "$r/src/a.txt"; git -C "$r" commit -qam "feat merged work"
+  write_handoff "$r" 2026-09-02_feat-merged.md "02-09-26 feat merged" ANA feat-merged \
+    "$(git -C "$r" rev-parse --short HEAD)..$(git -C "$r" rev-parse --short HEAD)" src "merged session"
+  git -C "$r" add -A; git -C "$r" commit -qm "handoff feat-merged"
+  git -C "$r" push -q origin feat-merged
+  git -C "$r" checkout -q main
+  git -C "$r" merge -q --no-ff -m "merge feat-merged" feat-merged
+  git -C "$r" push -q origin main
+
+  git -C "$r" checkout -q -b feat-open main
+  echo c > "$r/lib/b.txt"; git -C "$r" add -A; git -C "$r" commit -qm "open work"
+  write_handoff "$r" 2026-09-03_feat-open.md "03-09-26 feat open" JUAN feat-open \
+    "$(git -C "$r" rev-parse --short HEAD)..$(git -C "$r" rev-parse --short HEAD)" lib "open session"
+  git -C "$r" add -A; git -C "$r" commit -qm "handoff feat-open"
+  git -C "$r" push -q origin feat-open
+  git -C "$r" checkout -q main
+  git -C "$r" fetch -q origin
+  echo "$r"
+}
+
+# write_handoff <repo> <file> <session> <dev> <branch> <commits> <areas> <summary>
+write_handoff() {
+  printf 'Session: %s\nDate: %s\nDev: %s\nBranch: %s\nCommits: %s\nAreas: %s\nResume: claude --resume test\nTopics: t\nSummary: %s\n\nBody.\n' \
+    "$3" "$(echo "$2" | cut -c1-10)" "$4" "$5" "$6" "$7" "$8" > "$1/docs/handoff/$2"
+}
+
+# The board section of a generated index, and the catalog section.
+board_of()   { sed -n '/^## Active lanes/,/^## Catalog/p' "$1"; }
+catalog_of() { sed -n '/^## Catalog/,$p' "$1" | grep '^| 20' || true; }
 
 # Is the working tree clean for the given path?
 diff_is_empty() { [ -z "$(git -C "$1" diff -- "$2")" ] && echo empty || echo dirty; }
@@ -588,6 +652,147 @@ check "README: documents the injected messages" \
   "$(grep -c 'What relevio says to the agent' "$REPO/README.md")" "1"
 check "README: no longer lists relevio.md as an installed file" \
   "$(grep -c '| \`relevio.md\`' "$REPO/README.md")" "0"
+
+# --- Case 12: the lane board, the catalog and the surface trace -------------
+# relevio's original model was one timeline: "the latest handoff" was global.
+# With a team on several branches that answer is somebody else's session. The
+# index is now GENERATED from every handoff on every ref, split into the lanes
+# that are still open and the full catalog; the trace answers "who was on this
+# surface, and who is on it right now".
+IDX="$REPO/scripts/relevio-index.sh"
+TRC="$REPO/scripts/relevio-trace.sh"
+d="$(team_fixture)"
+idx="$d/docs/handoff/INDEX.md"
+
+( cd "$d" && bash "$IDX" >/dev/null 2>&1 )
+check "index: exits 0 on a healthy team repo" "$?" "0"
+check "index: the open branch is the only lane on the board" \
+  "$(board_of "$idx" | grep -c '^| `feat-open`')" "1"
+check "index: the merged branch is absent from the board" \
+  "$(board_of "$idx" | grep -c 'feat-merged')" "0"
+check "index: main is never a lane" \
+  "$(board_of "$idx" | grep -c '^| `main`')" "0"
+# Two commits ahead: the work commit and the handoff commit.
+check "index: the lane reports how far ahead of main it is" \
+  "$(board_of "$idx" | awk -F'|' '/feat-open/ { gsub(/ /, "", $6); print $6 }')" "2"
+check "index: the lane names the dev who owns it" \
+  "$(board_of "$idx" | grep -c 'JUAN')" "1"
+check "index: the catalog holds every session, in filename order" \
+  "$(catalog_of "$idx" | awk -F'|' '{ gsub(/ /, "", $4); print $4 }' | paste -sd, -)" \
+  "2026-09-01_base.md,2026-09-02_feat-merged.md,2026-09-03_feat-open.md"
+# The point of reading handoffs across refs: main is checked out, so the open
+# branch's handoff is not in this working tree at all, yet it is catalogued.
+check "index: a handoff living only on another branch is still catalogued" \
+  "$(yesno "$([ -f "$d/docs/handoff/2026-09-03_feat-open.md" ]; echo $?)")" "no"
+check "index: ... and its row carries that branch" \
+  "$(catalog_of "$idx" | grep -c '2026-09-03_feat-open.md | JUAN | `feat-open`')" "1"
+
+# /handoff regenerates the index BEFORE committing, so the handoff it just
+# wrote exists only in the working tree. It must still be catalogued.
+write_handoff "$d" 2026-09-04_uncommitted.md "04-09-26 uncommitted" NICO main none none "not committed yet"
+( cd "$d" && bash "$IDX" >/dev/null 2>&1 )
+check "index: an uncommitted handoff in the working tree is catalogued" \
+  "$(catalog_of "$idx" | grep -c '2026-09-04_uncommitted.md')" "1"
+rm "$d/docs/handoff/2026-09-04_uncommitted.md"
+
+# Idempotency: the generated file carries no timestamp, so regenerating it
+# without new sessions must produce a byte-identical file. A file that always
+# reports a change is a file whose diff people stop reading.
+( cd "$d" && bash "$IDX" >/dev/null 2>&1 )
+git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm "index" >/dev/null 2>&1
+( cd "$d" && bash "$IDX" >/dev/null 2>&1 )
+check "index: regenerating without new sessions leaves no diff" \
+  "$(diff_is_empty "$d" docs/handoff/INDEX.md)" "empty"
+
+# Fail-loud: a malformed header aborts the whole run naming the file and the
+# field, and leaves the previous index untouched. A partial index would
+# silently drop a session, which is the one thing this file must never do.
+before="$(cat "$idx")"
+write_handoff "$d" 2026-09-05_bad.md "05-09-26 bad" NICO "main (via worktree)" none none "prose in Branch"
+err="$( (cd "$d" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
+check "index: prose in Branch fails loud" "$rc" "2"
+check "index: ... naming the file and the field" \
+  "$(printf '%s' "$err" | grep -c '2026-09-05_bad.md: Branch:')" "1"
+check "index: ... and leaves INDEX.md untouched" \
+  "$(yesno "$([ "$before" = "$(cat "$idx")" ]; echo $?)")" "yes"
+rm "$d/docs/handoff/2026-09-05_bad.md"
+
+write_handoff "$d" 2026-09-05_bad.md "05-09-26 bad" NICO main "abc1234..def5678 (10 commits)" none "suffix in Commits"
+err="$( (cd "$d" && bash "$IDX" >/dev/null) 2>&1 )"
+check "index: a \"(N commits)\" suffix fails loud and points at the migration" \
+  "$(printf '%s' "$err" | grep -c 'relevio-migrate.sh')" "1"
+rm "$d/docs/handoff/2026-09-05_bad.md"
+
+# A pre-v0.22 header has no Areas field. The error must say so in those words,
+# because the fix is a migration, not a hand edit.
+printf 'Session: s\nDate: 2026-09-05\nDev: N\nBranch: main\nCommits: none\nResume: r\nTopics: t\nSummary: s\n\nB.\n' \
+  > "$d/docs/handoff/2026-09-05_legacy.md"
+err="$( (cd "$d" && bash "$IDX" >/dev/null) 2>&1 )"
+check "index: a pre-v0.22 header names the migration script" \
+  "$(printf '%s' "$err" | grep -c 'predates relevio v0.22')" "1"
+rm "$d/docs/handoff/2026-09-05_legacy.md"
+
+# The integration branch is never guessed. A repo that HAS commits but no
+# origin cannot have its lanes measured, so it stops and says so.
+d2="$(fixture '')"
+mkdir -p "$d2/docs/handoff"
+write_handoff "$d2" 2026-09-01_solo.md "01-09-26 solo" NICO main none none "solo"
+git -C "$d2" add -A >/dev/null 2>&1; git -C "$d2" commit -qm first >/dev/null 2>&1
+err="$( (cd "$d2" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
+check "index: no origin/main fails loud instead of guessing" "$rc" "2"
+check "index: ... and says which ref it looked for" \
+  "$(printf '%s' "$err" | grep -c 'refs/remotes/origin/main')" "1"
+( cd "$d2" && RELEVIO_MAIN=main bash "$IDX" >/dev/null 2>&1 )
+check "index: RELEVIO_MAIN points it at a repo with no remote" "$?" "0"
+rm -rf "$d2"
+
+# A repository with no commits at all is a real state, not a missing ref: the
+# very first session of a brand new repo must be able to close.
+d3="$(fixture '')"
+mkdir -p "$d3/docs/handoff"
+write_handoff "$d3" 2026-09-01_first.md "01-09-26 first" NICO main none none "the very first session"
+( cd "$d3" && bash "$IDX" >/dev/null 2>&1 )
+check "index: a repo with no commits yet still builds its catalog" "$?" "0"
+check "index: ... and the board says why it is empty" \
+  "$(board_of "$d3/docs/handoff/INDEX.md" | grep -c 'no commits yet')" "1"
+check "index: ... with the first session listed" \
+  "$(catalog_of "$d3/docs/handoff/INDEX.md" | grep -c '2026-09-01_first.md')" "1"
+rm -rf "$d3"
+
+# The trace. src was touched by two sessions, both merged: no collision risk.
+out="$( cd "$d" && bash "$TRC" src 2>&1 )"
+check "trace: src reports both prior sessions" \
+  "$(printf '%s' "$out" | grep -c '^| handoff ')" "2"
+check "trace: both are marked merged" \
+  "$(printf '%s' "$out" | grep -c 'merged |')" "2"
+check "trace: src carries no open work" \
+  "$(printf '%s' "$out" | grep -c 'OPEN WORK')" "0"
+# lib is the dangerous one: an unmerged branch is sitting on it right now.
+out="$( cd "$d" && bash "$TRC" lib 2>&1 )"
+check "trace: lib flags the unmerged branch as a collision risk" \
+  "$(printf '%s' "$out" | grep -c 'OPEN WORK | `feat-open`')" "1"
+check "trace: ... and names who is in there" \
+  "$(printf '%s' "$out" | grep -c 'JUAN')" "2"
+# Every fixture range is a single commit (first == last). git's a..b excludes
+# a, so without the first^..last resolution these would all report nothing.
+check "trace: an inclusive single-commit range still reports its handoff" \
+  "$(printf '%s' "$out" | grep -c '^| handoff | `feat-open`')" "1"
+out="$( cd "$d" && bash "$TRC" nothing/here 2>&1 )"
+check "trace: an untouched path says so instead of printing an empty table" \
+  "$(printf '%s' "$out" | grep -c 'No handoff and no open branch touched')" "1"
+
+# A branch deleted before merging takes its handoff with it: git can no longer
+# reach the file, so the row is gone. This is the documented trade-off of
+# deriving the index from git rather than hand-maintaining it. Last, because
+# it destroys the fixture's third session.
+git -C "$d" push -q origin --delete feat-open >/dev/null 2>&1
+git -C "$d" branch -qD feat-open >/dev/null 2>&1
+( cd "$d" && bash "$IDX" >/dev/null 2>&1 )
+check "index: a branch deleted before merging drops off the board" \
+  "$(board_of "$idx" | grep -c 'No active lanes')" "1"
+check "index: ... and its unmerged handoff leaves the catalog with it" \
+  "$(catalog_of "$idx" | grep -c '2026-09-03_feat-open.md')" "0"
+rm -rf "$d"
 
 echo
 if [ "$FAILURES" -eq 0 ]; then
