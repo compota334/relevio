@@ -742,6 +742,8 @@ check "index: main is never a lane" \
 # Two commits ahead: the work commit and the handoff commit.
 check "index: the lane reports how far ahead of main it is" \
   "$(board_of "$idx" | awk -F'|' '/feat-open/ { gsub(/ /, "", $6); print $6 }')" "2"
+check "index: the lane shows the handoff once, not the date twice" \
+  "$(board_of "$idx" | grep -c '2026-09-03 2026-09-03_')" "0"
 check "index: the lane names the dev who owns it" \
   "$(board_of "$idx" | grep -c 'JUAN')" "1"
 check "index: the catalog holds every session, in filename order" \
@@ -810,6 +812,13 @@ check "index: a pre-v0.22 header names the migration script" \
   "$(printf '%s' "$err" | grep -c 'predates relevio v0.22')" "1"
 rm "$d/docs/handoff/2026-09-05_legacy.md"
 
+# A handoff that is only a header is bare, not malformed.
+printf 'Session: s\nDate: 2026-09-05\nDev: N\nBranch: main\nCommits: none\nAreas: none\nResume: r\nTopics: t\nSummary: no body at all' \
+  > "$d/docs/handoff/2026-09-05_bare.md"
+( cd "$d" && bash "$IDX" >/dev/null 2>&1 )
+check "index: a handoff with no body is accepted, not called malformed" "$?" "0"
+rm "$d/docs/handoff/2026-09-05_bare.md"
+
 # The integration branch is never guessed. A repo that HAS commits but no
 # origin cannot have its lanes measured, so it stops and says so.
 d2="$(fixture '')"
@@ -824,6 +833,24 @@ check "index: ... saying this repository has no remote" \
 # confused a real user: it has to explain what a main branch is, not assume it.
 check "index: the main-branch error explains what a main branch is" \
   "$(contains "$err" 'holds')" "yes"
+# relevio's own close-out detaches worktree HEADs, so a detached checkout is a
+# normal state here. `rev-parse --abbrev-ref HEAD` answers "HEAD" there, and a
+# copy-pasted `git config relevio.main HEAD` would then verify happily and
+# compare every branch against wherever the checkout stands that day.
+git -C "$d2" checkout -q --detach HEAD
+err2="$( (cd "$d2" && env -u RELEVIO_MAIN bash "$IDX" >/dev/null) 2>&1 )"
+check "index: on a detached HEAD it does not offer to record HEAD" \
+  "$(contains "$err2" 'relevio.main HEAD')" "no"
+check "index: ... and says why it cannot suggest a branch" \
+  "$(contains "$err2" 'not on a branch right now')" "yes"
+# And the value is refused however it was recorded.
+git -C "$d2" config relevio.main HEAD
+err2="$( (cd "$d2" && env -u RELEVIO_MAIN bash "$IDX" >/dev/null) 2>&1 )"
+check "index: a recorded relevio.main of HEAD is refused, not silently used" \
+  "$(contains "$err2" 'is not a branch at')" "yes"
+git -C "$d2" config --unset relevio.main
+git -C "$d2" checkout -q main
+
 check "index: ... and a repo with no remote is told to record its branch" \
   "$(contains "$err" 'git config relevio.main')" "yes"
 check "index: ... without being told to fetch a remote it does not have" \

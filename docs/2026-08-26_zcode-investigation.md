@@ -170,3 +170,19 @@ Two consequences relevio has to live with:
 This is a gap in ZCode, not in relevio. Worth filing with Z.ai as a feature
 request: a `zcode plugin` subcommand (list / install / update / remove) would
 let agents and CI manage plugins the way `claude plugin` does.
+
+## ZCode sometimes labels a fresh session `source=resume`
+
+Observed 2026-09-12: a session that started clean received the "REOPENED
+conversation" banner, which `session-start.sh` emits when the hook payload
+says `source=resume`. The hook is doing exactly what it is told; the
+classification comes from the host.
+
+The visible effect is that a brand new session is told to keep answers short
+and not start new work, which is the opposite of what it should do. There is
+nothing relevio can check against it: the payload is the only signal about how
+a session began, and second-guessing it would break real resumes, which is the
+case the banner exists for.
+
+If you see the banner on a session you just opened, say so and carry on
+normally. It is a host misclassification, not a state relevio is tracking.

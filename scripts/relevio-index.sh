@@ -79,7 +79,9 @@ HEAD
     printf '\nBranches with handoffs that still exist and are not yet merged into `%s`.\n\n' "$MAIN"
     echo '| Branch | Dev(s) | Last handoff | Areas | Ahead of main | Note |'
     echo '|--------|--------|--------------|-------|---------------|------|'
-    printf '%s\n' "$ROWS" | awk -F'\t' '{ printf("| `%s` | %s | %s %s | %s | %s | %s |\n", $1, $2, $3, $4, $5, $6, $7) }'
+    # Field 3 is the date, kept in the record because the rows are sorted by it,
+    # but not printed: the filename in field 4 already starts with it.
+    printf '%s\n' "$ROWS" | awk -F'\t' '{ printf("| `%s` | %s | %s | %s | %s | %s |\n", $1, $2, $4, $5, $6, $7) }'
   fi
   printf '\n## Catalog\n\n'
   if [ "$CATALOG_COUNT" -eq 0 ]; then

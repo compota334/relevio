@@ -325,7 +325,11 @@ git config relevio.main main
 ```
 
 Every later session uses it. relevio never guesses this: which branch the work
-integrates into is a decision, not something to infer from the branch list. A
+integrates into is a decision, not something to infer from the branch list. It
+also refuses `HEAD` and its relatives as an answer, whichever way they were
+supplied: they name wherever a checkout is standing right now, so the board
+would compare against a different commit each day. This matters here more than
+it sounds, because relevio's own close-out leaves worktrees on a detached HEAD. A
 one-off override is `--main <ref>` or the `RELEVIO_MAIN` environment variable,
 and both win over the recorded value.
 

@@ -79,6 +79,21 @@ resolve_main() {
     elif MAIN="$(git symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null)" && [ -n "$MAIN" ]; then
       : # origin/HEAD told us the default branch
     else
+      # `git branch --show-current` is empty on a detached HEAD, where
+      # `rev-parse --abbrev-ref HEAD` would hand back the literal string "HEAD"
+      # and invite the user to record it.
+      RELEVIO_BRANCH_HINT="$(git branch --show-current 2>/dev/null || true)"
+      if [ -n "$RELEVIO_BRANCH_HINT" ]; then
+        RELEVIO_HINT_NOTE="
+  (that is the branch you are on, and it is usually the right one.)
+"
+      else
+        RELEVIO_BRANCH_HINT="<the name of your main branch>"
+        RELEVIO_HINT_NOTE="
+  (this checkout is not on a branch right now, so relevio cannot suggest one:
+  put the name of your project's main branch there.)
+"
+      fi
       if [ -z "$(git remote 2>/dev/null)" ]; then
         # No remote at all, so "fetch first" would be useless advice. Tell it
         # to record its own integration branch once, in the repo.
@@ -91,10 +106,10 @@ resolve_main() {
   This repository has no remote, so there is nowhere to read it from. Say it
   once and every future session in this project will use the answer:
 
-    git config relevio.main $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
-
-  (that is your current branch, and it is usually the right one). For a single
-  run instead, pass --main <branch> or set RELEVIO_MAIN."
+    git config relevio.main $RELEVIO_BRANCH_HINT
+$RELEVIO_HINT_NOTE
+  That line is for a whole project. To answer for one run only, without
+  recording anything, add --main <branch> to the command instead."
       fi
       die "relevio needs to know this project's MAIN branch: the one that holds
   the finished work, which the others are eventually merged into. It looked for
@@ -106,9 +121,29 @@ resolve_main() {
 
     git config relevio.main origin/master
 
-  For a single run instead, pass --main <ref> or set RELEVIO_MAIN."
+  That line is for a whole project. To answer for one run only, without
+  recording anything, add --main <ref> to the command instead."
     fi
   fi
+  # HEAD and its relatives resolve fine, which is exactly the danger: they mean
+  # "wherever this checkout happens to be standing", so the board would compare
+  # every branch against a different commit each day and report merged/open at
+  # random. relevio's own close-out leaves worktrees on a detached HEAD, so this
+  # is a normal state here, not an exotic one. Refuse the value whichever of the
+  # three sources supplied it.
+  case "$MAIN" in
+    HEAD|HEAD[~^]*|@|@[~^]*)
+      die "relevio was told the main branch is '$MAIN', which is not a branch at
+  all: HEAD means whichever commit this checkout is standing on right now, and
+  that moves every time you switch branches. Comparing against it would report
+  work as finished or unfinished at random.
+
+  Name the branch itself, for example:
+
+    git config relevio.main main
+
+  (if it was recorded before, 'git config --unset relevio.main' clears it)." ;;
+  esac
   git rev-parse --verify -q "$MAIN^{commit}" >/dev/null \
     || die "integration branch '$MAIN' does not resolve to a commit. It came from $(
          [ -n "${1:-}" ] && echo '--main' \
@@ -215,7 +250,9 @@ parse_header() {
       # fail() exits; inside END that ends the program, and inside a rule it
       # jumps here, which is what this one guard catches.
       if (failed) exit 2
-      if (!done) fail("header block not terminated by a blank line")
+      # End of input ends the header just as a blank line does: a handoff that
+      # is only a header is bare, not malformed, and refusing it would mean
+      # reporting a missing newline as a broken file.
       for (i = 1; i <= n; i++)
         if (!(want[i] in seen)) {
           if (want[i] == "Areas")
