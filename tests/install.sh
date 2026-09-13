@@ -629,6 +629,63 @@ check "slash in session_id: off_notice still speaks" \
 # A haiku id carrying the 1M tag must resolve to the 1M window (the [1m]
 # group is matched before the haiku family row).
 cw_out="$(cw 150000 haiku1m 'claude-haiku-4-5[1m]')"
+# ZCode composes its payload model id from provider + model + reasoning effort,
+# so a real GLM-5.3 session arrives as "builtin:zai/GLM-5.3-max". The effort
+# suffix is not part of the model's identity (Z.ai documents low/high/max as
+# effort levels of one 1M-window model), and missing it cost real sessions
+# their percentage: they ran in raw-count and closed without ever seeing one.
+zmodel() {  # $1 = payload model -> the window line it produces
+  rm -f /tmp/claude-ctx-warn-relevio-test-$$-zm-*
+  printf '{"session_id":"relevio-test-%s-zm","model":"%s","transcript_path":"%s/tr.jsonl"}' "$$" "$1" "$zt2" \
+    | env -u CLAUDE_PLUGIN_ROOT RELEVIO_ZCODE_DB="$zdb2" bash "$REPO/hooks/context-warn.sh" \
+    | jq -r '.hookSpecificOutput.additionalContext // ""' \
+    | grep -oE '[0-9]+% of your context window|tokens of your context window' | head -1
+}
+if command -v python3 >/dev/null 2>&1; then
+  zbase="$(mktemp -d)"; zt2="$zbase/zcode-claude-hook-probe"; mkdir -p "$zt2"
+  : > "$zt2/tr.jsonl"; zdb2="$zbase/db.sqlite"
+  python3 - "$zdb2" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+con.execute('CREATE TABLE model_usage (session_id TEXT, t TEXT, model_id TEXT, computed_total_tokens INT)')
+con.execute("INSERT INTO model_usage VALUES ('relevio-test-zm', 't', 'GLM-5.3', 150000)")
+con.commit()
+PY
+  # The session_id in the db must match what zmodel sends.
+  python3 - "$zdb2" "relevio-test-$$-zm" "relevio-test-$$-dbg" <<'PY'
+import sqlite3, sys
+con = sqlite3.connect(sys.argv[1])
+for sid in sys.argv[2:]:
+    con.execute("INSERT INTO model_usage VALUES (?, 't', 'GLM-5.3', 150000)", (sid,))
+con.commit()
+PY
+  check "zcode model: a reasoning-effort suffix still resolves the window" \
+    "$(zmodel 'builtin:zai/GLM-5.3-max')" "15% of your context window"
+  check "zcode model: the plain id keeps working" \
+    "$(zmodel 'builtin:zai/GLM-5.3')" "15% of your context window"
+  check "zcode model: a provider prefix without builtin: also resolves" \
+    "$(zmodel 'zai/GLM-5.3-high')" "15% of your context window"
+  check "zcode model: the suffix does not drag a 200k model to 1M" \
+    "$(zmodel 'builtin:zai/GLM-4.6-max')" "75% of your context window"
+  # Stripping the effort level must not invent a window for an unknown model,
+  # nor touch a real variant suffix like -air.
+  check "zcode model: an unlisted model still falls to raw count" \
+    "$(zmodel 'builtin:zai/GLM-9.9-max')" "tokens of your context window"
+  check "zcode model: -air is a variant, not an effort level, and is left alone" \
+    "$(zmodel 'builtin:zai/GLM-4.5-air')" "tokens of your context window"
+  # RELEVIO_DEBUG answers the next model-string mystery in one run.
+  rm -f /tmp/claude-ctx-warn-relevio-test-$$-dbg-*
+  printf '{"session_id":"relevio-test-%s-dbg","model":"builtin:zai/GLM-5.3-max","transcript_path":"%s/tr.jsonl"}' "$$" "$zt2" \
+    | env -u CLAUDE_PLUGIN_ROOT RELEVIO_DEBUG=1 RELEVIO_ZCODE_DB="$zdb2" bash "$REPO/hooks/context-warn.sh" >/dev/null
+  dbg="$(cat "/tmp/claude-ctx-warn-relevio-test-$$-dbg-debug.log" 2>/dev/null)"
+  check "debug: RELEVIO_DEBUG records the payload model verbatim" \
+    "$(contains "$dbg" 'payload_model=builtin:zai/GLM-5.3-max')" "yes"
+  check "debug: ... and what it resolved to" \
+    "$(contains "$dbg" 'resolved_model="glm-5.3"')" "yes"
+  check "debug: ... and the window it picked" \
+    "$(contains "$dbg" 'limit=1000000')" "yes"
+  rm -rf "$zbase" /tmp/claude-ctx-warn-relevio-test-$$-zm-* /tmp/claude-ctx-warn-relevio-test-$$-dbg-*
+fi
 check "haiku[1m]: the 1M tag outranks the haiku 200k row" \
   "$(printf '%s' "$cw_out" | grep -q '15% of your context window' && echo yes || echo no)" "yes"
 if command -v python3 >/dev/null 2>&1; then
@@ -848,6 +905,15 @@ git -C "$d2" config relevio.main HEAD
 err2="$( (cd "$d2" && env -u RELEVIO_MAIN bash "$IDX" >/dev/null) 2>&1 )"
 check "index: a recorded relevio.main of HEAD is refused, not silently used" \
   "$(contains "$err2" 'is not a branch at')" "yes"
+# A reflog is a worse moving target than HEAD: it changes with every commit and
+# every switch, and it resolves without complaint. The upstream aliases must
+# keep working, since naming the tracked remote branch is a fine answer.
+for bad in 'HEAD@{1}' '@{1}' 'main@{1}'; do
+  git -C "$d2" config relevio.main "$bad"
+  err2="$( (cd "$d2" && env -u RELEVIO_MAIN bash "$IDX" >/dev/null) 2>&1 )"
+  check "index: a recorded relevio.main of $bad is refused" \
+    "$(contains "$err2" 'is not a branch at')" "yes"
+done
 git -C "$d2" config --unset relevio.main
 git -C "$d2" checkout -q main
 
@@ -989,6 +1055,9 @@ git -C "$d8" push -q origin dup-b >/dev/null 2>&1
 git -C "$d8" checkout -q main; git -C "$d8" fetch -q origin
 ( cd "$d8" && bash "$IDX" >/dev/null 2>&1 )
 idx8="$d8/docs/handoff/INDEX.md"
+git -C "$d8" branch -q --set-upstream-to=origin/main main 2>/dev/null
+check "index: an upstream alias is a fine answer, not a moving target" \
+  "$( (cd "$d8" && bash "$IDX" --main '@{u}' --stdout) >/dev/null 2>&1 && echo yes || echo no)" "yes"
 check "index: two devs sharing a filename both keep their session" \
   "$(catalog_of "$idx8" | grep -c '2026-09-06_same.md')" "2"
 check "index: ... and both lanes are on the board" \

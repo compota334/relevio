@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.22.7
+# relevio v0.22.8
 # relevio: context warning for the agent.
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
@@ -156,7 +156,21 @@ PY
 ) || off_notice "this is a ZCode session, but reading ZCode's usage database failed (${ZCODE_DB}), so context-window usage cannot be measured."
   # An empty result with a healthy db is the normal early-turn state (no
   # model call recorded yet): stay quiet, the next tool call retries.
-  MODEL="\"$(printf '%s' "$PAYLOAD_MODEL" | tr '[:upper:]' '[:lower:]' | sed 's|^builtin:zai/||; s|^builtin:||')\""
+  # ZCode composes its payload model id out of three things its own database
+  # keeps in separate columns: provider_id, model_id and variant. Undo that
+  # composition before the exact match, or a real GLM-5.3 session arrives as
+  # "glm-5.3-max", misses the table and silently loses its percentage.
+  #   - the provider prefix ("builtin:zai/", "builtin:", "zai/") is not part of
+  #     the model's identity;
+  #   - -low / -high / -max are REASONING EFFORT levels, not models. Z.ai's own
+  #     documentation (docs.z.ai/guides/llm/glm-5.3, read 2026-09-13) lists them
+  #     as effort levels of one model and gives GLM-5.3 a single 1M window, so
+  #     stripping the suffix reads the host's own concatenation back, it does
+  #     not guess at an unknown model.
+  # Anything left unrecognized still falls to RAW-COUNT, as before.
+  MODEL="\"$(printf '%s' "$PAYLOAD_MODEL" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's#^builtin:##; s#^[a-z0-9_-]+/##; s#-(low|high|max)$##')\""
 elif [ -n "$TRANSCRIPT" ]; then
   # Claude Code: usage lives in the session's JSONL transcript. A path that
   # is present but points to a missing file is transient, not structural:
@@ -207,6 +221,17 @@ if [ -z "$LIMIT" ]; then
     *\"glm-5.2\"*|*\"glm-5.3\"*) LIMIT=1000000 ;;
     *\"glm-5.1\"*|*\"glm-4.6\"*) LIMIT=200000 ;;
   esac
+fi
+
+# RELEVIO_DEBUG=1 writes what the hook actually resolved, once per session. The
+# model string is the thing that goes wrong silently: an id the table does not
+# recognize produces no error, just a session that never sees a percentage. One
+# line here answers it without forensics on the host's database.
+if [ -n "${RELEVIO_DEBUG:-}" ] && once debug; then
+  printf 'relevio %s host=%s payload_model=%s resolved_model=%s limit=%s used=%s\n' \
+    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$HOST" "${PAYLOAD_MODEL:-<none>}" \
+    "${MODEL:-<none>}" "${LIMIT:-<raw-count>}" "${USED:-<none>}" \
+    >> "/tmp/claude-ctx-warn-${SAFE_SESSION}-debug.log" 2>/dev/null || true
 fi
 
 # RAW-COUNT mode: unknown window. Report the current 100k mark once. Only the

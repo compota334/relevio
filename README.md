@@ -508,6 +508,15 @@ they do NOT interfere:
 - The context hooks do not reach subagents: warnings are injected into the
   main agent only, so a subagent will never try to close your session.
 
+### Debugging a wrong context percentage
+
+`RELEVIO_DEBUG=1` makes the PostToolUse hook append one line per session to
+`/tmp/claude-ctx-warn-<session>-debug.log` with the payload's model id, what
+relevio resolved it to, the window it picked and the tokens it read. A model id
+relevio does not recognize fails silently by design (it falls back to raw token
+counts rather than inventing a window), so that line is the fastest way to see
+whether an id is arriving in a shape the window table does not match.
+
 ### Hooks run without the executable bit
 
 Some hosts install plugin files read-only: ZCode does, hooks included. relevio's

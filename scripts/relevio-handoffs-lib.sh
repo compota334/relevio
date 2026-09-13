@@ -132,11 +132,17 @@ $RELEVIO_HINT_NOTE
   # is a normal state here, not an exotic one. Refuse the value whichever of the
   # three sources supplied it.
   case "$MAIN" in
-    HEAD|HEAD[~^]*|@|@[~^]*)
+    # @{u} / @{upstream} / @{push} are stable aliases for the branch's tracked
+    # remote branch, which is exactly the kind of answer this setting wants.
+    *@\{u\}|*@\{upstream\}|*@\{push\}) : ;;
+    # Everything else with @{...} is a reflog: "where this ref pointed N steps
+    # ago", which moves with every commit and every switch. It resolves without
+    # complaint, so it has to be refused by name.
+    HEAD|HEAD[~^]*|@|@[~^]*|*@\{*)
       die "relevio was told the main branch is '$MAIN', which is not a branch at
-  all: HEAD means whichever commit this checkout is standing on right now, and
-  that moves every time you switch branches. Comparing against it would report
-  work as finished or unfinished at random.
+  all: it names wherever a checkout happens to be standing, or where a ref used
+  to point, and both move as you work. Comparing against a moving target would
+  report the same work as finished one day and unfinished the next.
 
   Name the branch itself, for example:
 

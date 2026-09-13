@@ -12,7 +12,7 @@
 # leftovers so you are not left running two copies of the rules.
 set -euo pipefail
 
-VERSION="0.22.7"
+VERSION="0.22.8"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh session-start.sh handoff.md kickoff.md revisit.md INDEX.md)
 # Since v0.22 docs/handoff/INDEX.md is generated rather than hand-edited, so

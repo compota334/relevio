@@ -186,3 +186,34 @@ case the banner exists for.
 
 If you see the banner on a session you just opened, say so and carry on
 normally. It is a host misclassification, not a state relevio is tracking.
+
+## ZCode composes its payload model id from three columns
+
+Measured 2026-09-13. `model_usage` in ZCode's database keeps `provider_id`
+(`builtin:zai`), `model_id` (`GLM-5.3`) and `variant` (`max`) as separate
+columns, and the hook payload arrives with them concatenated:
+`builtin:zai/GLM-5.3-max`.
+
+relevio's window table matches model ids exactly, on purpose: GLM variants
+differ in window size, so a loose match could give a session the wrong
+percentage. But the exact match was being run against the composed string,
+which is in no catalogue, so every ZCode session dropped to RAW-COUNT mode and
+never saw a percentage at all.
+
+The fix undoes the host's composition before matching, rather than adding the
+composed string to the table:
+
+- the provider prefix (`builtin:`, then any `provider/`) is not part of the
+  model's identity;
+- `-low` / `-high` / `-max` are REASONING EFFORT levels, not models. Z.ai's own
+  documentation (docs.z.ai/guides/llm/glm-5.3, read 2026-09-13) lists them as
+  the three effort levels of a single model with one 1M-token window.
+
+So `builtin:zai/GLM-5.3-max` resolves to `glm-5.3` and gets 1M, while a real
+variant suffix such as `-air` is left alone and an unrecognized id still falls
+to raw counts. Nothing is guessed: the suffix is read back off a string the
+host itself assembled.
+
+Worth knowing for the next time: `RELEVIO_DEBUG=1` dumps the payload model, the
+resolved id and the chosen window to /tmp once per session, which answers this
+class of question in one run instead of a database autopsy.
