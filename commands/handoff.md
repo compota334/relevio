@@ -2,6 +2,12 @@
 description: Close a session - write the dated handoff, regenerate the lane index, hand over the close-out steps
 ---
 
+This command runs when the USER asks for it, or when a relevio message told
+you in those words to close the session. Finishing a task is not one of those
+reasons. If you reached this on your own initiative, stop and ask the user
+first: a session with window left is worth keeping, and a handoff nobody
+wanted costs them the rest of it.
+
 Write a handoff for the next agent: you are passing the baton. Sessions close
 BEFORE auto-compact so the conversation keeps its full context and stays
 reopenable; the handoff is the written memory the next session starts from.

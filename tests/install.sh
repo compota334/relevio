@@ -330,6 +330,17 @@ check "session-start: the core does not pre-announce the close-out thresholds" \
   "$(printf '%s' "$out" | grep -cE '70%|80%|at 70|at 80')" "0"
 check "session-start: the core never speaks of closing" \
   "$(printf '%s' "$out" | grep -ci 'close')" "0"
+# Silence about WHEN is not silence about WHO. Removing the thresholds in v0.20
+# also removed the only thing standing between a finished task and a handoff
+# nobody asked for: agents were observed closing at half a window because the
+# work was done. The core says nothing about when to end a session and
+# everything about whose decision that is.
+check "session-start: the core says ending the session is not the agent's call" \
+  "$(contains "$out" 'NOT YOUR CALL')" "yes"
+check "session-start: ... and that finishing the task is not a reason to end" \
+  "$(contains "$out" 'not a reason to end anything')" "yes"
+check "session-start: ... and still teaches no close-out procedure" \
+  "$(printf '%s' "$out" | grep -cE 'YYYY-MM-DD|/rename|commit and push')" "0"
 check "session-start: the core does not point at relevio.md (gone since v0.20)" \
   "$(printf '%s' "$out" | grep -c 'relevio\.md')" "0"
 # The cadence promise is the one number the core MUST announce (silence is
@@ -421,6 +432,10 @@ check "foreign host: core does not pre-announce the close-out thresholds" \
   "$(printf '%s' "$out" | grep -cE '70%|80%')" "0"
 check "foreign host: core never speaks of closing" \
   "$(printf '%s' "$out" | grep -ci 'close')" "0"
+# A host that sends no usage reports is the one where an agent is most likely
+# to end a session on a hunch, so the ownership rule has to survive here too.
+check "foreign host: core still says ending the session is not the agent's call" \
+  "$(contains "$out" 'NOT YOUR CALL')" "yes"
 n=$(printf '%s' "$out" | wc -c)
 check "foreign host: core fits the injection budget ($n <= $INJECT_BUDGET)" \
   "$([ "$n" -le "$INJECT_BUDGET" ] && echo yes || echo no)" "yes"
@@ -767,6 +782,15 @@ rm -rf "$d"
 # With relevio.md gone, the README section "What relevio says to the agent"
 # is the user-visible catalog of every injected message. If it disappears,
 # the messages become invisible to users without opening the scripts.
+# The command itself is the last gate: an agent that decided to close anyway
+# meets the rule again on the way in.
+for f in commands/handoff.md templates/handoff.md; do
+  check "handoff: $f says who may trigger it" \
+    "$(contains "$(cat "$REPO/$f")" 'runs when the USER asks for it')" "yes"
+  check "handoff: $f rejects finishing a task as a reason" \
+    "$(contains "$(cat "$REPO/$f")" 'Finishing a task is not one of those')" "yes"
+done
+
 check "README: documents the injected messages" \
   "$(grep -c 'What relevio says to the agent' "$REPO/README.md")" "1"
 check "README: documents the lane board and the trace" \

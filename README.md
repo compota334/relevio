@@ -526,6 +526,20 @@ irrelevant rather than a silent prerequisite. If you see relevio's `.sh` files
 sitting at `644` in a plugin cache, that is expected and nothing is broken. The
 script installer still chmods its own copies, since it owns them.
 
+### Who decides when a session ends
+
+The user does. relevio tells the agent, in the injected core, never to write a
+handoff or suggest wrapping up on its own initiative: only when the user asks,
+or when one of relevio's own messages says to in those words. Finishing a task
+is explicitly not a reason.
+
+This is the other half of a lesson learned in v0.20. Naming the close-out
+thresholds up front made agents close at 40-60%, so the thresholds came out of
+the core; but silence about WHEN is not silence about WHO, and agents were
+later observed closing at half a window simply because the work was done. The
+core now says nothing about when a session should end and is explicit about
+whose call it is.
+
 ### Who is reading
 
 relevio tells the agent, once per session, that the person reading may not be a
