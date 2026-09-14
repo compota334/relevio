@@ -540,6 +540,22 @@ later observed closing at half a window simply because the work was done. The
 core now says nothing about when a session should end and is explicit about
 whose call it is.
 
+### What the agent does instead of closing
+
+Forbidding the unasked handoff leaves a hole where the agent's next move should
+be, so the core fills it: when a task is done and nothing else was asked, the
+agent reports rather than ending anything. A short scannable recap, a small
+table or a few bullets, never prose:
+
+| | |
+|---|---|
+| **Done** | what was finished, and whether it was actually verified or only written |
+| **Pending** | what is left, including anything postponed or skipped, which never disappears silently |
+| **Needs from you** | any decision or information it is blocked on, as clear options with the one it would pick |
+
+Then it proposes the next step and waits. It is a map, not a report, and it
+scales to the work: one line is the right size for a small change.
+
 ### Who is reading
 
 relevio tells the agent, once per session, that the person reading may not be a

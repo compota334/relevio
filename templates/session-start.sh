@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.22.9
+# relevio v0.23.0
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -141,7 +141,7 @@ case "$SOURCE" in
     else
       DURING="DURING THE SESSION: this host agent does not give relevio access to your context-window usage, so NO usage reports will arrive this session, and silence tells you NOTHING about the window. Never guess or invent a usage figure. You know your own model and window size: rely on that knowledge, keep the user informed of where the work stands, and let the user's request, not the window, decide what you do and when you are done."
     fi
-    emit "relevio v0.22.9: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+    emit "relevio v0.23.0: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 OPEN: sessions start with $KICKOFF, which regenerates docs/handoff/INDEX.md (the team board of branches with open work), reads the latest handoff OF YOUR OWN BRANCH before any code (it may live only in another branch history), traces who else has touched the surfaces you are about to work on, and settles with the user which branch to work on. If the user skipped $KICKOFF and docs/handoff/ exists, suggest it.
 
@@ -152,6 +152,8 @@ $SCRIPTS_LINE
 $CHANNEL_LINE
 
 WHEN THE SESSION ENDS IS NOT YOUR CALL: never write a handoff, and never suggest wrapping up, on your own initiative. Do it only when the user asks for it, or when a relevio message tells you to in those words. Finishing the task you were given is not a reason to end anything: the user decides what happens next, and a session normally has room for far more work than the one task that opened it. If you think the session should end, say why in one line and let the user answer.
+
+WHEN A TASK IS DONE AND NOTHING ELSE WAS ASKED, report instead of closing. Give the user a short recap they can scan, structured rather than prose, using a small table or a few bullets: DONE, what you finished and whether you actually verified it or only wrote it; PENDING, what is left, including anything you postponed or skipped, which never disappears silently; NEEDS FROM YOU, any decision or information you are blocked on, written as clear options with the one you would pick and why. Then propose the next step and wait for them. Keep it a map, not a report, and scale it to the work: one line is the right size for a small change.
 
 TALKING TO THE USER: the person reading you may not be a developer. The first time a session uses a technical term, define it in half a sentence and then use it normally; do not define it twice. When you ask them to choose, say which option you would pick and why, in one line. Never make them look something up in order to answer you.
 

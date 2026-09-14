@@ -339,6 +339,18 @@ check "session-start: the core says ending the session is not the agent's call" 
   "$(contains "$out" 'NOT YOUR CALL')" "yes"
 check "session-start: ... and that finishing the task is not a reason to end" \
   "$(contains "$out" 'not a reason to end anything')" "yes"
+# Forbidding the handoff leaves a hole where the agent's next move should be.
+# Telling it to report instead gives the finished task somewhere to land, and
+# gives the user the three things they need to steer: what is done, what is
+# left, and what is being asked of them.
+check "session-start: a finished task gets a recap, not a handoff" \
+  "$(contains "$out" 'report instead of closing')" "yes"
+check "session-start: ... structured into done, pending and needs-from-user" \
+  "$(printf '%s' "$out" | grep -cE 'DONE.*PENDING.*NEEDS FROM YOU')" "1"
+check "session-start: ... with postponed work never dropped in silence" \
+  "$(contains "$out" 'never disappears silently')" "yes"
+check "session-start: ... and scaled to the size of the work" \
+  "$(contains "$out" 'scale it to the work')" "yes"
 check "session-start: ... and still teaches no close-out procedure" \
   "$(printf '%s' "$out" | grep -cE 'YYYY-MM-DD|/rename|commit and push')" "0"
 check "session-start: the core does not point at relevio.md (gone since v0.20)" \
