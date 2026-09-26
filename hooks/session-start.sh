@@ -134,11 +134,9 @@ HANDOFF_CMD=""
 if [ -n "$RELEVIO_SCRIPTS" ] && [ -r "$RELEVIO_SCRIPTS/../commands/handoff.md" ]; then
   HANDOFF_CMD="$(cd "$RELEVIO_SCRIPTS/../commands" && pwd)/handoff.md"
 fi
-if [ -n "$HANDOFF_CMD" ]; then
-  HANDOFF_LINE="IF THE USER ASKS FOR A HANDOFF in their own words instead of running the command, do not write one from memory: its format and steps live in relevio's handoff command. Invoke that command if your host lets you; otherwise read $HANDOFF_CMD and follow it exactly. This changes nothing about the rule above: it applies when the user asked, never on your own initiative."
-else
-  HANDOFF_LINE="IF THE USER ASKS FOR A HANDOFF in their own words instead of running the command, do not write one from memory: its format and steps live in relevio's handoff command, so invoke that command. This changes nothing about the rule above: it applies when the user asked, never on your own initiative."
-fi
+HANDOFF_READ=""
+[ -n "$HANDOFF_CMD" ] && HANDOFF_READ="; otherwise read $HANDOFF_CMD and follow it exactly"
+HANDOFF_LINE="IF THE USER ASKS FOR A HANDOFF in their own words instead of running the command, do not write one from memory: its format and steps live in relevio's handoff command. Invoke that command if your host lets you${HANDOFF_READ}. This changes nothing about the rule above: it applies when the user asked, never on your own initiative."
 
 # A resumed conversation is one of two very different things, and the payload
 # says "resume" for both:
@@ -149,16 +147,27 @@ fi
 # Telling the second kind to go open a new session is what made users explain
 # a reboot to the agent every time. The difference is exact rather than
 # guessed: a closed session wrote a handoff, and that handoff's Resume field
-# carries this session's id. No such handoff means it was never closed. Only
-# the Resume lines are searched, so a session merely MENTIONED in another
-# handoff's body is not mistaken for a closed one.
-CLOSED=no
-if [ -n "$SESSION_ID" ]; then
-  PROJ="${CLAUDE_PROJECT_DIR:-$PWD}"
-  if grep -h '^Resume:' "$PROJ"/docs/handoff/[0-9]*_*.md 2>/dev/null | grep -qF -- "$SESSION_ID"; then
-    CLOSED=yes
-  fi
-fi
+# carries this session's id. Only Resume lines count, so a session merely
+# MENTIONED in another handoff's body is not mistaken for a closed one.
+#
+# The search covers every ref, not just this checkout: handoffs live on the
+# branch that wrote them, and /revisit hands back a resume command that is run
+# from wherever the user happens to be, usually main. Looking only at the
+# working tree sent archived sessions from unmerged branches down the restart
+# path, with the full core dumped into a nearly full window. The working tree
+# is searched too, for a handoff written but not yet committed.
+# It runs only for a resume, the one case that reads the answer.
+session_was_closed() {
+  local proj="${CLAUDE_PROJECT_DIR:-$PWD}" refs
+  [ -n "$SESSION_ID" ] || return 1
+  refs="$(git -C "$proj" for-each-ref --format='%(refname)' refs/heads refs/remotes 2>/dev/null)"
+  {
+    grep -h '^Resume:' "$proj"/docs/handoff/[0-9]*_*.md 2>/dev/null
+    # shellcheck disable=SC2086  # one argument per ref, deliberately split
+    [ -n "$refs" ] && git -C "$proj" grep -h '^Resume:' $refs -- docs/handoff/ 2>/dev/null
+    true
+  } | grep -qF -- "$SESSION_ID"
+}
 
 if [ -n "$HAVE_USAGE" ]; then
   DURING="DURING THE SESSION: a PostToolUse hook tracks your context-window usage and reports it to you; you cannot see your own usage without it. Its first report arrives on your first tool call, so you have a real number almost at once, and after that it posts a status update roughly every 10% of the window; if it cannot size this model's window it reports a running token count every 100k tokens instead, and its first report says so. That cadence is information you can use: silence means you have NOT crossed the next mark, so never guess or assume your usage is higher than the last report you received, and never ration your work out of worry about the window. Most of its messages are plain status updates that need no response and no change in behavior: just a number so you know where you stand. When the hook needs you to do something, the message itself will say so clearly and carry complete instructions. Until such a message arrives, the window needs nothing from you and is never a reason to change course: let the user's request, not the window, decide what you do and when you are done."
@@ -167,7 +176,12 @@ else
 fi
 
 OPEN_LINE="OPEN: sessions start with $KICKOFF, which regenerates docs/handoff/INDEX.md (the team board of branches with open work), reads the latest handoff OF YOUR OWN BRANCH before any code (it may live only in another branch history), traces who else has touched the surfaces you are about to work on, and settles with the user which branch to work on. If the user skipped $KICKOFF and docs/handoff/ exists, suggest it."
-RESUMED_LINE="RESUMED, NOT ARCHIVED: this conversation was resumed, but no handoff was ever written for it, so it is not a session from the archive: most likely the app or the computer restarted in the middle of the work. If it already holds earlier work, carry on exactly where it stopped and do not suggest opening a new session, since nothing here is finished. If it is empty, it is simply a new session: start with $KICKOFF."
+# Scoped on purpose: being RESUMED is no reason to leave, but this hook cannot
+# see the window, so it must not overrule the context reports that can. An
+# unconditional "never suggest a new session" contradicted the 90% guard for a
+# session resumed near the top of its window, which the user may now keep
+# alive past the close-out, since ending a session is their call.
+RESUMED_LINE="RESUMED, NOT ARCHIVED: this conversation was resumed, but no handoff was ever written for it, so it is not a session from the archive: most likely the app or the computer restarted in the middle of the work. If it already holds earlier work, carry on where it stopped: being resumed is not, by itself, a reason to suggest a new session. How full the window is gets reported separately, and those reports, not this message, decide whether new work still fits. If it is empty, it is simply a new session: start with $KICKOFF."
 
 # The core, parameterised by its opening paragraph. One copy, so a rule added
 # for new sessions cannot be silently missing from restarted ones.
@@ -199,7 +213,7 @@ $SUBAGENT_LINE"
 # ~8 KB arrives intact, ~12 KB does not). tests/install.sh asserts the size.
 case "$SOURCE" in
   resume)
-    if [ "$CLOSED" = yes ]; then
+    if session_was_closed; then
       emit "relevio: this is a REOPENED conversation, part of the session archive. Its purpose is answering questions about what happened here, not doing new work: it sits near the top of its context window, and auto-compact would destroy the detail that makes it valuable. Keep answers brief, avoid reading files or starting tasks that consume significant context, and if the user wants new work done, suggest opening a fresh session with $KICKOFF. $SUBAGENT_LINE"
     else
       core "$RESUMED_LINE"

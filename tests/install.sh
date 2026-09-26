@@ -818,8 +818,16 @@ check "session-start: a session a handoff closed gets the short revisit rules" \
 out="$(resume_as sess-live-2)"
 check "session-start: a session never closed is treated as a restart, not the archive" \
   "$(contains "$out" 'RESUMED, NOT ARCHIVED')" "yes"
-check "session-start: ... and is told not to suggest a new session" \
-  "$(contains "$out" 'do not suggest opening a new session')" "yes"
+check "session-start: ... and told the resume itself is no reason to leave" \
+  "$(contains "$out" 'being resumed is not, by itself, a reason')" "yes"
+# ...but without overruling the window. session-start cannot see how full the
+# context is, and an unconditional "never suggest a new session" contradicted
+# the 90% guard for a session resumed near the top of its window, which the
+# user may keep alive past the close-out now that ending it is their call.
+check "session-start: ... without forbidding a new session outright" \
+  "$(contains "$out" 'do not suggest opening a new session')" "no"
+check "session-start: ... leaving that to the context reports" \
+  "$(contains "$out" 'those reports, not this message, decide')" "yes"
 check "session-start: ... and still gets every rule of the core" \
   "$(contains "$out" 'NOT YOUR CALL')" "yes"
 check "session-start: ... without being told to run kickoff as if it were new" \
@@ -828,6 +836,26 @@ check "session-start: ... without being told to run kickoff as if it were new" \
 # handoff's body must not send a live session to the archive.
 check "session-start: an id only mentioned in a handoff body is not archived" \
   "$(contains "$(resume_as sess-mentioned-3)" 'RESUMED, NOT ARCHIVED')" "yes"
+# Handoffs live on the branch that wrote them, and /revisit's resume command is
+# run from wherever the user is, usually main. A closed session whose handoff
+# sits only on an unmerged branch must still be recognised as archived: looking
+# at the working tree alone sent it down the restart path, with the full core
+# dumped into a nearly full window. This case is what let that slip.
+git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm base >/dev/null 2>&1
+git -C "$d" checkout -q -b elsewhere
+printf 'Session: s\nDate: 2026-09-02\nDev: N\nBranch: elsewhere\nCommits: none\nAreas: none\nResume: claude --resume sess-otherbranch-4\nTopics: t\nSummary: s\n\nB.\n' \
+  > "$d/docs/handoff/2026-09-02_elsewhere.md"
+git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm elsewhere >/dev/null 2>&1
+git -C "$d" checkout -q -
+check "session-start: a session closed on another branch is still archived" \
+  "$(yesno "$([ -f "$d/docs/handoff/2026-09-02_elsewhere.md" ]; echo $?)"):$(contains "$(resume_as sess-otherbranch-4)" 'REOPENED conversation')" "no:yes"
+# A handoff written but not committed yet still closes the session.
+printf 'Session: s\nDate: 2026-09-03\nDev: N\nBranch: main\nCommits: none\nAreas: none\nResume: claude --resume sess-uncommitted-5\nTopics: t\nSummary: s\n\nB.\n' \
+  > "$d/docs/handoff/2026-09-03_uncommitted.md"
+check "session-start: a handoff not yet committed still marks the session closed" \
+  "$(contains "$(resume_as sess-uncommitted-5)" 'REOPENED conversation')" "yes"
+rm -f "$d/docs/handoff/2026-09-03_uncommitted.md"
+
 # No id at all: nothing proves the session closed, so it is not called closed.
 check "session-start: a resume with no session id is not called archived" \
   "$(contains "$(inject "$d" resume)" 'REOPENED conversation')" "no"

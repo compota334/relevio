@@ -243,11 +243,8 @@ if [ -z "$LIMIT" ]; then
   # The first report fires on the first readable tool call, even below the
   # first 100k mark: the core promises the agent a real number almost at once,
   # and an agent left without one rations its work out of fear of the window.
-  if [ "$HUNDREDS" -lt 1 ]; then
-    once k0 || exit 0
-  else
-    once "k${HUNDREDS}" || exit 0
-  fi
+  # Below 100k HUNDREDS is 0, so the marker is k0: no special case needed.
+  once "k${HUNDREDS}" || exit 0
   # This message used to tell the agent to "use this running count to decide
   # when to close the session", i.e. it handed the agent the very decision the
   # core says is not its to make. Raw-count mode was every ZCode session before

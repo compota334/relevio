@@ -459,7 +459,7 @@ read or audit every word the agent receives.
 |------|----------------|
 | Session start (new) | The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. Nothing about closing, handoffs to write, or close-out thresholds. |
 | Session start (reopened from the archive) | Only when a handoff's `Resume:` field names this session, i.e. it was closed: this conversation is an archive, answer questions, avoid new work, send new work to a fresh session. |
-| Session start (resumed, never closed) | A restart, not the archive: the app or the computer came back mid-work. The full core, with "carry on where it stopped, do not suggest a new session" in place of the kickoff line. |
+| Session start (resumed, never closed) | A restart, not the archive: the app or the computer came back mid-work. The full core, with "carry on where it stopped; being resumed is no reason to leave" in place of the kickoff line. Whether new work still fits is left to the context reports, which can see the window. |
 | Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |
 | First tool call | One status line with a real number (percentage, used, free), even below 10%, so no session spends its opening stretch without a figure. In raw-count mode, the running token count instead. |
 | 10-60% (every 10%) | A bare status line: the percentage, used and free tokens, "no action needed". Nothing else, on purpose: these fire six times, so anything they said would be the strongest anchor of all. |
@@ -557,6 +557,16 @@ session's id. If no handoff names it, the session was never closed, and the
 agent is told to carry on where it stopped instead of sending the user to a new
 session. Only the `Resume:` field counts, so a session merely mentioned in
 another handoff's body is never mistaken for a closed one.
+
+The search covers every branch, not only the current checkout, because a
+handoff lives on the branch that wrote it and `/revisit` gives you a resume
+command you will usually run from main. A handoff written but not yet
+committed counts too.
+
+"Carry on" is about the resume, not the window: relevio's start-up message
+cannot see how full the context is, so it only says that being resumed is no
+reason to leave. If the window really is nearly full, the context reports say
+so, and they have the last word.
 
 ### Asking for a handoff in plain words
 
