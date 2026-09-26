@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.23.0
+# relevio v0.23.1
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -41,6 +41,7 @@ INPUT=$(cat)
 SOURCE=$(echo "$INPUT" | jq -r '.source // "startup"')
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 PAYLOAD_MODEL=$(echo "$INPUT" | jq -r '.model // empty')
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
 
 # --- Resolve the HOST once; everything else derives from it -----------------
 # Mirrors context-warn.sh exactly (measured on ZCode 3.9.1, 2026-08-26):
@@ -124,26 +125,56 @@ emit() {
 
 SUBAGENT_LINE="If you are a SUBAGENT (spawned via the Task tool), ignore this methodology entirely and simply return your result."
 
-# KEEP EVERY EMITTED MESSAGE WELL UNDER 8000 CHARACTERS. Claude Code caps how
-# much a hook may inject: past the cap the agent receives a ~2 KB preview plus
-# a file path, with no visible error (measured 2026-07 on Claude Code 2.1.207:
-# ~8 KB arrives intact, ~12 KB does not). tests/install.sh asserts the size.
-case "$SOURCE" in
-  resume)
-    emit "relevio: this is a REOPENED conversation, part of the session archive. Its purpose is answering questions about what happened here, not doing new work: it sits near the top of its context window, and auto-compact would destroy the detail that makes it valuable. Keep answers brief, avoid reading files or starting tasks that consume significant context, and if the user wants new work done, suggest opening a fresh session with $KICKOFF. $SUBAGENT_LINE"
-    ;;
-  compact)
-    emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, then regenerate docs/handoff/INDEX.md with relevio-index.sh) with whatever detail remains, then recommend closing this session and opening a fresh one with $KICKOFF. $SCRIPTS_LINE $SUBAGENT_LINE"
-    ;;
-  *)
-    if [ -n "$HAVE_USAGE" ]; then
-      DURING="DURING THE SESSION: a PostToolUse hook tracks your context-window usage and reports it to you; you cannot see your own usage without it. It posts a status update roughly every 10% of the window; if it cannot size this model's window it reports a running token count every 100k tokens instead, and its first report says so. That cadence is information you can use: silence means you have NOT crossed the next mark, so never guess or assume your usage is higher than the last report you received. Most of its messages are plain status updates that need no response and no change in behavior: just a number so you know where you stand. When the hook needs you to do something, the message itself will say so clearly and carry complete instructions. Until such a message arrives, the window needs nothing from you and is never a reason to change course: let the user's request, not the window, decide what you do and when you are done."
-    else
-      DURING="DURING THE SESSION: this host agent does not give relevio access to your context-window usage, so NO usage reports will arrive this session, and silence tells you NOTHING about the window. Never guess or invent a usage figure. You know your own model and window size: rely on that knowledge, keep the user informed of where the work stands, and let the user's request, not the window, decide what you do and when you are done."
-    fi
-    emit "relevio v0.23.0: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+# Where the handoff procedure lives. It is a slash command, so an agent only
+# receives it when the command is invoked; a user who asks for a handoff in
+# plain words would otherwise get one written from memory, in the wrong
+# format. The command files sit beside the scripts in both install channels
+# (<plugin root>/commands, or .claude/commands), so the path is known here.
+HANDOFF_CMD=""
+if [ -n "$RELEVIO_SCRIPTS" ] && [ -r "$RELEVIO_SCRIPTS/../commands/handoff.md" ]; then
+  HANDOFF_CMD="$(cd "$RELEVIO_SCRIPTS/../commands" && pwd)/handoff.md"
+fi
+if [ -n "$HANDOFF_CMD" ]; then
+  HANDOFF_LINE="IF THE USER ASKS FOR A HANDOFF in their own words instead of running the command, do not write one from memory: its format and steps live in relevio's handoff command. Invoke that command if your host lets you; otherwise read $HANDOFF_CMD and follow it exactly. This changes nothing about the rule above: it applies when the user asked, never on your own initiative."
+else
+  HANDOFF_LINE="IF THE USER ASKS FOR A HANDOFF in their own words instead of running the command, do not write one from memory: its format and steps live in relevio's handoff command, so invoke that command. This changes nothing about the rule above: it applies when the user asked, never on your own initiative."
+fi
 
-OPEN: sessions start with $KICKOFF, which regenerates docs/handoff/INDEX.md (the team board of branches with open work), reads the latest handoff OF YOUR OWN BRANCH before any code (it may live only in another branch history), traces who else has touched the surfaces you are about to work on, and settles with the user which branch to work on. If the user skipped $KICKOFF and docs/handoff/ exists, suggest it.
+# A resumed conversation is one of two very different things, and the payload
+# says "resume" for both:
+#   - a session from the ARCHIVE, reopened to ask about it. It was closed near
+#     the top of its window, and new work would push it into auto-compact;
+#   - a session that was never closed at all, picked up again after the app or
+#     the computer restarted. It may be at 30%, mid-task, with nothing wrong.
+# Telling the second kind to go open a new session is what made users explain
+# a reboot to the agent every time. The difference is exact rather than
+# guessed: a closed session wrote a handoff, and that handoff's Resume field
+# carries this session's id. No such handoff means it was never closed. Only
+# the Resume lines are searched, so a session merely MENTIONED in another
+# handoff's body is not mistaken for a closed one.
+CLOSED=no
+if [ -n "$SESSION_ID" ]; then
+  PROJ="${CLAUDE_PROJECT_DIR:-$PWD}"
+  if grep -h '^Resume:' "$PROJ"/docs/handoff/[0-9]*_*.md 2>/dev/null | grep -qF -- "$SESSION_ID"; then
+    CLOSED=yes
+  fi
+fi
+
+if [ -n "$HAVE_USAGE" ]; then
+  DURING="DURING THE SESSION: a PostToolUse hook tracks your context-window usage and reports it to you; you cannot see your own usage without it. Its first report arrives on your first tool call, so you have a real number almost at once, and after that it posts a status update roughly every 10% of the window; if it cannot size this model's window it reports a running token count every 100k tokens instead, and its first report says so. That cadence is information you can use: silence means you have NOT crossed the next mark, so never guess or assume your usage is higher than the last report you received, and never ration your work out of worry about the window. Most of its messages are plain status updates that need no response and no change in behavior: just a number so you know where you stand. When the hook needs you to do something, the message itself will say so clearly and carry complete instructions. Until such a message arrives, the window needs nothing from you and is never a reason to change course: let the user's request, not the window, decide what you do and when you are done."
+else
+  DURING="DURING THE SESSION: this host agent does not give relevio access to your context-window usage, so NO usage reports will arrive this session, and silence tells you NOTHING about the window. Never guess or invent a usage figure. You know your own model and window size: rely on that knowledge, keep the user informed of where the work stands, and let the user's request, not the window, decide what you do and when you are done."
+fi
+
+OPEN_LINE="OPEN: sessions start with $KICKOFF, which regenerates docs/handoff/INDEX.md (the team board of branches with open work), reads the latest handoff OF YOUR OWN BRANCH before any code (it may live only in another branch history), traces who else has touched the surfaces you are about to work on, and settles with the user which branch to work on. If the user skipped $KICKOFF and docs/handoff/ exists, suggest it."
+RESUMED_LINE="RESUMED, NOT ARCHIVED: this conversation was resumed, but no handoff was ever written for it, so it is not a session from the archive: most likely the app or the computer restarted in the middle of the work. If it already holds earlier work, carry on exactly where it stopped and do not suggest opening a new session, since nothing here is finished. If it is empty, it is simply a new session: start with $KICKOFF."
+
+# The core, parameterised by its opening paragraph. One copy, so a rule added
+# for new sessions cannot be silently missing from restarted ones.
+core() {
+  emit "relevio v0.23.1: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+
+$1
 
 $DURING
 
@@ -153,11 +184,32 @@ $CHANNEL_LINE
 
 WHEN THE SESSION ENDS IS NOT YOUR CALL: never write a handoff, and never suggest wrapping up, on your own initiative. Do it only when the user asks for it, or when a relevio message tells you to in those words. Finishing the task you were given is not a reason to end anything: the user decides what happens next, and a session normally has room for far more work than the one task that opened it. If you think the session should end, say why in one line and let the user answer.
 
+$HANDOFF_LINE
+
 WHEN A TASK IS DONE AND NOTHING ELSE WAS ASKED, report instead of closing. Give the user a short recap they can scan, structured rather than prose, using a small table or a few bullets: DONE, what you finished and whether you actually verified it or only wrote it; PENDING, what is left, including anything you postponed or skipped, which never disappears silently; NEEDS FROM YOU, any decision or information you are blocked on, written as clear options with the one you would pick and why. Then propose the next step and wait for them. Keep it a map, not a report, and scale it to the work: one line is the right size for a small change.
 
 TALKING TO THE USER: the person reading you may not be a developer. The first time a session uses a technical term, define it in half a sentence and then use it normally; do not define it twice. When you ask them to choose, say which option you would pick and why, in one line. Never make them look something up in order to answer you.
 
 $SUBAGENT_LINE"
+}
+
+# KEEP EVERY EMITTED MESSAGE WELL UNDER 8000 CHARACTERS. Claude Code caps how
+# much a hook may inject: past the cap the agent receives a ~2 KB preview plus
+# a file path, with no visible error (measured 2026-07 on Claude Code 2.1.207:
+# ~8 KB arrives intact, ~12 KB does not). tests/install.sh asserts the size.
+case "$SOURCE" in
+  resume)
+    if [ "$CLOSED" = yes ]; then
+      emit "relevio: this is a REOPENED conversation, part of the session archive. Its purpose is answering questions about what happened here, not doing new work: it sits near the top of its context window, and auto-compact would destroy the detail that makes it valuable. Keep answers brief, avoid reading files or starting tasks that consume significant context, and if the user wants new work done, suggest opening a fresh session with $KICKOFF. $SUBAGENT_LINE"
+    else
+      core "$RESUMED_LINE"
+    fi
+    ;;
+  compact)
+    emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, then regenerate docs/handoff/INDEX.md with relevio-index.sh) with whatever detail remains, then recommend closing this session and opening a fresh one with $KICKOFF. $SCRIPTS_LINE $SUBAGENT_LINE"
+    ;;
+  *)
+    core "$OPEN_LINE"
     ;;
 esac
 exit 0

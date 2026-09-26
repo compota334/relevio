@@ -422,6 +422,41 @@ check "context-warn: unlisted glm variant drops to raw count, no guessed window"
   "$(printf '%s' "$cw_out" | grep -c 'cannot compute a percentage')" "1"
 rm -f /tmp/claude-ctx-warn-relevio-test-$$-*
 
+# The first report arrives on the first tool call. Before this the hook said
+# nothing below its first band, which on a 1M window is 100k tokens of silence
+# at the very start of a session: the stretch where agents, holding no number
+# at all, started rationing their work for fear of the window.
+first="$(cw 30000 first0 claude-opus-5)"
+check "context-warn: the first tool call gets a report even below 10%" \
+  "$(contains "$first" 'This is your first report')" "yes"
+check "context-warn: ... with a real number, not a vague reassurance" \
+  "$(contains "$first" '970000 still free')" "yes"
+check "context-warn: ... that still names no close-out threshold" \
+  "$(printf '%s' "$first" | grep -cE '70%|80%')" "0"
+check "context-warn: ... and never speaks of closing or handoffs" \
+  "$(printf '%s' "$first" | grep -ciE 'close|handoff|wrap')" "0"
+check "context-warn: ... and speaks only once" \
+  "$(cw 40000 first0 claude-opus-5)" ""
+# A session that opens past the first band already gets that band as its first
+# report: no extra message on top of it.
+check "context-warn: a session opening past 10% gets one report, not two" \
+  "$(cw 150000 first1 claude-opus-5 | grep -c 'CONTEXT:')" "1"
+
+# Raw-count mode used to tell the agent, every 100k tokens, to "use this
+# running count to decide when to close the session": the exact decision the
+# core says is not the agent's. Every ZCode session ran in raw-count until the
+# model-string fix, which is how sessions there ended at half a window.
+raw="$(cw 30000 raw0 some-unknown-model)"
+check "context-warn: raw-count mode also reports on the first tool call" \
+  "$(contains "$raw" '30000 tokens of your context window used so far')" "yes"
+check "context-warn: raw-count no longer hands the agent the close decision" \
+  "$(contains "$raw" 'decide when to close')" "no"
+check "context-warn: ... it tells the agent to leave that decision to the user" \
+  "$(contains "$raw" 'ending the session is still not your call')" "yes"
+check "context-warn: raw-count speaks once below the first 100k mark" \
+  "$(cw 60000 raw0 some-unknown-model)" ""
+rm -f /tmp/claude-ctx-warn-relevio-test-$$-*
+
 # --- Case 9b: FOREIGN HOST (no transcript_path) fails LOUD, never silent ----
 # Devin (and other Claude-compatible harnesses) load .claude/ hooks by default
 # but send no transcript_path. Up to v0.20.1 context-warn exited silently
@@ -763,11 +798,58 @@ for src in startup resume compact; do
   check "session-start: $src payload fits the injection budget ($n <= $INJECT_BUDGET)" \
     "$([ "$n" -le "$INJECT_BUDGET" ] && echo yes || echo no)" "yes"
 done
-# A reopened session must NOT get the cycle rules dumped into its nearly-full
-# window: it gets the short revisit rules instead.
-out="$(inject "$d" resume)"
-check "session-start: resume gets the short revisit rules" \
-  "$(printf '%s' "$out" | grep -c 'REOPENED conversation')" "1"
+# "resume" means two different things and the payload does not say which. A
+# session from the ARCHIVE was closed near the top of its window and must not
+# get the full cycle dumped into it; a session that was simply interrupted (the
+# app or the computer restarted mid-work) must carry on, and telling it to go
+# open a new session made users explain every reboot to the agent. The tell is
+# exact: a closed session wrote a handoff whose Resume field holds its id.
+resume_as() {  # $1 = session id -> the injected message for a resume
+  printf '{"source":"resume","session_id":"%s","transcript_path":"%s"}' "$1" "$d/.claude/hooks/session-start.sh" \
+    | env -u CLAUDE_PLUGIN_ROOT CLAUDE_PROJECT_DIR="$d" bash "$d/.claude/hooks/session-start.sh" \
+    | jq -r '.hookSpecificOutput.additionalContext'
+}
+mkdir -p "$d/docs/handoff"
+printf 'Session: s\nDate: 2026-09-01\nDev: N\nBranch: main\nCommits: none\nAreas: none\nResume: claude --resume sess-archived-1\nTopics: t\nSummary: s\n\nSee also sess-mentioned-3, an unrelated session.\n' \
+  > "$d/docs/handoff/2026-09-01_closed.md"
+out="$(resume_as sess-archived-1)"
+check "session-start: a session a handoff closed gets the short revisit rules" \
+  "$(contains "$out" 'REOPENED conversation')" "yes"
+out="$(resume_as sess-live-2)"
+check "session-start: a session never closed is treated as a restart, not the archive" \
+  "$(contains "$out" 'RESUMED, NOT ARCHIVED')" "yes"
+check "session-start: ... and is told not to suggest a new session" \
+  "$(contains "$out" 'do not suggest opening a new session')" "yes"
+check "session-start: ... and still gets every rule of the core" \
+  "$(contains "$out" 'NOT YOUR CALL')" "yes"
+check "session-start: ... without being told to run kickoff as if it were new" \
+  "$(contains "$out" 'OPEN: sessions start with')" "no"
+# Only the Resume field closes a session: an id merely mentioned in another
+# handoff's body must not send a live session to the archive.
+check "session-start: an id only mentioned in a handoff body is not archived" \
+  "$(contains "$(resume_as sess-mentioned-3)" 'RESUMED, NOT ARCHIVED')" "yes"
+# No id at all: nothing proves the session closed, so it is not called closed.
+check "session-start: a resume with no session id is not called archived" \
+  "$(contains "$(inject "$d" resume)" 'REOPENED conversation')" "no"
+n=$(printf '%s' "$(resume_as sess-live-2)" | wc -c)
+check "session-start: the restarted core fits the injection budget ($n <= $INJECT_BUDGET)" \
+  "$([ "$n" -le "$INJECT_BUDGET" ] && echo yes || echo no)" "yes"
+
+# A user who asks for a handoff in plain words has not run the command, so the
+# agent never received the format. The core points at where it lives.
+out="$(inject "$d" startup)"
+check "session-start: a plain-words handoff request is routed to the command" \
+  "$(contains "$out" 'IF THE USER ASKS FOR A HANDOFF in their own words')" "yes"
+check "session-start: ... naming the command file, which exists" \
+  "$( f="$(printf '%s' "$out" | grep -o 'otherwise read [^ ]*handoff.md' | sed 's/^otherwise read //')"; [ -n "$f" ] && [ -r "$f" ] && echo yes || echo no)" "yes"
+check "session-start: ... and it still happens only when the user asked" \
+  "$(contains "$out" 'never on your own initiative')" "yes"
+# The first report arrives on the first tool call: an agent that knows a real
+# number is coming does not ration its work for fear of the window.
+check "session-start: the core promises a number on the first tool call" \
+  "$(contains "$out" 'first report arrives on your first tool call')" "yes"
+check "session-start: ... and tells the agent not to ration its work" \
+  "$(contains "$out" 'never ration your work')" "yes"
 rm -rf "$d"
 
 # --- Case 10: uninstall removes relevio and leaves the user's files ---------

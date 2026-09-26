@@ -458,8 +458,10 @@ read or audit every word the agent receives.
 | When | Message (gist) |
 |------|----------------|
 | Session start (new) | The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. Nothing about closing, handoffs to write, or close-out thresholds. |
-| Session start (reopened) | This conversation is an archive: answer questions, avoid new work, send new work to a fresh session. |
+| Session start (reopened from the archive) | Only when a handoff's `Resume:` field names this session, i.e. it was closed: this conversation is an archive, answer questions, avoid new work, send new work to a fresh session. |
+| Session start (resumed, never closed) | A restart, not the archive: the app or the computer came back mid-work. The full core, with "carry on where it stopped, do not suggest a new session" in place of the kickoff line. |
 | Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |
+| First tool call | One status line with a real number (percentage, used, free), even below 10%, so no session spends its opening stretch without a figure. In raw-count mode, the running token count instead. |
 | 10-60% (every 10%) | A bare status line: the percentage, used and free tokens, "no action needed". Nothing else, on purpose: these fire six times, so anything they said would be the strongest anchor of all. |
 | 70% (soft, configurable) | The sweet spot: maximum understanding loaded AND plenty of free tokens, so put that combination to work. Finish and polish what is open, new user requests welcome at any size, begin thinking about what the next session will need. Explicitly: nothing needs writing yet, a later message will say when. |
 | 80% (hard, configurable) | The complete close-out checklist, first time it appears: bring the work to a coherent stopping point (nothing abandoned mid-change), write the handoff while the understanding is still loaded (structure included), run the project's checks, then commit everything and push, hand the user the close-out (on Claude Code two commands, `/rename` plus the kickoff; on ZCode the kickoff command plus a rename-from-the-UI request, since ZCode has no rename command). Explicitly: the free tokens are enough to do it well, no rushing. |
@@ -539,6 +541,31 @@ the core; but silence about WHEN is not silence about WHO, and agents were
 later observed closing at half a window simply because the work was done. The
 core now says nothing about when a session should end and is explicit about
 whose call it is.
+
+### A restart is not a revisit
+
+A conversation can come back for two opposite reasons, and the host reports
+both as a "resume". One is a session from the archive, reopened to ask about
+it: it was closed near the top of its window, and new work would push it into
+auto-compact. The other is a session that was never closed at all, picked up
+again after the app or the computer restarted, possibly at 30% with a task
+half done.
+
+relevio tells them apart exactly rather than by guessing from the usage: a
+closed session wrote a handoff, and that handoff's `Resume:` field carries the
+session's id. If no handoff names it, the session was never closed, and the
+agent is told to carry on where it stopped instead of sending the user to a new
+session. Only the `Resume:` field counts, so a session merely mentioned in
+another handoff's body is never mistaken for a closed one.
+
+### Asking for a handoff in plain words
+
+The handoff procedure lives in the `/handoff` command, so an agent only has it
+when the command runs. A user who says "write the handoff" in chat would
+otherwise get one improvised from memory, in the wrong format. The injected
+core therefore tells the agent where the command file is, and to invoke it, or
+read it, rather than improvise. The rule about who decides is unchanged: this
+only applies once the user has asked.
 
 ### What the agent does instead of closing
 

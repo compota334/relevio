@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.23.0
+# relevio v0.23.1
 # relevio: context warning for the agent.
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
@@ -240,9 +240,22 @@ fi
 # agent's, since it -- not this hook -- knows the model's real window size.
 if [ -z "$LIMIT" ]; then
   HUNDREDS=$(( USED / 100000 ))
-  [ "$HUNDREDS" -lt 1 ] && exit 0
-  once "k${HUNDREDS}" || exit 0
-  emit "CONTEXT: ${USED} tokens of your context window used so far (past the $(( HUNDREDS * 100 ))k mark). relevio does not recognize this session's model, so it cannot compute a percentage of the context window, and it will not guess one (a wrong guess would either fire false alarms or stay silent past the real ceiling), so no percentage-based warnings will fire this session. You know your own window size: use this running count to decide when to close the session (write the handoff in docs/handoff/, regenerate the index with $INDEX_CMD, commit and push, then a fresh session) and keep the user informed of where things stand. To switch to percentage warnings, set \"env\": {\"CLAUDE_CONTEXT_LIMIT\": \"<tokens>\"} in .claude/settings.local.json."
+  # The first report fires on the first readable tool call, even below the
+  # first 100k mark: the core promises the agent a real number almost at once,
+  # and an agent left without one rations its work out of fear of the window.
+  if [ "$HUNDREDS" -lt 1 ]; then
+    once k0 || exit 0
+  else
+    once "k${HUNDREDS}" || exit 0
+  fi
+  # This message used to tell the agent to "use this running count to decide
+  # when to close the session", i.e. it handed the agent the very decision the
+  # core says is not its to make. Raw-count mode was every ZCode session before
+  # the model-string fix, so agents there were told, every 100k tokens, to
+  # decide when to close: that is how sessions ended at half a window. The
+  # agent does know its window here, so it reads the count against it; if the
+  # window is nearly full it tells the user, and the user decides.
+  emit "CONTEXT: ${USED} tokens of your context window used so far. relevio does not recognize this session's model, so it cannot compute a percentage of the context window, and it will not guess one (a wrong guess would either fire false alarms or stay silent past the real ceiling); it reports this running count on your first tool call and then at every 100k mark. You know your own window size, so read the count against it. If it tells you the window is nearly full, say so to the user in one line and let them decide what happens next: ending the session is still not your call. To get percentages instead, set \"env\": {\"CLAUDE_CONTEXT_LIMIT\": \"<tokens>\"} in .claude/settings.local.json."
   exit 0
 fi
 
@@ -291,9 +304,17 @@ for i in "${!NAMES[@]}"; do
   [ "$PCT" -ge "${LEVELS[$i]}" ] || continue
   once "${NAMES[$i]}" && TOP="${NAMES[$i]}"
 done
+# Below the first band there is nothing to report, EXCEPT once: the core
+# promises the agent a real number on its first tool call, and the first band
+# may be 100k tokens away. Without this, a session spent its opening stretch
+# with no figure at all, which is exactly where agents started rationing work.
+if [ -z "$TOP" ]; then
+  [ "$PCT" -lt "${LEVELS[0]}" ] && once i0 && TOP=i0
+fi
 [ -z "$TOP" ] && exit 0
 
 case "$TOP" in
+  i0)   emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free. This is your first report; the next one arrives when you cross ${LEVELS[0]}%, and silence until then means you have not. Status update, no action needed." ;;
   i10|i20|i30|i40|i50|i60)
         emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free. Status update, no action needed." ;;
   soft) emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free; you passed the ${SOFT}% mark. You are in the sweet spot of the session: a full session's worth of hard-won understanding is loaded in your context, AND a large share of the window (${FREE} tokens) is still free. That combination is at its peak right now, so put it to work:
