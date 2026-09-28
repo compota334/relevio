@@ -1348,6 +1348,44 @@ check "index: ... and saying it predates relevio's header" \
   "$(contains "$err" 'no relevio metadata header at all')" "yes"
 rm -rf "$d11"
 
+# --- Case 12h: a copy that is literally a past version of main's file -------
+# Reported from the same repository, after v0.23.3: one handoff was left,
+# 2026-09-03_ENZO_B_handoff.md, on five branches including an untouched
+# release. Its old copy HAS a full identity, just not main's: main normalized
+# "Dev: Enzo B" to "Dev: ENZO" while migrating it, so identity never matched.
+# Excusing any broken copy whose path is valid on main would reopen the hole
+# where two devs sharing a filename hide each other. Git answers the real
+# question exactly: was this content once main's version of the file, since
+# replaced? A different dev's session never was.
+d12="$(fixture '')"
+git -C "$d12" config relevio.main main
+echo x > "$d12/f"; git -C "$d12" add -A >/dev/null 2>&1; git -C "$d12" commit -qm base >/dev/null 2>&1
+f12=docs/handoff/2026-09-03_ENZO_B_handoff.md
+old12='Session: 03-09-26 enzo b\nDate: 2026-09-03\nDev: Enzo B\nBranch: feat (prose)\nCommits: abc1234..def5678 (3 commits)\nResume: r\nTopics: t\nSummary: s\n\nB.\n'
+new12='Session: 03-09-26 enzo b\nDate: 2026-09-03\nDev: ENZO\nBranch: feat\nCommits: none\nAreas: none\nResume: r\nTopics: t\nSummary: s\n\nB.\n'
+put12() { mkdir -p "$d12/docs/handoff"; printf "$2" > "$d12/$1"; git -C "$d12" add -A >/dev/null 2>&1; git -C "$d12" commit -qm "$3" >/dev/null 2>&1; }
+put12 "$f12" "$old12" old
+for b in release-1.0 other-a other-b other-c other-d; do git -C "$d12" branch "$b"; done
+put12 "$f12" "$new12" migrated
+out12="$( (cd "$d12" && bash "$IDX") 2>&1 )"; rc=$?
+check "index: a past version of main's file, left on five branches, is superseded" "$rc" "0"
+check "index: ... counted once, since the five copies are the same content" \
+  "$(contains "$out12" '1 older copy superseded')" "yes"
+# main's own CURRENT version failing is never excused by its own history.
+put12 "$f12" "$old12" "broken on main"
+( cd "$d12" && bash "$IDX" >/dev/null 2>&1 ); rc=$?
+check "index: main's current version failing is still fatal" "$rc" "2"
+put12 "$f12" "$new12" fixed
+# A broken session that was never on main is not a past version of anything.
+git -C "$d12" checkout -q -b never-on-main
+printf 'Session: other\nDate: 2026-09-03\nDev: JUAN\nBranch: never-on-main (prose)\nCommits: none\nAreas: none\nResume: r\nTopics: t\nSummary: s\n\nB.\n' > "$d12/$f12"
+git -C "$d12" add -A >/dev/null 2>&1; git -C "$d12" commit -qm juan >/dev/null 2>&1
+git -C "$d12" checkout -q main
+err="$( (cd "$d12" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
+check "index: a broken session sharing the path but never on main still fails" \
+  "$rc:$(contains "$err" '(on branch never-on-main)')" "2:yes"
+rm -rf "$d12"
+
 # --- Case 12a: finding the scripts on a host that hides CLAUDE_PLUGIN_ROOT --
 # Measured on ZCode (2026-09, plugin install): CLAUDE_PLUGIN_ROOT reaches
 # plugin HOOKS but is UNSET in the shell the agent's Bash tool opens, and ZCode

@@ -325,6 +325,22 @@ EOF
 # CATALOG holds one tab-separated record per handoff, ordered by filename
 # (which starts with the date, so it is chronological). Any parse failure
 # aborts the whole load: a partial catalog would silently drop a session.
+# Was this exact content once the integration branch's version of this file,
+# since replaced there? True means the copy is simply out of date. Only a ref
+# copy qualifies (the caller checks), and never the integration branch's own
+# current version: that one failing is a real failure.
+replaced_on_main() {  # $1 = path, $2 = blob oid
+  local now
+  [ "$REPO_UNBORN" = yes ] && return 1
+  now="$(git rev-parse -q --verify "$MAIN:$1" 2>/dev/null)" || return 1
+  [ "$now" != "$2" ] || return 1
+  # --raw lists ":oldmode newmode oldsha newsha status" for every change to
+  # the path on the integration branch's history; a match in either sha
+  # column means the content was once there.
+  git log "$MAIN" --no-abbrev --format= --raw -- "$1" 2>/dev/null \
+    | awk -v b="$2" '$3 == b || $4 == b { found = 1 } END { exit !found }'
+}
+
 load_catalog() {
   # Unit separator (0x1F) between the fields of a failure record. Not tab:
   # tab is IFS whitespace, so an empty field would collapse and shift.
@@ -362,7 +378,7 @@ load_catalog() {
         index(l, "Session: ") == 1 { s = substr(l, 10) }
         index(l, "Dev: ")     == 1 { v = substr(l, 6) }
         END { printf("%s\t%s\t%s", d, s, v) }')"
-      bad="${bad}${fid}${US}${p}${US}${where}${US}${out}
+      bad="${bad}${fid}${US}${p}${US}${c}${US}${where}${US}${out}
 "
       continue
     fi
@@ -393,9 +409,16 @@ EOF
   #     dev's current session, since every relevio handoff has those lines.
   #     This is the case that broke a real repo whose stale branches held 434
   #     such copies of already-migrated handoffs.
+  #   - this exact content was once the integration branch's version of the
+  #     file, and the integration branch has since replaced it. That is the
+  #     literal definition of an outdated copy, and git answers it exactly, so
+  #     nothing has to be guessed from the shape of the header. It catches a
+  #     half-migrated copy whose identity no longer matches, e.g. "Dev: Enzo B"
+  #     left on a release branch after main normalized it to "Dev: ENZO".
   # Anything else is a real malformed handoff: report it and write nothing.
-  # A modern copy with a complete identity is never excused by path, which is
-  # what keeps two devs who share a filename from hiding each other.
+  # A modern copy with a complete identity is never excused by path alone:
+  # a different dev's session that merely shares the filename was never on
+  # the integration branch, so none of these rules can hide it.
   #
   # This loop reads a heredoc on purpose. It was a pipeline ending in
   # `| grep -q FATAL && exit 2`, which under `set -o pipefail` failed OPEN:
@@ -403,7 +426,7 @@ EOF
   # and the exit never runs. Fail-loud must not depend on how many things are
   # wrong.
   if [ -n "$bad" ]; then
-    while IFS="$US" read -r fid p where err; do
+    while IFS="$US" read -r fid p c where err; do
       [ -n "$err" ] || continue
       case "$idents" in *"<$fid>"*) SUPERSEDED=$((SUPERSEDED + 1)); continue ;; esac
       # Split the identity by parameter expansion, not IFS: an empty field
@@ -411,6 +434,9 @@ EOF
       d="${fid%%$'\t'*}"; rest="${fid#*$'\t'}"; ses="${rest%%$'\t'*}"; dev="${rest#*$'\t'}"
       if [ -z "$d" ] || [ -z "$ses" ] || [ -z "$dev" ]; then
         case "$parsed_paths" in *"<$p>"*) SUPERSEDED=$((SUPERSEDED + 1)); continue ;; esac
+      fi
+      if [ "$c" != "$RELEVIO_NONE" ] && replaced_on_main "$p" "$c"; then
+        SUPERSEDED=$((SUPERSEDED + 1)); continue
       fi
       # Name the branch. The copy of this file in the user's own checkout is
       # often fine, and an error pointing at a file that looks correct is one
