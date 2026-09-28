@@ -1239,6 +1239,76 @@ check "migrate: ... instead of blaming the Commits value as a branch name" \
   "$(contains "$out" 'Branch starts with "abc1234')" "no"
 rm -rf "$d9"
 
+# --- Case 12f: fail-loud holds however many handoffs are wrong ---------------
+# Reported from a real repository whose main folders are "backend chacras" and
+# "front chacras": the official index kept 405 of 468 handoffs and 15 of 36
+# lanes, and still reported success. Two bugs stacked. relevio-areas.sh derives
+# Areas from git, so it produced folder names with spaces that the parser then
+# refused; and the refusal failed OPEN once there was more than one of them.
+d10="$(fixture '')"
+git -C "$d10" config relevio.main main
+mkdir -p "$d10/backend chacras/src" "$d10/docs/handoff"
+echo a > "$d10/backend chacras/src/a.py"
+git -C "$d10" add -A >/dev/null 2>&1; git -C "$d10" commit -qm c1 >/dev/null 2>&1
+h10="$(git -C "$d10" rev-parse --short HEAD)"
+derived="$( cd "$d10" && bash "$REPO/scripts/relevio-areas.sh" "$h10..$h10" )"
+check "areas: a folder with a space is derived as it really is" \
+  "$derived" "backend chacras/src"
+hx() {  # $1 file  $2 session  $3 branch  $4 areas
+  printf 'Session: %s\nDate: %s\nDev: N\nBranch: %s\nCommits: none\nAreas: %s\nResume: r\nTopics: t\nSummary: s\n\nB.\n' \
+    "$2" "$(echo "$1" | cut -c1-10)" "$3" "$4" > "$d10/docs/handoff/$1"
+}
+# relevio must accept what relevio itself produces.
+hx 2026-09-01_spaced.md spaced main "$derived"
+hx 2026-09-02_accents.md accents main "diseño/config, front chacras, docs"
+( cd "$d10" && bash "$IDX" >/dev/null 2>&1 )
+check "index: Areas with spaces, accents and ñ are indexed, not refused" "$?" "0"
+check "index: ... and kept whole in the catalog" \
+  "$(catalog_of "$d10/docs/handoff/INDEX.md" | grep -c 'diseño/config, front chacras, docs')" "1"
+# Only what genuinely breaks the record is still refused.
+printf 'Session: s\nDate: 2026-09-03\nDev: N\nBranch: main\nCommits: none\nAreas: a\033b\nResume: r\nTopics: t\nSummary: s\n\nB.\n' \
+  > "$d10/docs/handoff/2026-09-03_ctrl.md"
+err="$( (cd "$d10" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
+check "index: a control character in Areas is still refused" \
+  "$rc:$(contains "$err" 'control character')" "2:yes"
+rm "$d10/docs/handoff/2026-09-03_ctrl.md"
+
+# The failure that mattered most: with several bad handoffs, the check used to
+# end in `| grep -q FATAL && exit 2`. grep -q stops at the first match, the loop
+# still writing dies of SIGPIPE, pipefail marks the pipeline failed, and the
+# exit never runs: success, some errors, and a truncated INDEX.md written over
+# the good one. One bad file happened to work, which is why no test caught it.
+( cd "$d10" && bash "$IDX" >/dev/null 2>&1 )
+git -C "$d10" add -A >/dev/null 2>&1; git -C "$d10" commit -qm idx >/dev/null 2>&1
+before10="$(cat "$d10/docs/handoff/INDEX.md")"
+for n in 1 2 3 4 5 6 7 8; do
+  hx "2026-09-1${n}_bad.md" "bad$n" "main (prose)" none
+done
+err="$( (cd "$d10" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
+check "index: eight malformed handoffs fail the run, not just one" "$rc" "2"
+check "index: ... every one of them is reported" \
+  "$(printf '%s\n' "$err" | grep -c '_bad.md: Branch:')" "8"
+check "index: ... and the good INDEX.md is left untouched" \
+  "$(yesno "$([ "$before10" = "$(cat "$d10/docs/handoff/INDEX.md")" ]; echo $?)")" "yes"
+rm -f "$d10"/docs/handoff/2026-09-1?_bad.md
+
+# Excusing a failing copy is keyed by SESSION, not by filename. Two devs can
+# share a filename; if one parses, the other's failure is not a stale twin to
+# be excused but a real session going missing.
+git -C "$d10" checkout -q -b ana10
+hx 2026-09-20_same.md ana10 ana10 none
+git -C "$d10" add -A >/dev/null 2>&1; git -C "$d10" commit -qm ana >/dev/null 2>&1
+git -C "$d10" checkout -q main; git -C "$d10" checkout -q -b juan10
+mkdir -p "$d10/docs/handoff"
+printf 'Session: juan10\nDate: 2026-09-20\nDev: JUAN\nBranch: juan10 (prose)\nCommits: none\nAreas: none\nResume: r\nTopics: t\nSummary: s\n\nB.\n' \
+  > "$d10/docs/handoff/2026-09-20_same.md"
+git -C "$d10" add -A >/dev/null 2>&1; git -C "$d10" commit -qm juan >/dev/null 2>&1
+git -C "$d10" checkout -q main
+err="$( (cd "$d10" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
+check "index: a different session sharing a filename is not silently excused" \
+  "$rc:$(contains "$err" 'juan10 (prose)')" "2:yes"
+rm -rf "$d10"
+
 # --- Case 12a: finding the scripts on a host that hides CLAUDE_PLUGIN_ROOT --
 # Measured on ZCode (2026-09, plugin install): CLAUDE_PLUGIN_ROOT reaches
 # plugin HOOKS but is UNSET in the shell the agent's Bash tool opens, and ZCode

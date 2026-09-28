@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.23.1
+# relevio v0.23.2
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -186,7 +186,7 @@ RESUMED_LINE="RESUMED, NOT ARCHIVED: this conversation was resumed, but no hando
 # The core, parameterised by its opening paragraph. One copy, so a rule added
 # for new sessions cannot be silently missing from restarted ones.
 core() {
-  emit "relevio v0.23.1: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+  emit "relevio v0.23.2: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 $1
 

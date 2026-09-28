@@ -287,7 +287,14 @@ parse_header() {
           it = items[j]; sub(/^[ \t]+/, "", it); sub(/[ \t]+$/, "", it)
           if (it == "") fail("Areas: empty item (a stray comma?)")
           if (it ~ /^\//) fail("Areas: \"" it "\" must be a path relative to the repository root")
-          if (it ~ /[^A-Za-z0-9._@+\/-]/) fail("Areas: \"" it "\" has characters outside [A-Za-z0-9._@+/-]")
+          # A blacklist, not a whitelist. Areas are real folder names, and real
+          # folders are called "backend chacras" or "diseño": relevio-areas.sh
+          # derives them from git and was producing values this parser then
+          # rejected. The only characters that break anything are the ones that
+          # break the record or the table: tab and "|" are refused for every
+          # field above, the comma is the item separator, and control characters
+          # would corrupt the rendered index.
+          if (it ~ /[[:cntrl:]]/) fail("Areas: \"" it "\" contains a control character")
         }
       }
       printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", F, val["Date"], val["Session"],
@@ -314,7 +321,10 @@ EOF
 # (which starts with the date, so it is chronological). Any parse failure
 # aborts the whole load: a partial catalog would silently drop a session.
 load_catalog() {
-  local p c content out rec ident idents="" ok="" failed="" bad=""
+  # Unit separator (0x1F) between the fields of a failure record. Not tab:
+  # tab is IFS whitespace, so an empty field would collapse and shift.
+  local US=$'\037'
+  local p c content out rec ident fid err idents="" bad="" shown="" fatal=0
   scan_handoffs
   CATALOG=""
   CATALOG_COUNT=0
@@ -339,8 +349,21 @@ load_catalog() {
       # since been migrated. Blocking on that would let one stale branch break
       # the index for the whole team. It only becomes an error if NO copy of
       # this file parses anywhere.
-      case "$failed" in *"<$p>"*) ;; *) failed="$failed<$p>"; bad="$bad$p	$out
-" ;; esac
+      # Remember WHICH session this failing copy belongs to, read leniently
+      # since the strict parse just refused it. A failing copy is only excused
+      # when a copy of the SAME session parsed (a stale pre-v0.22 twin); a
+      # different session that merely shares the filename is a real failure.
+      # The separator is \037, not tab: tab is IFS whitespace, and an empty
+      # field (a header with no Session line, say) would collapse and shift.
+      fid="$(printf '%s\n' "$content" | awk '
+        /^[ \t]*$/ { exit }
+        { l = $0; sub(/[ \t]+$/, "", l) }
+        index(l, "Date: ")    == 1 { d = substr(l, 7) }
+        index(l, "Session: ") == 1 { s = substr(l, 10) }
+        index(l, "Dev: ")     == 1 { v = substr(l, 6) }
+        END { printf("%s\t%s\t%s", d, s, v) }')"
+      bad="${bad}${fid}${US}${out}
+"
       continue
     fi
     rec="$out"
@@ -351,20 +374,35 @@ load_catalog() {
     ident="$(printf '%s' "$rec" | cut -f2,3,4)"
     case "$idents" in *"<$ident>"*) continue ;; esac
     idents="$idents<$ident>"
-    ok="$ok<$p>"
     CATALOG="${CATALOG}${rec}
 "
     CATALOG_COUNT=$((CATALOG_COUNT + 1))
   done <<EOF
 $HANDOFF_REFS
 EOF
-  # A file that failed to parse everywhere it exists is a real malformed
-  # handoff: report it with the parser's own words and write nothing.
+  # A failing copy that no parsed copy of the same session excuses is a real
+  # malformed handoff: report it in the parser's own words and write nothing.
+  #
+  # This loop reads a heredoc on purpose. It used to be a pipeline ending in
+  # `| grep -q FATAL && exit 2`, and under `set -o pipefail` that failed OPEN:
+  # grep -q stops at the first match, the loop still writing the next line
+  # dies of SIGPIPE, the pipeline reports failure, and `&& exit 2` never runs.
+  # With one bad handoff it worked; with several, the run printed some of the
+  # errors, returned success, and overwrote INDEX.md with a catalog missing
+  # every one of them. Fail-loud must not depend on how many things are wrong.
   if [ -n "$bad" ]; then
-    printf '%s' "$bad" | while IFS='	' read -r p out; do
-      case "$ok" in *"<$p>"*) ;; *) echo "$out" >&2; echo "FATAL" ;; esac
-    done | grep -q FATAL && exit 2
+    while IFS="$US" read -r fid err; do
+      [ -n "$err" ] || continue
+      case "$idents" in *"<$fid>"*) continue ;; esac
+      case "$shown" in *"<$err>"*) continue ;; esac
+      shown="$shown<$err>"
+      printf '%s\n' "$err" >&2
+      fatal=1
+    done <<EOF
+$bad
+EOF
   fi
+  [ "$fatal" -eq 0 ] || exit 2
   return 0
 }
 
