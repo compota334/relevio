@@ -1309,6 +1309,45 @@ check "index: a different session sharing a filename is not silently excused" \
   "$rc:$(contains "$err" 'juan10 (prose)')" "2:yes"
 rm -rf "$d10"
 
+# --- Case 12g: handoffs older than relevio's header, on stale branches -------
+# Reported from a real repository: its stale branches (main-gus and others)
+# held 434 copies of handoffs from before its migration, in the format relevio
+# used before it had a metadata header at all ("# Handoff - PROJECT - DATE").
+# v0.23.2 excused an old copy only when its Date/Session/Dev matched an indexed
+# session, and these copies have none of those lines, so every /kickoff failed.
+# A copy with no identity to compare is excused by PATH instead, when the same
+# file was indexed from another branch: a file that old cannot be some other
+# dev's current session. The earlier stale-branch test used a copy that still
+# had its identity lines, which is exactly why it did not catch this.
+d11="$(fixture '')"
+git -C "$d11" config relevio.main main
+echo x > "$d11/f"; git -C "$d11" add -A >/dev/null 2>&1; git -C "$d11" commit -qm base >/dev/null 2>&1
+legacy='# Handoff - PROJECT - 2026-06-03 (A)\n\n## What was done\n\nThings.\n'
+put11() {  # $1 file  $2 printf-format body  (committed on the current branch)
+  mkdir -p "$d11/docs/handoff"; printf "$2" > "$d11/docs/handoff/$1"
+  git -C "$d11" add -A >/dev/null 2>&1; git -C "$d11" commit -qm "$1" >/dev/null 2>&1
+}
+git -C "$d11" checkout -q -b main-gus
+put11 2026-06-03_s.md "$legacy"
+git -C "$d11" checkout -q main
+put11 2026-06-03_s.md 'Session: s\nDate: 2026-06-03\nDev: GUS\nBranch: main\nCommits: none\nAreas: none\nResume: r\nTopics: t\nSummary: migrated\n\nB.\n'
+out11="$( (cd "$d11" && bash "$IDX") 2>&1 )"; rc=$?
+check "index: a headerless copy on a stale branch does not break the index" "$rc" "0"
+check "index: ... it is counted, not dropped in silence" \
+  "$(contains "$out11" '1 older copy superseded')" "yes"
+# The same kind of file with no newer copy anywhere is a real problem, and the
+# error has to say WHERE: the user's own checkout may hold nothing wrong.
+git -C "$d11" checkout -q main-gus
+put11 2026-06-04_orphan.md "$legacy"
+git -C "$d11" checkout -q main
+err="$( (cd "$d11" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
+check "index: a headerless copy nothing supersedes still fails loud" "$rc" "2"
+check "index: ... naming the branch it lives on" \
+  "$(contains "$err" '2026-06-04_orphan.md (on branch main-gus)')" "yes"
+check "index: ... and saying it predates relevio's header" \
+  "$(contains "$err" 'no relevio metadata header at all')" "yes"
+rm -rf "$d11"
+
 # --- Case 12a: finding the scripts on a host that hides CLAUDE_PLUGIN_ROOT --
 # Measured on ZCode (2026-09, plugin install): CLAUDE_PLUGIN_ROOT reaches
 # plugin HOOKS but is UNSET in the shell the agent's Bash tool opens, and ZCode

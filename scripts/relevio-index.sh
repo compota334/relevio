@@ -111,4 +111,9 @@ trap 'rm -f "$tmp"' EXIT
 render > "$tmp"
 mv "$tmp" "$out"
 trap - EXIT
-echo "relevio-index: $CATALOG_COUNT handoff(s), $LANES active lane(s) -> docs/handoff/INDEX.md"
+# The superseded count is always printed when there is one: those copies are
+# skipped on purpose, and a skip nobody can see is how this index once hid 63
+# sessions while reporting success.
+SUMMARY="relevio-index: $CATALOG_COUNT handoff(s), $LANES active lane(s)"
+[ "$SUPERSEDED" -eq 0 ] || SUMMARY="$SUMMARY, $SUPERSEDED older cop$([ "$SUPERSEDED" -eq 1 ] && echo y || echo ies) superseded by a newer version and left out"
+echo "$SUMMARY -> docs/handoff/INDEX.md"

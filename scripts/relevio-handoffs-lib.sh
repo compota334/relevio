@@ -195,36 +195,41 @@ scan_handoffs() {
           r="$(branch_tip "$b")"
           [ -n "$r" ] || continue
           git ls-tree -r "$r" -- docs/handoff/ 2>/dev/null \
-            | awk '$2 == "blob" { oid = $3; sub(/^[^	]*	/, ""); print $0 "	" oid }'
+            | awk -v b="$b" '$2 == "blob" { oid = $3; sub(/^[^	]*	/, ""); print $0 "	" oid "	" b }'
         done \
       | grep -E '^docs/handoff/[0-9]{4}-[0-9]{2}-[0-9]{2}_[^/]+\.md	' || true
   )"
 
   # A handoff being written right now exists only in the working tree:
-  # /handoff regenerates the index before it commits. Its source field holds
-  # the sentinel, never an empty string (see the RELEVIO_NONE invariant).
-  # Each line is "path<TAB>source<TAB>blob": source is the sentinel for the
-  # working tree and a blob oid for a ref, while the third column is always the
-  # content hash, which is what the dedupe below keys on.
+  # /handoff regenerates the index before it commits.
+  #
+  # Every line becomes "path<TAB>source<TAB>key<TAB>where": source is how to
+  # read it (the sentinel for the working tree, a blob oid for a ref), key is
+  # the content hash the dedupe runs on, and where names the branch it was
+  # found on. "where" exists for the error messages: a handoff that fails on a
+  # stale branch must be reported THERE, because the copy of the same file in
+  # the user's own checkout is usually fine, and an error pointing at a file
+  # that looks correct is an error nobody can act on. No field is ever empty
+  # (see the RELEVIO_NONE invariant).
   wt=""
   if [ -n "$worktree" ]; then
-    wt="$(paste -d'	' \
-      <(printf '%s\n' "$worktree" | sed "s|\$|	$RELEVIO_NONE|") \
-      <(cd "$TOP" && printf '%s\n' "$worktree" | git hash-object --stdin-paths))"
+    # paste's default delimiter is a tab and awk's "\t" is one everywhere, so
+    # nothing here leans on sed's GNU-only reading of "\t".
+    wt="$(paste <(printf '%s\n' "$worktree") \
+                <(cd "$TOP" && printf '%s\n' "$worktree" | git hash-object --stdin-paths) \
+      | awk -F'\t' -v none="$RELEVIO_NONE" '{ print $1 "\t" none "\t" $2 "\tworking tree" }')"
   fi
 
-  # Working-tree entries first, so a handoff present on disk is read from disk
-  # rather than from whatever a ref happens to hold.
   # Working-tree entries first, so identical content on disk wins over a ref
   # copy and is read from disk. Note what is NOT done here: a path present in
   # the working tree does not suppress OTHER content at the same path, because
   # that other content may be a different dev's session under the same name.
   HANDOFF_REFS="$(
     { [ -n "$wt" ] && printf '%s\n' "$wt"
-      [ -n "$pairs" ] && printf '%s\n' "$pairs" | awk -F'	' 'NF == 2 { print $1 "	" $2 "	" $2 }'
+      [ -n "$pairs" ] && printf '%s\n' "$pairs" | awk -F'\t' 'NF == 3 { print $1 "\t" $2 "\t" $2 "\t" $3 }'
       true; } \
-      | awk -F'	' 'NF == 3 && $3 != "" && !seen[$1 FS $3]++ { print $1 "	" $2 }' \
-      | sort -t'	' -k1,1 -s
+      | awk -F'\t' 'NF == 4 && $3 != "" && !seen[$1 FS $3]++ { print $1 "\t" $2 "\t" $4 }' \
+      | sort -t"$(printf '\t')" -k1,1 -s
   )"
 }
 
@@ -324,12 +329,17 @@ load_catalog() {
   # Unit separator (0x1F) between the fields of a failure record. Not tab:
   # tab is IFS whitespace, so an empty field would collapse and shift.
   local US=$'\037'
-  local p c content out rec ident fid err idents="" bad="" shown="" fatal=0
+  local p c where content out rec ident fid err idents="" parsed_paths=""
+  local bad="" shown="" fatal=0 d rest ses dev
   scan_handoffs
   CATALOG=""
   CATALOG_COUNT=0
+  # Copies left out because a newer copy of the same handoff was indexed.
+  # Counted and shown by relevio-index.sh: skipping them is correct, skipping
+  # them where nobody can see it is how the index once hid 63 sessions.
+  SUPERSEDED=0
   [ -n "$HANDOFF_REFS" ] || return 0
-  while IFS='	' read -r p c; do
+  while IFS=$'\t' read -r p c where; do
     [ -n "$p" ] || continue
     if [ "$c" = "$RELEVIO_NONE" ]; then
       content="$(cat "$TOP/$p")" || exit 2
@@ -337,24 +347,14 @@ load_catalog() {
       content="$(git cat-file blob "$c")" || exit 2
     fi
     # parse_header prints the record on stdout OR the reason on stderr, never
-    # both, so one capture serves for either outcome.
-    # An `if` condition, not a bare assignment: under `set -e` a failing
-    # command substitution would abort the whole run before the failure could
-    # be judged.
-    if out="$(printf '%s\n' "$content" | parse_header "$p" 2>&1)"; then
-      :
-    else
-      # Not fatal yet. The same handoff can sit at several branch tips, and an
-      # older branch may still carry a pre-v0.22 copy of a session that has
-      # since been migrated. Blocking on that would let one stale branch break
-      # the index for the whole team. It only becomes an error if NO copy of
-      # this file parses anywhere.
-      # Remember WHICH session this failing copy belongs to, read leniently
-      # since the strict parse just refused it. A failing copy is only excused
-      # when a copy of the SAME session parsed (a stale pre-v0.22 twin); a
-      # different session that merely shares the filename is a real failure.
-      # The separator is \037, not tab: tab is IFS whitespace, and an empty
-      # field (a header with no Session line, say) would collapse and shift.
+    # both, so one capture serves for either outcome. An `if`, not a bare
+    # assignment: under `set -e` a failing substitution would abort the run
+    # before the failure could be judged.
+    if ! out="$(printf '%s\n' "$content" | parse_header "$p" 2>&1)"; then
+      # Not fatal yet: the same handoff sits at several branch tips, and a
+      # stale branch may still carry an old copy of a session that has since
+      # been migrated. Decided below, once every copy has been seen. Read the
+      # copy's identity leniently, since the strict parse just refused it.
       fid="$(printf '%s\n' "$content" | awk '
         /^[ \t]*$/ { exit }
         { l = $0; sub(/[ \t]+$/, "", l) }
@@ -362,10 +362,11 @@ load_catalog() {
         index(l, "Session: ") == 1 { s = substr(l, 10) }
         index(l, "Dev: ")     == 1 { v = substr(l, 6) }
         END { printf("%s\t%s\t%s", d, s, v) }')"
-      bad="${bad}${fid}${US}${out}
+      bad="${bad}${fid}${US}${p}${US}${where}${US}${out}
 "
       continue
     fi
+    parsed_paths="$parsed_paths<$p>"
     rec="$out"
     # A session is identified by its date, its conversation name and its dev.
     # Two devs who happen to choose the same filename on different branches
@@ -380,23 +381,47 @@ load_catalog() {
   done <<EOF
 $HANDOFF_REFS
 EOF
-  # A failing copy that no parsed copy of the same session excuses is a real
-  # malformed handoff: report it in the parser's own words and write nothing.
+
+  # Judge every copy that failed. A failing copy is EXCUSED, meaning it is an
+  # older copy of a handoff that was indexed from a newer one, when:
+  #   - its session identity (date, session, dev) matches an indexed session:
+  #     the same session in an older format, e.g. before its migration; or
+  #   - it has no complete identity at all AND the same file was indexed from
+  #     another branch. A handoff with no Date/Session/Dev lines predates
+  #     relevio's metadata header entirely ("# Handoff - PROJECT - DATE"), so
+  #     identity cannot be compared, and a file that old cannot be some other
+  #     dev's current session, since every relevio handoff has those lines.
+  #     This is the case that broke a real repo whose stale branches held 434
+  #     such copies of already-migrated handoffs.
+  # Anything else is a real malformed handoff: report it and write nothing.
+  # A modern copy with a complete identity is never excused by path, which is
+  # what keeps two devs who share a filename from hiding each other.
   #
-  # This loop reads a heredoc on purpose. It used to be a pipeline ending in
-  # `| grep -q FATAL && exit 2`, and under `set -o pipefail` that failed OPEN:
-  # grep -q stops at the first match, the loop still writing the next line
-  # dies of SIGPIPE, the pipeline reports failure, and `&& exit 2` never runs.
-  # With one bad handoff it worked; with several, the run printed some of the
-  # errors, returned success, and overwrote INDEX.md with a catalog missing
-  # every one of them. Fail-loud must not depend on how many things are wrong.
+  # This loop reads a heredoc on purpose. It was a pipeline ending in
+  # `| grep -q FATAL && exit 2`, which under `set -o pipefail` failed OPEN:
+  # grep -q stops at the first match, the loop still writing dies of SIGPIPE,
+  # and the exit never runs. Fail-loud must not depend on how many things are
+  # wrong.
   if [ -n "$bad" ]; then
-    while IFS="$US" read -r fid err; do
+    while IFS="$US" read -r fid p where err; do
       [ -n "$err" ] || continue
-      case "$idents" in *"<$fid>"*) continue ;; esac
+      case "$idents" in *"<$fid>"*) SUPERSEDED=$((SUPERSEDED + 1)); continue ;; esac
+      # Split the identity by parameter expansion, not IFS: an empty field
+      # would collapse under IFS=tab and shift the others.
+      d="${fid%%$'\t'*}"; rest="${fid#*$'\t'}"; ses="${rest%%$'\t'*}"; dev="${rest#*$'\t'}"
+      if [ -z "$d" ] || [ -z "$ses" ] || [ -z "$dev" ]; then
+        case "$parsed_paths" in *"<$p>"*) SUPERSEDED=$((SUPERSEDED + 1)); continue ;; esac
+      fi
+      # Name the branch. The copy of this file in the user's own checkout is
+      # often fine, and an error pointing at a file that looks correct is one
+      # nobody can act on.
+      [ "$where" = "working tree" ] || err="${err/$p:/$p (on branch $where):}"
       case "$shown" in *"<$err>"*) continue ;; esac
       shown="$shown<$err>"
       printf '%s\n' "$err" >&2
+      if [ -z "$d" ] && [ -z "$ses" ] && [ -z "$dev" ]; then
+        printf '  It has no relevio metadata header at all, so it predates relevio'"'"'s format\n  and no indexed copy supersedes it. Give it a header by hand, or remove it.\n' >&2
+      fi
       fatal=1
     done <<EOF
 $bad
