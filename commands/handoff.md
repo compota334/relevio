@@ -62,7 +62,7 @@ user, not from a guess:
 - no dev name: ask the user for their short name and record it once for this
   clone with the `git config relevio.dev <NAME>` line the script prints;
 - no "SESSION ID" line in your context, or no record of when the session
-  began (both mean it started before relevio v0.25): ask the user when the
+  began (both mean it started before relevio v0.24.5): ask the user when the
   session started and rerun with `--since "<date>"`, adding
   `--no-session-id` if there is no id;
 - a detached HEAD: switch to the branch the work lives on first.

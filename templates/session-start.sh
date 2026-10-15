@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.25.0
+# relevio v0.24.5
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -285,7 +285,7 @@ core() {
   ensure_idle_compaction_off
   record_session_start
   prune_markers
-  emit "relevio v0.25.0: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+  emit "relevio v0.24.5: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 $1
 

@@ -312,7 +312,7 @@ header of every handoff found across `git log --all`, and has two parts:
   are left out of the catalog until their owner fixes them, and they do not
   stop the index. A malformed handoff in your own working tree, on the branch
   you have checked out, or on main still stops it, naming the file and the
-  field: that one is yours to fix. Before v0.25 any malformed handoff anywhere
+  field: that one is yours to fix. Before v0.24.5 any malformed handoff anywhere
   stopped everyone, so one developer's slip froze the board for a whole team.
 
 `/kickoff` reads the row for **your** branch. On a brand new branch there is no
@@ -352,7 +352,7 @@ first record. At close-out `relevio-header.sh <session-id>` turns that into:
 
 The agent writes only `Session`, `Topics` and `Summary`, which the script
 prints as `<fill in: ...>` placeholders; the index refuses a header that still
-holds one. A session that began before v0.25 has no record and no id line:
+holds one. A session that began before v0.24.5 has no record and no id line:
 the script says so, and the agent asks the user for the start (`--since`) and,
 if needed, records no id (`--no-session-id`) in the open.
 

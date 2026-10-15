@@ -31,7 +31,7 @@ for f in .claude/hooks/context-warn.sh .claude/hooks/session-start.sh \
   if [ -f "$f" ]; then rm "$f"; info "removed: $f"; fi
 done
 rmdir .claude/hooks .claude/commands .claude/scripts 2>/dev/null || true
-# The session start records (v0.25+) live in git's own directory, never in the
+# The session start records (v0.24.5+) live in git's own directory, never in the
 # repository's files, so nothing else would ever remove them.
 if GITCOMMON="$(git rev-parse --git-common-dir 2>/dev/null)" && [ -d "$GITCOMMON/relevio" ]; then
   rm -rf "$GITCOMMON/relevio"; info "removed: $GITCOMMON/relevio (session start records)"

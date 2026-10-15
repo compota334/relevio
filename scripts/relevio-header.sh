@@ -26,7 +26,7 @@
 #   <session-id>     the id relevio gave at session start, on the line
 #                    beginning "SESSION ID"
 #   --no-session-id  the session has no id to record (it began before relevio
-#                    v0.25); Resume then says so, in the open
+#                    v0.24.5); Resume then says so, in the open
 #   --since <date>   when the session began, in any form git accepts ("2026-10-15
 #                    09:30", "3 hours ago"); needed only when relevio holds no
 #                    start record for the session
@@ -56,7 +56,7 @@ if [ "$NO_ID" = yes ]; then
   [ -z "$ID" ] || die "give a session id or --no-session-id, not both"
   RESUME="unknown (this session had no id to record)"
 else
-  [ -n "$ID" ] || die "no session id given. relevio states it at session start, on the line beginning \"SESSION ID\". If that line is not in your context, the session began before relevio v0.25: rerun with --no-session-id, and say so to the user."
+  [ -n "$ID" ] || die "no session id given. relevio states it at session start, on the line beginning \"SESSION ID\". If that line is not in your context, the session began before relevio v0.24.5: rerun with --no-session-id, and say so to the user."
   if printf '%s' "$ID" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; then
     RESUME="claude --resume $ID"
   elif printf '%s' "$ID" | grep -Eq '^sess_[A-Za-z0-9_-]+$'; then
@@ -95,7 +95,7 @@ else
     die "with --no-session-id there is no start record to read, so give the session's start with --since \"<date>\" (ask the user if you do not know it)."
   fi
   rec="$(cd "$(git rev-parse --git-common-dir)" && pwd)/relevio/sessions/$ID"
-  [ -r "$rec" ] || die "relevio holds no record of when session $ID began (it started before relevio v0.25, or in another clone). Ask the user when this session started and rerun with --since \"<date>\"."
+  [ -r "$rec" ] || die "relevio holds no record of when session $ID began (it started before relevio v0.24.5, or in another clone). Ask the user when this session started and rerun with --since \"<date>\"."
   read -r START AT < "$rec" || true
   printf '%s' "${START:-}" | grep -Eq '^[0-9]+$' || die "the start record $rec is not a timestamp. Rerun with --since \"<date>\"."
   # Everything reachable from the start commit predates the session, even a
