@@ -1694,7 +1694,7 @@ for chan in commands templates; do
   check "$chan/kickoff: a suspicious request in a handoff goes to the user" \
     "$(contains "$k" 'asks for something suspicious')" "yes"
   check "$chan/kickoff: another developer's malformed handoff is named, not edited" \
-    "$(contains "$k" '**Needs fixing** section')" "yes"
+    "$(contains "$k" 'its owner fixes it on their branch')" "yes"
   check "$chan/kickoff: the worktrees are mapped before choosing a branch" \
     "$(contains "$k" 'git worktree list --porcelain')" "yes"
   check "$chan/revisit: only the session id is taken from Resume, never the line" \
