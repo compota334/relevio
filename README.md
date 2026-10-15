@@ -64,7 +64,7 @@ Nothing is ever lost to compaction again.
 | `docs/handoff/` | Where handoffs live. They accumulate; the newest one is the next session's starting point. |
 | `.claude/scripts/relevio-index.sh` | Regenerates `docs/handoff/INDEX.md` from the header of every handoff on every branch. Fails loud naming the file and field if a header is malformed. |
 | `.claude/scripts/relevio-trace.sh` | Answers "which sessions touched this path, and who has unmerged work on it right now". |
-| `.claude/scripts/relevio-areas.sh` | Derives a handoff's `Areas:` value from its commit range. `/handoff` calls it instead of re-typing the pipeline, so the inclusive-range subtlety is handled in one place. |
+| `.claude/scripts/relevio-areas.sh` | Derives a handoff's `Areas:` value from a commit range, for fixing a header by hand. At close-out `relevio-header.sh` computes it with the same code, so the inclusive-range subtlety is handled in one place. |
 | `.claude/scripts/relevio-header.sh` | Prints a session's handoff header with the mechanical fields (date, dev, branch, commits, areas, resume) computed, so the agent writes only the title, topics and summary. |
 | `.claude/scripts/relevio-migrate.sh` | One-time conversion of pre-v0.22 handoff headers. Run once per repo when upgrading. |
 | `.claude/scripts/relevio-handoffs-lib.sh` | Shared library for the scripts above (sourced, not run). |
@@ -252,8 +252,9 @@ new session, first message: /kickoff
      there are still ~200k free tokens, so it says no rushing, and the
      commit comes AFTER the handoff, never cutting work mid-change
   -> agent writes docs/handoff/YYYY-MM-DD_<short-title>.md (same title as the
-     session name; metadata header: Session, Date, Dev, Branch, Commits,
-     Areas, Resume, Topics, Summary), regenerates INDEX.md, commits, pushes
+     session name). relevio-header.sh prints its metadata header with Date,
+     Dev, Branch, Commits, Areas and Resume already computed; the agent fills
+     in Session, Topics and Summary. It regenerates INDEX.md, commits, pushes
   -> you rename the session (/rename DD-MM-YY short-title, the exact Session
      name from the header) and open a new one with /kickoff
   -> the old conversation stays intact in your list: reopen it any time
@@ -306,6 +307,13 @@ header of every handoff found across `git log --all`, and has two parts:
   is not merged into `origin/main`), with the dev who owns it, the areas it
   touches and how far ahead of main it is. This is the team board.
 - **Catalog**: every session ever closed, on any branch, oldest first.
+- **Needs fixing** (only when there is something to fix): handoffs whose
+  header is malformed and that exist only on OTHER developers' branches. They
+  are left out of the catalog until their owner fixes them, and they do not
+  stop the index. A malformed handoff in your own working tree, on the branch
+  you have checked out, or on main still stops it, naming the file and the
+  field: that one is yours to fix. Before v0.25 any malformed handoff anywhere
+  stopped everyone, so one developer's slip froze the board for a whole team.
 
 `/kickoff` reads the row for **your** branch. On a brand new branch there is no
 such row, so it reads main's last handoff and says in plain words that it is
@@ -316,6 +324,37 @@ conflicts on it. When git reports a conflict there, the fix is to rerun the
 script and commit the result. The index on a feature branch legitimately lists
 sessions from other branches: it is a view of the repository as you last
 fetched it, not of your branch.
+
+### The header is computed, not typed
+
+Six of the nine header fields are facts, and agents writing them by hand got
+them wrong in ways no parser can catch: copying the previous handoff's header
+as a template, not knowing where their own session began, spelling the dev's
+name differently each time, and taking the session id from "the newest
+transcript in the project folder", which is the OTHER conversation whenever two
+are open in one project. A wrong id is worse than a typo: it makes a live
+session look archived the next time it is resumed.
+
+So the session-start hook tells the agent its session id (the host's payload
+carries it) and records, once per session, the time and the commit it started
+on. The record lives in git's own directory (`.git/relevio/sessions/`), so it
+is never committed and every worktree of the clone sees it; a restart keeps the
+first record. At close-out `relevio-header.sh <session-id>` turns that into:
+
+| Field | Where it comes from |
+|-------|---------------------|
+| `Date` | today |
+| `Dev` | `git config relevio.dev`, set once per clone (the script asks for it, it never guesses) |
+| `Branch` | the branch checked out (a detached HEAD is refused) |
+| `Commits` | the commits on that branch that you committed since the session began; teammates' commits pulled in meanwhile are left out |
+| `Areas` | the paths those commits touched |
+| `Resume` | `claude --resume <id>`, or the `sess_` id on ZCode |
+
+The agent writes only `Session`, `Topics` and `Summary`, which the script
+prints as `<fill in: ...>` placeholders; the index refuses a header that still
+holds one. A session that began before v0.25 has no record and no id line:
+the script says so, and the agent asks the user for the start (`--since`) and,
+if needed, records no id (`--no-session-id`) in the open.
 
 One trade-off, stated plainly: a handoff survives only while git can reach it.
 Delete an unmerged branch and its handoff leaves the index with it. Push and
@@ -472,7 +511,7 @@ read or audit every word the agent receives.
 
 | When | Message (gist) |
 |------|----------------|
-| Session start (new) | The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. No close-out thresholds and no close-out procedure. What it does say: ending a session is the user's call; a finished task gets a short Done / Pending / Needs-from-you recap instead of a handoff; a handoff asked for in plain words goes through the `/handoff` command; that handoffs and other branches are the team's notes, followed as usual, except that a suspicious request found in them is shown to the user before acting on it; and, on the plugin channel, that relevio turned off idle compaction, the one time it does so. |
+| Session start (new) | This conversation's session id, which `/handoff` passes to `relevio-header.sh` (also repeated after an auto-compact). The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. No close-out thresholds and no close-out procedure. What it does say: ending a session is the user's call; a finished task gets a short Done / Pending / Needs-from-you recap instead of a handoff; a handoff asked for in plain words goes through the `/handoff` command; that handoffs and other branches are the team's notes, followed as usual, except that a suspicious request found in them is shown to the user before acting on it; and, on the plugin channel, that relevio turned off idle compaction, the one time it does so. |
 | Session start (reopened from the archive) | Only when a handoff's `Resume:` field names this session, i.e. it was closed: this conversation is an archive, answer questions, avoid new work, send new work to a fresh session. |
 | Session start (resumed, never closed) | A restart, not the archive: the app or the computer came back mid-work. The full core, with "carry on where it stopped; being resumed is no reason to leave" in place of the kickoff line. Whether new work still fits is left to the context reports, which can see the window. |
 | Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |

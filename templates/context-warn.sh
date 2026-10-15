@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.24.1
+# relevio v0.25.0
 # relevio: context warning for the agent.
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
@@ -94,10 +94,10 @@ RELEVIO_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" 2>/dev/null &&
 # not evidence of anything.
 [ -r "${RELEVIO_SCRIPTS:-/nonexistent}/relevio-index.sh" ] || RELEVIO_SCRIPTS=""
 INDEX_CMD="bash \"$RELEVIO_SCRIPTS/relevio-index.sh\""
-AREAS_CMD="bash \"$RELEVIO_SCRIPTS/relevio-areas.sh\""
+HEADER_CMD="bash \"$RELEVIO_SCRIPTS/relevio-header.sh\""
 if [ -z "$RELEVIO_SCRIPTS" ]; then
   INDEX_CMD="relevio-index.sh (NOT FOUND beside relevio's hooks: report that, do not hand-edit INDEX.md and do not assume the install is out of date)"
-  AREAS_CMD="relevio-areas.sh (NOT FOUND beside relevio's hooks)"
+  HEADER_CMD="relevio-header.sh (NOT FOUND beside relevio's hooks)"
 fi
 
 
@@ -340,10 +340,10 @@ case "$TOP" in
 Nothing needs to be written down yet: a later message will tell you when to write the handoff, with complete instructions. Until then, keep working." ;;
   hard) emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free; you passed the ${HARD}% mark. Time to close the session, and ${FREE} tokens is enough room to do it well: no rushing, no skipped steps.
 1. Bring the work in progress to a coherent, safe stopping point at full quality (do not abandon anything mid-change). Start nothing new after this.
-2. Then write the handoff, while this session's understanding is still fully loaded, to docs/handoff/YYYY-MM-DD_<short-title>.md: what was done this session (cite the hashes of commits already made, so the next session can read the work with git log), lessons learned (only real problems that took several attempts to solve; never invent one), pending work in priority order, and for anything left open that depended on understanding built up this session (approaches you tried and ruled out, why the obvious fix does not work, a subtle coupling you found), the REASONING and not just the title: the next session can re-read files cheaply, but cannot cheaply re-derive your conclusions. Fill its Branch, Commits and Areas fields with bare values: Branch is a plain branch name, Commits is <first>..<last>, and Areas comes from '$AREAS_CMD <first>..<last>' (do not hand-roll that derivation, the range is inclusive of <first> and git's is not). Then regenerate the index with $INDEX_CMD: docs/handoff/INDEX.md is generated, never hand-edited, and the script names the file and field if a header is malformed.
+2. Then write the handoff, while this session's understanding is still fully loaded, to docs/handoff/YYYY-MM-DD_<short-title>.md: what was done this session (cite the hashes of commits already made, so the next session can read the work with git log), lessons learned (only real problems that took several attempts to solve; never invent one), pending work in priority order, and for anything left open that depended on understanding built up this session (approaches you tried and ruled out, why the obvious fix does not work, a subtle coupling you found), the REASONING and not just the title: the next session can re-read files cheaply, but cannot cheaply re-derive your conclusions. Commit the finished work first, then start the handoff with the header printed by '$HEADER_CMD <session-id>' (the id is on relevio's \"SESSION ID\" line): it computes Date, Dev, Branch, Commits, Areas and Resume, and you fill in only Session, Topics and Summary. Never type those six fields by hand or copy them from an earlier handoff. Then regenerate the index with $INDEX_CMD: docs/handoff/INDEX.md is generated, never hand-edited, and the script names the file and field if a header is malformed.
 3. Run the project's checks (type-check, linter, tests: see CLAUDE.md), then commit everything, work and handoff included, and push.
 $STEP4" ;;
-  g85)  emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free. If a handoff has already been written for this session, keep answers short and do no new work: auto-compact is getting close. If NO handoff exists yet, write it NOW: docs/handoff/YYYY-MM-DD_<short-title>.md with what was done (commit hashes), lessons that cost real effort, pending work in order and the reasoning behind anything left open; then regenerate the index with $INDEX_CMD; commit and push." ;;
+  g85)  emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free. If a handoff has already been written for this session, keep answers short and do no new work: auto-compact is getting close. If NO handoff exists yet, write it NOW: docs/handoff/YYYY-MM-DD_<short-title>.md, its header printed by '$HEADER_CMD <session-id>', with what was done (commit hashes), lessons that cost real effort, pending work in order and the reasoning behind anything left open; then regenerate the index with $INDEX_CMD; commit and push." ;;
   g90)  emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, ${FREE} still free. Auto-compact is approaching. Answer briefly, do not read files or start anything new, and remind the user in your reply that this conversation is nearly full and new work belongs in a fresh session." ;;
   g95)  emit "CONTEXT: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, only ${FREE} still free. Auto-compact is imminent. Give only short answers and warn the user in EVERY reply that this conversation is about to auto-compact." ;;
   g99)  emit "STOP: ${PCT}% of your context window used: ${USED} of ${LIMIT} tokens, only ${FREE} still free. Do NOT answer the user's pending request. Reply ONLY, in the user's language, that this conversation reached 99% of its context window, that one more exchange may trigger auto-compact and destroy its remaining detail, and ask if they are SURE they want to continue. Then wait for their explicit confirmation before doing anything else." ;;

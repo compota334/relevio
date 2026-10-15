@@ -582,9 +582,9 @@ range_of() {
 }
 
 # The paths a commit range touched, as an Areas value. The single definition of
-# that derivation: the /handoff command calls it through relevio-areas.sh
-# rather than re-typing the pipeline, so nobody can drop the `^` and silently
-# lose the session's own first commit. Returns 1 when the range no longer
+# that derivation: relevio-header.sh calls it at close-out and relevio-areas.sh
+# exposes it for fixing a header by hand, so nobody re-types the pipeline, drops
+# the `^` and silently loses the session's own first commit. Returns 1 when the range no longer
 # resolves, so the caller can report it instead of inventing a value.
 areas_for_range() {
   local range a

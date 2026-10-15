@@ -677,13 +677,13 @@ check "close-out: a plugin install gets the plugin's own resolved path" \
   "$(contains "$out" "bash \"$REPO/scripts/relevio-index.sh\"")" "yes"
 check "close-out: nobody is told to append an index row by hand any more" \
   "$(grep -c 'append a row to docs/handoff/INDEX.md' "$REPO/hooks/context-warn.sh" "$REPO/hooks/session-start.sh" | awk -F: '{ s += $2 } END { print s }')" "0"
-check "close-out: the handoff header fields it names include Areas" \
-  "$(contains "$out" 'Branch, Commits and Areas')" "yes"
-# The Areas derivation belongs to relevio-areas.sh. The hook is the ONLY place
-# that delivers the close-out checklist, so a hand-rolled pipeline surviving
-# here would quietly become the version agents actually follow.
-check "close-out: Areas is derived by the script, not by a hand-rolled pipeline" \
-  "$(contains "$out" 'relevio-areas.sh')" "yes"
+check "close-out: the computed header covers Branch, Commits and Areas" \
+  "$(contains "$out" 'Date, Dev, Branch, Commits, Areas and Resume')" "yes"
+# The header belongs to relevio-header.sh. The hook is the ONLY place that
+# delivers the close-out checklist, so hand-typed fields surviving here would
+# quietly become the version agents actually follow.
+check "close-out: the header comes from the script, not typed by hand" \
+  "$(contains "$out" "bash \"$REPO/scripts/relevio-header.sh\" <session-id>")" "yes"
 check "close-out: the hooks carry no copy of that pipeline" \
   "$(grep -c 'name-only' "$REPO/hooks/context-warn.sh" "$REPO/hooks/session-start.sh" | awk -F: '{ s += $2 } END { print s }')" "0"
 rm -f "$MARKS"/claude-ctx-warn-relevio-test-$$-plugidx
@@ -1818,7 +1818,7 @@ check "format: both hooks locate the scripts from their own path" \
 check "format: nobody re-types the Areas pipeline by hand any more" \
   "$(grep -c 'name-only' "$REPO/commands/handoff.md" "$REPO/templates/handoff.md" | awk -F: '{ s += $2 } END { print s }')" "0"
 
-# relevio-areas.sh is what that prose now calls, and the reason it exists is
+# relevio-areas.sh exposes that derivation on its own, and the reason it exists is
 # the inclusive-range trap: `a..b` in the header includes a, git's does not.
 d5="$(fixture '')"
 mkdir -p "$d5/one" "$d5/two"
