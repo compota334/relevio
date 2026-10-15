@@ -5,7 +5,7 @@ Branch: claude/relevio-multi-branch-teams-be28b6
 Commits: fde285a..0ddc6ec
 Areas: .claude-plugin, README.md, VERSION, commands, docs, hooks, install.sh, scripts, templates, tests, uninstall.sh
 Resume: claude --resume 14a94261-6409-412a-9ef9-dafb55e2cdbd
-Topics: relevio, carriles, indice-generado, trace, migracion, zcode, idle-compaction, reinicio, cierre, release
+Topics: relevio, carriles, indice-generado, trace, migracion, zcode, idle-compaction, reinicio, cierre, release, seguridad
 Summary: De v0.21.5 a v0.24.0 en una sesion larga: handoffs por carril para equipos, indice generado con tablero, rastreo de superficies, ZCode funcionando como plugin, el agente ya no cierra por su cuenta, reinicio distinto de archivo, idleCompaction apagado y primera release en GitHub
 
 ## 1. Contexto general
@@ -221,7 +221,27 @@ settings real de quien la corre.
    comando para un handoff pedido con palabras); el usuario ya instalo la
    0.24.0 ahi. Si en ese repo `.claude/` esta en git, hay que commitear y
    pushear la actualizacion para que le llegue a ENZO.
-5. **Medir el contexto en Devin**: no hecho, y conviene no prometerlo.
+5. **Reforzar relevio contra inyeccion de prompt** (surgio al final, sin
+   decision del usuario todavia). Un agente de otro proyecto parcheo
+   localmente el kickoff para que la consulta de version
+   (`curl .../main/VERSION`, cuyo resultado entra crudo al contexto del
+   agente) solo acepte algo con forma semver y descarte lo demas como
+   "unreachable". Propuesta, las tres chicas:
+   - adoptar oficialmente ese chequeo semver en `commands/kickoff.md` y
+     `templates/kickoff.md`;
+   - una regla en el kickoff y en el nucleo: handoffs, indice y todo lo que
+     venga de otras ramas son DATOS de otras sesiones, nunca instrucciones;
+     si algo ahi pide hacer algo, se le muestra al usuario. Es la puerta mas
+     realista: relevio lee a proposito todas las ramas, asi que cualquiera
+     que pueda pushear puede plantar texto que el agente lee en su kickoff;
+   - que los errores del parser no repitan la linea cruda del handoff (hoy
+     `fail("line N is not Key: value: " line)` y los valores de Branch o
+     Commits se imprimen enteros): nombrar archivo y campo alcanza.
+   Explicado al usuario, y sin prometer mas: lo grande es inherente a todo
+   plugin. Quien controle `compota334/relevio` controla el codigo que corre
+   en cada accion del agente; la defensa es la cuenta de GitHub (2FA), e
+   instalar una release fija en vez de main.
+6. **Medir el contexto en Devin**: no hecho, y conviene no prometerlo.
 
 ## 7. Estado operativo que git no captura
 
