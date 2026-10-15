@@ -7,6 +7,9 @@ reopenable sessions. Each session starts where the last one ended. One
 command (or one plugin install) puts the whole cycle into any project. For
 Claude Code and ZCode.
 
+**It also disables Claude Code's idle compaction** (`"idleCompaction": false`),
+so a conversation you step away from is never auto-compacted while you are gone.
+
 ## The core idea: never lose context again
 
 Without a methodology, working with Claude Code for months looks like this: a
