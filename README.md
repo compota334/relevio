@@ -55,12 +55,12 @@ Nothing is ever lost to compaction again.
 
 | File | Purpose |
 |------|---------|
-| `.claude/hooks/context-warn.sh` | PostToolUse hook: reads token usage from the transcript and keeps the agent aware of its window. Informational checkpoints every 10% (10-60%), close-out warnings at 70% and 80%, revisit guards at 85/90/95/99% (each once per session). |
+| `.claude/hooks/context-warn.sh` | PostToolUse hook: reads token usage from the transcript and keeps the agent aware of its window. A first report on the first tool call, informational checkpoints every 10% (10-60%), close-out warnings at 70% and 80%, revisit guards at 85/90/95/99% (each once per session). |
 | `.claude/settings.json` | Hook registration (merged into your existing settings, never clobbered). |
 | `.claude/commands/kickoff.md` | The `/kickoff` slash command: opens a session (regenerates the index, shows the lane board, reads the latest handoff **of your branch**, traces who else has touched the surfaces you are about to work on, checks git state, summarizes where things stand). |
 | `.claude/commands/handoff.md` | The `/handoff` slash command: closes a session (writes the dated handoff with its metadata header, regenerates the index, hands over the literal close-out steps). |
 | `.claude/commands/revisit.md` | The `/revisit` slash command: finds an old session in the library and returns the `claude --resume <session-id>` command to reopen its conversation. |
-| `.claude/hooks/session-start.sh` | SessionStart hook: tells the agent the session cycle at the start of every session (open with `/kickoff`; a hook will speak when it needs something). It deliberately says NOTHING about closing: every close-out instruction travels inside the warning that triggers it, so the agent cannot anticipate it. A REOPENED conversation gets the revisit rules instead; one that just auto-compacted is told to salvage what remains into a handoff. |
+| `.claude/hooks/session-start.sh` | SessionStart hook: tells the agent the session cycle at the start of every session (open with `/kickoff`; a hook will speak when it needs something). It names no close-out threshold and teaches no close-out procedure: those travel inside the warning that triggers them, so the agent cannot anticipate them. What it does say is that ending a session is the user's call. A conversation reopened from the archive gets the revisit rules instead, one resumed after a restart carries on, and one that just auto-compacted is told to salvage what remains into a handoff. |
 | `docs/handoff/` | Where handoffs live. They accumulate; the newest one is the next session's starting point. |
 | `.claude/scripts/relevio-index.sh` | Regenerates `docs/handoff/INDEX.md` from the header of every handoff on every branch. Fails loud naming the file and field if a header is malformed. |
 | `.claude/scripts/relevio-trace.sh` | Answers "which sessions touched this path, and who has unmerged work on it right now". |
@@ -88,11 +88,13 @@ Nothing is ever lost to compaction again.
 - **Close before the wall.** At 80% the full close-out checklist arrives (its
   first appearance: nothing before it teaches the close-out): bring the work
   to a coherent stopping point, then a dated handoff with commit hashes,
-  lessons and pending work in order, an append-only index row, the commit and
+  lessons and pending work in order, the regenerated index, the commit and
   push (after the handoff, never cutting work mid-change), and literal
   copy-paste instructions for the human.
-- **Never work in a reopened session.** Old conversations are an archive to ask
-  questions of. Guards fire at 85/90/95%, and at 99% a STOP LAW halts the agent
+- **Never work in an archived session.** A conversation closed with a handoff
+  is an archive to ask questions of. One that was merely interrupted (the app
+  or the computer restarted mid-work) is not: the agent carries on where it
+  stopped. Guards fire at 85/90/95%, and at 99% a STOP LAW halts the agent
   until you confirm.
 
 ## Install
@@ -120,8 +122,9 @@ the first time you close a session there.
 The plugin ships the same SessionStart hook as the installer, arming the agent
 with the methodology at the start of EVERY session, kickoff or not. The
 injected message adapts to how the session started: a fresh session gets the
-operational core, a REOPENED conversation gets the revisit rules automatically
-(ask, don't work), and a session that just auto-compacted is told to salvage
+operational core, a conversation reopened from the archive gets the revisit
+rules automatically (ask, don't work), one resumed after a restart carries on
+where it stopped, and a session that just auto-compacted is told to salvage
 what remains into a handoff.
 
 The difference from the script installer is only where the methodology lives:
@@ -266,8 +269,9 @@ Handoff rules (the agent gets them from the 80% warning and `/handoff`):
   rule): an agent that learns the close-out rules, or the threshold numbers,
   at minute zero anchors on them and starts closing before any warning
   arrives, wasting the very window the thresholds protect (observed in real
-  sessions: agents "wrapping up" at 60%). So the session-start core says
-  nothing about closing, the checkpoints carry numbers and nothing else, and
+  sessions: agents "wrapping up" at 60%). So the session-start core names
+  no threshold and teaches no close-out (it only says that ending a session is
+  the user's call), the checkpoints carry numbers and nothing else, and
   each warning carries its own complete instructions the first time they are
   needed. The one number the core DOES announce is the checkpoint cadence
   (every 10%): it turns silence into information (no new report = the next
@@ -401,9 +405,10 @@ model's REAL window (1M for current models, 200k for Haiku 4.5) and, if
 measured usage ever exceeds that window, self-corrects to 1M with a loud
 one-time notice (evidence beats a wrong assumption). For a model it does NOT
 recognize it refuses to guess a size (that would be a silent fallback): it
-just reports the running token count every 100k and lets the agent -- which
-knows its own window -- decide when to hand off, with no percentage, no
-close-out and no STOP LAW. An explicit `CLAUDE_CONTEXT_LIMIT` overrides
+reports the running token count on the first tool call and every 100k after
+that. The agent, which knows its own window, reads the count against it and
+tells the user when the window is nearly full; the user decides what happens
+next. No percentage, no close-out and no STOP LAW. An explicit `CLAUDE_CONTEXT_LIMIT` overrides
 detection and forces percentage mode. When a band is crossed it injects a
 notice into the agent's context via `additionalContext`:
 
@@ -413,9 +418,9 @@ notice into the agent's context via `additionalContext`:
 - **70 and 80%** (or the custom `CLAUDE_CONTEXT_WARN` thresholds): the
   close-out warnings described in the cycle above.
 - **85, 90, 95, 99%**: the revisit guards, ending in the STOP LAW.
-- **Unrecognized model**: none of the above. Instead, a single raw token count
-  every 100k, leaving the handoff call to the agent's own knowledge of its
-  window.
+- **Unrecognized model**: none of the above. Instead, a raw token count on the
+  first tool call and every 100k after that; the agent reads it against its
+  own window and tells the user when it is nearly full, and the user decides.
 
 A marker file in `/tmp` guarantees each band fires only once per session, and
 if one tool call jumps several bands at once, only the most serious one
@@ -460,7 +465,7 @@ read or audit every word the agent receives.
 
 | When | Message (gist) |
 |------|----------------|
-| Session start (new) | The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. Nothing about closing, handoffs to write, or close-out thresholds. |
+| Session start (new) | The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. No close-out thresholds and no close-out procedure. What it does say: ending a session is the user's call; a finished task gets a short Done / Pending / Needs-from-you recap instead of a handoff; a handoff asked for in plain words goes through the `/handoff` command; and, on the plugin channel, that relevio turned off idle compaction, the one time it does so. |
 | Session start (reopened from the archive) | Only when a handoff's `Resume:` field names this session, i.e. it was closed: this conversation is an archive, answer questions, avoid new work, send new work to a fresh session. |
 | Session start (resumed, never closed) | A restart, not the archive: the app or the computer came back mid-work. The full core, with "carry on where it stopped; being resumed is no reason to leave" in place of the kickoff line. Whether new work still fits is left to the context reports, which can see the window. |
 | Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |
@@ -470,7 +475,7 @@ read or audit every word the agent receives.
 | 80% (hard, configurable) | The complete close-out checklist, first time it appears: bring the work to a coherent stopping point (nothing abandoned mid-change), write the handoff while the understanding is still loaded (structure included), run the project's checks, then commit everything and push, hand the user the close-out (on Claude Code two commands, `/rename` plus the kickoff; on ZCode the kickoff command plus a rename-from-the-UI request, since ZCode has no rename command). Explicitly: the free tokens are enough to do it well, no rushing. |
 | 85 / 90 / 95% | Escalating guards: short answers, no new work, remind the user the window is nearly full. |
 | 99% | Full STOP: do not answer the pending request; warn that one more exchange may trigger auto-compact and wait for explicit confirmation. |
-| Unknown model | The raw token count every 100k, with the reasoning spelled out (relevio refuses to guess a window size) and the close-out decision left to the agent. |
+| Unknown model | The raw token count on the first tool call and every 100k after, with the reasoning spelled out (relevio refuses to guess a window size). If the window is nearly full the agent tells the user, and the user decides. |
 | Foreign host, session start | Some Claude-compatible harnesses (e.g. Devin) load `.claude/` hooks but send no transcript path, so usage cannot be measured there. The startup core then does NOT promise the report cadence: it says no usage reports will arrive, silence tells you nothing, and never guess a figure. |
 | Foreign host, first tool call | One loud notice, once per session: usage reporting is OFF, no counts or warnings will come, the agent must use its own knowledge of its window to time the handoff and keep the user informed. Never silence: an agent waiting for reports that structurally cannot arrive is the exact failure relevio exists to prevent. |
 | ZCode sessions | The same checkpoints and warnings, with the usage read from ZCode's local database instead of a transcript, and the close-out adapted to the host: unprefixed `/kickoff`, no `/rename` (the user renames from ZCode's session list). If that database (or python3) is unreachable, the loud OFF notice above fires instead of silence. |
