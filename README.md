@@ -528,6 +528,36 @@ irrelevant rather than a silent prerequisite. If you see relevio's `.sh` files
 sitting at `644` in a plugin cache, that is expected and nothing is broken. The
 script installer still chmods its own copies, since it owns them.
 
+### Claude Code's idle compaction is turned off
+
+Since v2.1.290, Claude Code compacts a long conversation that you leave idle
+for about an hour, shortly before its prompt cache expires. That is on by
+default, and it destroys exactly what relevio exists to keep: a conversation
+with its full detail, reopenable later. relevio turns it off, with
+`"idleCompaction": false`, in a different file depending on how it was
+installed:
+
+| Installed as | Where | Why there |
+|---|---|---|
+| Script installer | the project's `.claude/settings.json` | the file the installer already owns; in team mode it reaches every teammate who clones the repository, and it leaves your other projects alone |
+| Plugin | your `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) | a plugin cannot ship this key, since Claude Code drops every plugin setting except two; and a plugin is enabled for all your projects anyway |
+
+On the plugin channel the session-start hook writes it, and the first session
+that does so tells you, so it is never a silent edit. In both channels:
+
+- it is written only when the key is **absent**. An explicit `true` is your
+  decision and is left alone (the installer prints what it costs);
+- it is written **whatever your Claude Code version**. Older versions ignore
+  the key, and leaving it out would let a later update start compacting
+  without warning;
+- a settings file that is not valid JSON, or that is a symbolic link (usually
+  a dotfiles manager's), is never rewritten: relevio tells you to add the key
+  yourself;
+- it never happens on ZCode, which is not Claude Code.
+
+Uninstalling leaves the key in place: it may be yours as much as relevio's,
+and removing it would quietly turn idle compaction back on.
+
 ### Who decides when a session ends
 
 The user does. relevio tells the agent, in the injected core, never to write a

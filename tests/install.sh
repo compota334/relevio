@@ -20,6 +20,12 @@
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Since v0.24 the session-start hook writes the USER's Claude Code settings on
+# the plugin channel. Every hook this suite runs must find a throwaway config
+# dir instead of the developer's real ~/.claude, so it is fixed here, before
+# anything else runs.
+CLAUDE_CONFIG_DIR="$(mktemp -d)"
+export CLAUDE_CONFIG_DIR
 INSTALLER="$REPO/install.sh"
 UNINSTALLER="$REPO/uninstall.sh"
 FAILURES=0
@@ -1466,6 +1472,100 @@ for f in commands/kickoff.md templates/kickoff.md; do
   check "upgrade: $f reads the channel from what relevio announced" \
     "$(contains "$(cat "$REPO/$f")" 'INSTALL CHANNEL')" "yes"
 done
+
+# --- Case 12i: Claude Code's idle compaction --------------------------------
+# Claude Code compacts a conversation left idle for about an hour (the
+# idleCompaction setting, on by default from v2.1.290), which destroys the
+# full, reopenable conversation relevio exists to keep. A plugin cannot ship
+# the key, so on the plugin channel the session-start hook writes it into the
+# user's settings; the script installer writes it into the project's.
+pl="$(mktemp -d)"; mkdir -p "$pl/hooks" "$pl/scripts"
+cp "$REPO"/hooks/*.sh "$pl/hooks/"; cp "$REPO"/scripts/*.sh "$pl/scripts/"
+idle() {  # $1 = config dir, $2 = source, $3 = model -> the injected message
+  printf '{"source":"%s","transcript_path":"/tmp/x.jsonl","model":"%s"}' "$2" "${3:-claude-opus-5}" \
+    | env -u CLAUDE_PLUGIN_ROOT CLAUDE_CONFIG_DIR="$1" bash "$pl/hooks/session-start.sh" \
+    | jq -r '.hookSpecificOutput.additionalContext // ""'
+}
+cfg="$(mktemp -d)"
+out="$(idle "$cfg" startup)"
+check "idle: a plugin install with no settings file gets one with the key off" \
+  "$(jq -c '.idleCompaction' "$cfg/settings.json" 2>/dev/null)" "false"
+check "idle: ... and the agent is told to say so, so it is never a silent edit" \
+  "$(contains "$out" 'IDLE COMPACTION OFF')" "yes"
+check "idle: ... once: the next session says nothing about it" \
+  "$(contains "$(idle "$cfg" startup)" 'IDLE COMPACTION')" "no"
+rm -rf "$cfg"
+# An existing file keeps everything else, and its values are never printed:
+# a settings file can hold secrets in env.
+cfg="$(mktemp -d)"
+printf '{\n  "permissions": {"allow": ["Bash(ls)"]},\n  "env": {"SOME_TOKEN": "secret-value-xyz"}\n}\n' > "$cfg/settings.json"
+before="$(jq -S 'del(.idleCompaction)' "$cfg/settings.json")"
+out="$(idle "$cfg" startup)"
+check "idle: an existing settings file gets the key added" \
+  "$(jq -c '.idleCompaction' "$cfg/settings.json")" "false"
+check "idle: ... with every other setting preserved" \
+  "$(yesno "$([ "$before" = "$(jq -S 'del(.idleCompaction)' "$cfg/settings.json")" ]; echo $?)")" "yes"
+check "idle: ... and none of its values printed" \
+  "$(contains "$out" 'secret-value-xyz')" "no"
+rm -rf "$cfg"
+# An explicit true is the user's decision.
+cfg="$(mktemp -d)"; printf '{"idleCompaction": true}\n' > "$cfg/settings.json"
+out="$(idle "$cfg" startup)"
+check "idle: an explicit true is left alone" "$(jq -c '.idleCompaction' "$cfg/settings.json")" "true"
+check "idle: ... without nagging about it" "$(contains "$out" 'IDLE COMPACTION')" "no"
+rm -rf "$cfg"
+# A file that is not a JSON object is never rewritten, and the user is told.
+cfg="$(mktemp -d)"; printf '{ "broken": \n' > "$cfg/settings.json"; cp "$cfg/settings.json" "$cfg/orig"
+out="$(idle "$cfg" startup)"
+check "idle: an invalid settings file is not touched" \
+  "$(cmp -s "$cfg/settings.json" "$cfg/orig" && echo same)" "same"
+check "idle: ... and the user is told why the key is not there" \
+  "$(contains "$out" 'not a valid JSON object')" "yes"
+rm -rf "$cfg"
+# A symlinked settings file usually belongs to a dotfiles manager.
+cfg="$(mktemp -d)"; printf '{}\n' > "$cfg/real.json"; ln -s "$cfg/real.json" "$cfg/settings.json"
+out="$(idle "$cfg" startup)"
+check "idle: a symlinked settings file stays a symlink" \
+  "$(yesno "$([ -L "$cfg/settings.json" ]; echo $?)")" "yes"
+check "idle: ... its target is not rewritten either" "$(cat "$cfg/real.json")" "{}"
+check "idle: ... and the user is asked to add the key themselves" \
+  "$(contains "$out" 'is a symbolic link')" "yes"
+rm -rf "$cfg"
+# Only from a session that will announce it: a compact message is minimal and
+# would make it a silent edit.
+cfg="$(mktemp -d)"; idle "$cfg" compact >/dev/null
+check "idle: an auto-compact session does not write it silently" \
+  "$(yesno "$([ -e "$cfg/settings.json" ]; echo $?)")" "no"
+rm -rf "$cfg"
+# ZCode is not Claude Code, and a script install sets it in the project instead.
+cfg="$(mktemp -d)"
+printf '{"source":"startup","transcript_path":"/tmp/zcode-claude-hook-x/t.jsonl","model":"builtin:zai/GLM-5.3"}' \
+  | env -u CLAUDE_PLUGIN_ROOT CLAUDE_CONFIG_DIR="$cfg" bash "$pl/hooks/session-start.sh" >/dev/null
+check "idle: ZCode never writes Claude Code's settings" \
+  "$(yesno "$([ -e "$cfg/settings.json" ]; echo $?)")" "no"
+sc="$(mktemp -d)"; mkdir -p "$sc/.claude/hooks" "$sc/.claude/scripts"
+cp "$REPO"/templates/*.sh "$sc/.claude/hooks/"; cp "$REPO"/scripts/*.sh "$sc/.claude/scripts/"
+printf '{"source":"startup","transcript_path":"/tmp/x.jsonl","model":"claude-opus-5"}' \
+  | env -u CLAUDE_PLUGIN_ROOT CLAUDE_CONFIG_DIR="$cfg" bash "$sc/.claude/hooks/session-start.sh" >/dev/null
+check "idle: a script install leaves the user's settings alone" \
+  "$(yesno "$([ -e "$cfg/settings.json" ]; echo $?)")" "no"
+rm -rf "$cfg" "$sc" "$pl"
+# The script installer: project scope, idempotent, an explicit true respected.
+d13="$(fixture '')"
+( cd "$d13" && bash "$INSTALLER" >/dev/null 2>&1 )
+check "install: the project's settings turn idle compaction off" \
+  "$(jq -c '.idleCompaction' "$d13/.claude/settings.json")" "false"
+cp "$d13/.claude/settings.json" "$d13/s1"
+( cd "$d13" && bash "$INSTALLER" --update >/dev/null 2>&1 )
+check "install: ... and a second run changes nothing" \
+  "$(cmp -s "$d13/s1" "$d13/.claude/settings.json" && echo same)" "same"
+jq '.idleCompaction = true' "$d13/.claude/settings.json" > "$d13/t" && mv "$d13/t" "$d13/.claude/settings.json"
+out="$( (cd "$d13" && bash "$INSTALLER" --update) 2>&1 )"
+check "install: an explicit true in the project is respected" \
+  "$(jq -c '.idleCompaction' "$d13/.claude/settings.json")" "true"
+check "install: ... with a note explaining what it costs" \
+  "$(contains "$out" 'idleCompaction to something other than false')" "yes"
+rm -rf "$d13"
 
 # --- Case 12b: the format has one definition, not four ----------------------
 # The header is described in three languages: the awk parser, the /handoff

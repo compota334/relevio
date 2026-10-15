@@ -112,3 +112,10 @@ fi
 echo
 echo "Done. docs/handoff/ was KEPT on purpose: it is your project's history."
 echo "Delete it yourself only if you are sure you want to lose it."
+# The idleCompaction key is left where it is, deliberately: it may be the
+# user's as much as relevio's, and removing it would quietly turn Claude
+# Code's idle compaction back on. Saying so beats a silent leftover.
+if [ -f .claude/settings.json ] && jq -e 'has("idleCompaction")' .claude/settings.json >/dev/null 2>&1; then
+  echo "The \"idleCompaction\" setting in .claude/settings.json was also KEPT: remove it"
+  echo "yourself if you want Claude Code to compact idle conversations again."
+fi

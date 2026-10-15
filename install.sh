@@ -12,7 +12,7 @@
 # leftovers so you are not left running two copies of the rules.
 set -euo pipefail
 
-VERSION="0.23.4"
+VERSION="0.24.0"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh session-start.sh handoff.md kickoff.md revisit.md INDEX.md)
 # Since v0.22 docs/handoff/INDEX.md is generated rather than hand-edited, so
@@ -244,6 +244,33 @@ register_hook() {
 }
 register_hook PostToolUse context-warn.sh
 register_hook SessionStart session-start.sh
+
+# Claude Code compacts a conversation left idle for about an hour, shortly
+# before its prompt cache expires (idleCompaction, on by default from v2.1.290).
+# That destroys the full, reopenable conversation relevio exists to keep, so
+# the project turns it off. Project scope on purpose: it is the file this
+# installer already owns, it reaches every teammate who clones the repository
+# in team mode, and it leaves the user's other projects alone. It is written
+# whatever Claude Code version is installed: older versions ignore the key, and
+# leaving it out would let a later update start compacting with no warning.
+# An explicit true is the user's own decision and is left alone, with a note.
+ensure_idle_compaction_off() {
+  case "$(jq -r 'if has("idleCompaction") then (.idleCompaction | tostring) else "absent" end' "$SETTINGS")" in
+    false)
+      info "unchanged: $SETTINGS (idleCompaction already false)" ;;
+    absent)
+      local tmp; tmp="$(mktemp)"
+      jq '.idleCompaction = false' "$SETTINGS" > "$tmp"
+      mv "$tmp" "$SETTINGS"
+      info "updated: $SETTINGS (idleCompaction: false, so Claude Code does not compact this project's conversations while you are away)" ;;
+    *)
+      info "NOTE: $SETTINGS sets idleCompaction to something other than false.
+        relevio leaves that choice alone, but with idle compaction on, Claude
+        Code compacts a conversation left idle for about an hour, destroying
+        the full conversation relevio is built to keep." ;;
+  esac
+}
+ensure_idle_compaction_off
 
 # --- 3. Migration: drop the pre-v0.18 block from CLAUDE.md ------------------
 # Up to v0.17 the methodology lived inside CLAUDE.md between markers. Leaving

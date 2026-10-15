@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.23.4
+# relevio v0.24.0
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -87,10 +87,13 @@ fi
 # Getting this wrong sends the user to the wrong upgrade path entirely.
 case "${RELEVIO_SCRIPTS:-}" in
   */.claude/scripts)
+    CHANNEL_KIND=script
     CHANNEL_LINE="INSTALL CHANNEL: the script installer, inside this project's .claude/. If relevio is out of date here, it upgrades with 'bash <relevio>/install.sh --update' run from the project root." ;;
   "")
+    CHANNEL_KIND=unknown
     CHANNEL_LINE="INSTALL CHANNEL: unknown, because relevio's scripts were not found beside its hooks." ;;
   *)
+    CHANNEL_KIND=plugin
     CHANNEL_LINE="INSTALL CHANNEL: a plugin, in the host's own plugin directory. If relevio is out of date here it upgrades through the HOST's plugin manager (ZCode: Settings -> Plugins; Claude Code: /plugin), and only takes effect in a NEW session, because hooks and commands are registered when a session starts. Never with install.sh, which belongs to the other channel, and never by editing the host's plugin directory by hand: that is the host's own transactional state, and a half-applied edit breaks plugin loading in every project." ;;
 esac
 
@@ -185,8 +188,56 @@ RESUMED_LINE="RESUMED, NOT ARCHIVED: this conversation was resumed, but no hando
 
 # The core, parameterised by its opening paragraph. One copy, so a rule added
 # for new sessions cannot be silently missing from restarted ones.
+# --- Claude Code's idle compaction ------------------------------------------
+# Claude Code compacts a long conversation left idle for about an hour, shortly
+# before its prompt cache expires (idleCompaction, on by default from v2.1.290).
+# That destroys exactly what relevio exists to keep: a conversation with its
+# full detail, reopenable later. The script installer turns it off in the
+# project's .claude/settings.json, the file it already owns. A plugin cannot
+# carry the key (Claude Code drops every plugin settings key except agent and
+# subagentStatusLine), so the plugin channel turns it off here, in the user's
+# settings: the plugin is enabled for every project, and so is the setting.
+#
+# Rules, each for a reason:
+#   - written only when the key is ABSENT: an explicit true is the user's call;
+#   - written whatever the Claude Code version: older versions ignore it, and
+#     leaving it out would let a later update start compacting silently;
+#   - never through a symlink (a dotfiles manager's file would be replaced by
+#     a plain copy) and never into a file that is not a JSON object;
+#   - never on ZCode, which is not Claude Code and does not read this file;
+#   - only from a session that will announce it, so it is never a silent edit.
+# Values in the settings file are never printed: it can hold secrets in env.
+ensure_idle_compaction_off() {
+  local cfg tmp
+  IDLE_LINE=""
+  [ "$HOST" != zcode ] && [ "${CHANNEL_KIND:-}" = plugin ] || return 0
+  cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+  if [ -L "$cfg" ]; then
+    jq -e 'type == "object" and has("idleCompaction")' "$cfg" >/dev/null 2>&1 && return 0
+    IDLE_LINE="IDLE COMPACTION IS STILL ON: Claude Code compacts a conversation left idle for about an hour, which destroys the full conversation relevio exists to keep. relevio did not turn it off because $cfg is a symbolic link, usually managed by a dotfiles tool, and writing through it would replace the link with a plain file. Tell the user in one line to add \"idleCompaction\": false to that settings file themselves."
+    return 0
+  fi
+  if [ ! -e "$cfg" ]; then
+    mkdir -p "$(dirname "$cfg")" 2>/dev/null \
+      && printf '{\n  "idleCompaction": false\n}\n' > "$cfg" 2>/dev/null \
+      || { IDLE_LINE="IDLE COMPACTION IS STILL ON: relevio could not create $cfg to turn it off. Tell the user in one line to add \"idleCompaction\": false to it."; return 0; }
+  elif ! jq -e 'type == "object"' "$cfg" >/dev/null 2>&1; then
+    IDLE_LINE="IDLE COMPACTION IS STILL ON: relevio did not touch $cfg because it is not a valid JSON object, and rewriting it could destroy settings. Tell the user in one line that the file needs fixing, and that once it is valid relevio will add \"idleCompaction\": false by itself."
+    return 0
+  elif jq -e 'has("idleCompaction")' "$cfg" >/dev/null 2>&1; then
+    return 0
+  else
+    tmp="$(mktemp "$cfg.relevio.XXXXXX" 2>/dev/null)" \
+      && jq '.idleCompaction = false' "$cfg" > "$tmp" 2>/dev/null \
+      && mv "$tmp" "$cfg" \
+      || { rm -f "${tmp:-}"; IDLE_LINE="IDLE COMPACTION IS STILL ON: relevio could not update $cfg. Tell the user in one line to add \"idleCompaction\": false to it."; return 0; }
+  fi
+  IDLE_LINE="IDLE COMPACTION OFF: relevio just set \"idleCompaction\": false in $cfg, once. Claude Code compacts a conversation left idle for about an hour, and that would destroy this conversation's full detail, the thing relevio exists to keep. Tell the user in one line that relevio did this and why. Claude Code versions before v2.1.290 ignore the key; it is there for when they update."
+}
+
 core() {
-  emit "relevio v0.23.4: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+  ensure_idle_compaction_off
+  emit "relevio v0.24.0: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 $1
 
@@ -194,7 +245,9 @@ $DURING
 
 $SCRIPTS_LINE
 
-$CHANNEL_LINE
+$CHANNEL_LINE${IDLE_LINE:+
+
+$IDLE_LINE}
 
 WHEN THE SESSION ENDS IS NOT YOUR CALL: never write a handoff, and never suggest wrapping up, on your own initiative. Do it only when the user asks for it, or when a relevio message tells you to in those words. Finishing the task you were given is not a reason to end anything: the user decides what happens next, and a session normally has room for far more work than the one task that opened it. If you think the session should end, say why in one line and let the user answer.
 
