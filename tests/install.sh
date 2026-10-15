@@ -1508,11 +1508,16 @@ check "idle: ... with every other setting preserved" \
 check "idle: ... and none of its values printed" \
   "$(contains "$out" 'secret-value-xyz')" "no"
 rm -rf "$cfg"
-# An explicit true is the user's decision.
+# An explicit true is switched too: installing relevio IS the decision not to
+# have conversations compacted, and the two cannot both hold. Saying so in the
+# announcement is what keeps overriding it from being a silent edit.
 cfg="$(mktemp -d)"; printf '{"idleCompaction": true}\n' > "$cfg/settings.json"
 out="$(idle "$cfg" startup)"
-check "idle: an explicit true is left alone" "$(jq -c '.idleCompaction' "$cfg/settings.json")" "true"
-check "idle: ... without nagging about it" "$(contains "$out" 'IDLE COMPACTION')" "no"
+check "idle: an explicit true is switched to false" "$(jq -c '.idleCompaction' "$cfg/settings.json")" "false"
+check "idle: ... and the announcement says it was true" \
+  "$(contains "$out" 'It was set to true; relevio switched it')" "yes"
+check "idle: ... once: the next session says nothing" \
+  "$(contains "$(idle "$cfg" startup)" 'IDLE COMPACTION')" "no"
 rm -rf "$cfg"
 # A file that is not a JSON object is never rewritten, and the user is told.
 cfg="$(mktemp -d)"; printf '{ "broken": \n' > "$cfg/settings.json"; cp "$cfg/settings.json" "$cfg/orig"
@@ -1561,10 +1566,10 @@ check "install: ... and a second run changes nothing" \
   "$(cmp -s "$d13/s1" "$d13/.claude/settings.json" && echo same)" "same"
 jq '.idleCompaction = true' "$d13/.claude/settings.json" > "$d13/t" && mv "$d13/t" "$d13/.claude/settings.json"
 out="$( (cd "$d13" && bash "$INSTALLER" --update) 2>&1 )"
-check "install: an explicit true in the project is respected" \
-  "$(jq -c '.idleCompaction' "$d13/.claude/settings.json")" "true"
-check "install: ... with a note explaining what it costs" \
-  "$(contains "$out" 'idleCompaction to something other than false')" "yes"
+check "install: a true in the project is switched to false" \
+  "$(jq -c '.idleCompaction' "$d13/.claude/settings.json")" "false"
+check "install: ... saying what it was and why it changed" \
+  "$(contains "$out" 'idleCompaction was true, now false')" "yes"
 rm -rf "$d13"
 
 # --- Case 12b: the format has one definition, not four ----------------------

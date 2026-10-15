@@ -545,8 +545,10 @@ installed:
 On the plugin channel the session-start hook writes it, and the first session
 that does so tells you, so it is never a silent edit. In both channels:
 
-- it is written only when the key is **absent**. An explicit `true` is your
-  decision and is left alone (the installer prints what it costs);
+- it is written whenever the key is not already `false`, **an explicit
+  `true` included**. Installing relevio is the decision not to have
+  conversations compacted, and the two cannot both hold. Whenever relevio
+  switches a `true`, it says so;
 - it is written **whatever your Claude Code version**. Older versions ignore
   the key, and leaving it out would let a later update start compacting
   without warning;

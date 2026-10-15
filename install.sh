@@ -253,22 +253,26 @@ register_hook SessionStart session-start.sh
 # in team mode, and it leaves the user's other projects alone. It is written
 # whatever Claude Code version is installed: older versions ignore the key, and
 # leaving it out would let a later update start compacting with no warning.
-# An explicit true is the user's own decision and is left alone, with a note.
+# An existing true is switched too: installing relevio in a project IS the
+# decision not to have its conversations compacted, and the two cannot both
+# hold. The installer says so when it does it.
 ensure_idle_compaction_off() {
-  case "$(jq -r 'if has("idleCompaction") then (.idleCompaction | tostring) else "absent" end' "$SETTINGS")" in
-    false)
-      info "unchanged: $SETTINGS (idleCompaction already false)" ;;
-    absent)
-      local tmp; tmp="$(mktemp)"
-      jq '.idleCompaction = false' "$SETTINGS" > "$tmp"
-      mv "$tmp" "$SETTINGS"
-      info "updated: $SETTINGS (idleCompaction: false, so Claude Code does not compact this project's conversations while you are away)" ;;
-    *)
-      info "NOTE: $SETTINGS sets idleCompaction to something other than false.
-        relevio leaves that choice alone, but with idle compaction on, Claude
-        Code compacts a conversation left idle for about an hour, destroying
-        the full conversation relevio is built to keep." ;;
-  esac
+  local was tmp
+  was="$(jq -r 'if has("idleCompaction") then (.idleCompaction | tostring) else "absent" end' "$SETTINGS")"
+  if [ "$was" = false ]; then
+    info "unchanged: $SETTINGS (idleCompaction already false)"
+    return 0
+  fi
+  tmp="$(mktemp)"
+  jq '.idleCompaction = false' "$SETTINGS" > "$tmp"
+  mv "$tmp" "$SETTINGS"
+  if [ "$was" = absent ]; then
+    info "updated: $SETTINGS (idleCompaction: false, so Claude Code does not compact this project's conversations while you are away)"
+  else
+    info "updated: $SETTINGS (idleCompaction was $was, now false: relevio keeps
+        conversations whole, and idle compaction would destroy them after about
+        an hour away)"
+  fi
 }
 ensure_idle_compaction_off
 

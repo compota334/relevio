@@ -199,7 +199,9 @@ RESUMED_LINE="RESUMED, NOT ARCHIVED: this conversation was resumed, but no hando
 # settings: the plugin is enabled for every project, and so is the setting.
 #
 # Rules, each for a reason:
-#   - written only when the key is ABSENT: an explicit true is the user's call;
+#   - written whenever the key is not already false, an explicit true included:
+#     installing relevio IS the decision not to have conversations compacted,
+#     and the two cannot both hold. The announcement says when it was true;
 #   - written whatever the Claude Code version: older versions ignore it, and
 #     leaving it out would let a later update start compacting silently;
 #   - never through a symlink (a dotfiles manager's file would be replaced by
@@ -208,12 +210,12 @@ RESUMED_LINE="RESUMED, NOT ARCHIVED: this conversation was resumed, but no hando
 #   - only from a session that will announce it, so it is never a silent edit.
 # Values in the settings file are never printed: it can hold secrets in env.
 ensure_idle_compaction_off() {
-  local cfg tmp
+  local cfg tmp was=absent
   IDLE_LINE=""
   [ "$HOST" != zcode ] && [ "${CHANNEL_KIND:-}" = plugin ] || return 0
   cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
   if [ -L "$cfg" ]; then
-    jq -e 'type == "object" and has("idleCompaction")' "$cfg" >/dev/null 2>&1 && return 0
+    jq -e 'type == "object" and .idleCompaction == false' "$cfg" >/dev/null 2>&1 && return 0
     IDLE_LINE="IDLE COMPACTION IS STILL ON: Claude Code compacts a conversation left idle for about an hour, which destroys the full conversation relevio exists to keep. relevio did not turn it off because $cfg is a symbolic link, usually managed by a dotfiles tool, and writing through it would replace the link with a plain file. Tell the user in one line to add \"idleCompaction\": false to that settings file themselves."
     return 0
   fi
@@ -224,15 +226,18 @@ ensure_idle_compaction_off() {
   elif ! jq -e 'type == "object"' "$cfg" >/dev/null 2>&1; then
     IDLE_LINE="IDLE COMPACTION IS STILL ON: relevio did not touch $cfg because it is not a valid JSON object, and rewriting it could destroy settings. Tell the user in one line that the file needs fixing, and that once it is valid relevio will add \"idleCompaction\": false by itself."
     return 0
-  elif jq -e 'has("idleCompaction")' "$cfg" >/dev/null 2>&1; then
+  elif jq -e '.idleCompaction == false' "$cfg" >/dev/null 2>&1; then
     return 0
   else
+    was="$(jq -r 'if has("idleCompaction") then (.idleCompaction | tostring) else "absent" end' "$cfg" 2>/dev/null)"
     tmp="$(mktemp "$cfg.relevio.XXXXXX" 2>/dev/null)" \
       && jq '.idleCompaction = false' "$cfg" > "$tmp" 2>/dev/null \
       && mv "$tmp" "$cfg" \
       || { rm -f "${tmp:-}"; IDLE_LINE="IDLE COMPACTION IS STILL ON: relevio could not update $cfg. Tell the user in one line to add \"idleCompaction\": false to it."; return 0; }
   fi
-  IDLE_LINE="IDLE COMPACTION OFF: relevio just set \"idleCompaction\": false in $cfg, once. Claude Code compacts a conversation left idle for about an hour, and that would destroy this conversation's full detail, the thing relevio exists to keep. Tell the user in one line that relevio did this and why. Claude Code versions before v2.1.290 ignore the key; it is there for when they update."
+  local switched=""
+  [ "$was" = absent ] || switched=" It was set to $was; relevio switched it, because installing relevio is the choice to keep conversations whole."
+  IDLE_LINE="IDLE COMPACTION OFF: relevio just set \"idleCompaction\": false in $cfg, once.$switched Claude Code compacts a conversation left idle for about an hour, and that would destroy this conversation's full detail, the thing relevio exists to keep. Tell the user in one line that relevio did this and why. Claude Code versions before v2.1.290 ignore the key; it is there for when they update."
 }
 
 core() {
