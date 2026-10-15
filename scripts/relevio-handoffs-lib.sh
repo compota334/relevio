@@ -385,6 +385,27 @@ replaced_on_main() {  # $1 = path, $2 = blob oid
     | awk -v b="$2" '$3 == b || $4 == b { found = 1 } END { exit !found }'
 }
 
+# Is a malformed copy this checkout's own problem? It is when it sits in the
+# working tree, at the tip of the branch checked out here, or on the
+# integration branch: those are the copies this user can fix, and the run stops
+# until they do. A copy that exists only on somebody else's branch is theirs.
+# Stopping for it used to freeze the board for a whole team over one
+# developer's slip, so it is left out of the catalog and LISTED instead (the
+# index renders it under "Needs fixing"): visible, never silent, and not a
+# reason to block everyone else.
+handoff_is_ours() {  # $1 path  $2 blob, or RELEVIO_NONE for the working tree  $3 branch found on
+  local here
+  [ "$2" = "$RELEVIO_NONE" ] && return 0
+  here="$(git branch --show-current 2>/dev/null || true)"
+  [ -n "$here" ] && [ "$3" = "$here" ] && return 0
+  [ "$REPO_UNBORN" != yes ] && [ "$3" = "${MAIN#origin/}" ] && return 0
+  # The scan records ONE branch per distinct content, so the same broken copy
+  # may also sit here or on the integration branch under another name.
+  [ "$(git rev-parse -q --verify "HEAD:$1" 2>/dev/null)" = "$2" ] && return 0
+  [ "$REPO_UNBORN" != yes ] && [ "$(git rev-parse -q --verify "$MAIN:$1" 2>/dev/null)" = "$2" ] && return 0
+  return 1
+}
+
 load_catalog() {
   # Unit separator (0x1F) between the fields of a failure record. Not tab:
   # tab is IFS whitespace, so an empty field would collapse and shift.
@@ -398,6 +419,10 @@ load_catalog() {
   # Counted and shown by relevio-index.sh: skipping them is correct, skipping
   # them where nobody can see it is how the index once hid 63 sessions.
   SUPERSEDED=0
+  # Malformed handoffs that only exist on other developers' branches: left out
+  # of the catalog and listed by the caller, never fatal (see handoff_is_ours).
+  NEEDS_FIX=""
+  NEEDS_FIX_COUNT=0
   [ -n "$HANDOFF_REFS" ] || return 0
   while IFS=$'\t' read -r p c where; do
     [ -n "$p" ] || continue
@@ -459,7 +484,9 @@ EOF
   #     nothing has to be guessed from the shape of the header. It catches a
   #     half-migrated copy whose identity no longer matches, e.g. "Dev: Enzo B"
   #     left on a release branch after main normalized it to "Dev: ENZO".
-  # Anything else is a real malformed handoff: report it and write nothing.
+  # Anything else is a real malformed handoff. If it is ours (handoff_is_ours),
+# report it and write nothing; if it lives only on another developer's
+# branch, list it in NEEDS_FIX and carry on.
   # A modern copy with a complete identity is never excused by path alone:
   # a different dev's session that merely shares the filename was never on
   # the integration branch, so none of these rules can hide it.
@@ -490,11 +517,17 @@ EOF
         || err="${err/"$(relevio_safe "$p")":/$(relevio_safe "$p") (on branch $(relevio_safe "$where")):}"
       case "$shown" in *"<$err>"*) continue ;; esac
       shown="$shown<$err>"
-      printf '%s\n' "$err" >&2
       if [ -z "$d" ] && [ -z "$ses" ] && [ -z "$dev" ]; then
-        printf '  It has no relevio metadata header at all, so it predates relevio'"'"'s format\n  and no indexed copy supersedes it. Give it a header by hand, or remove it.\n' >&2
+        err="$err (it has no relevio metadata header at all, so it predates relevio's format and no indexed copy supersedes it: give it a header by hand, or remove it)"
       fi
-      fatal=1
+      if handoff_is_ours "$p" "$c" "$where"; then
+        printf '%s\n' "$err" >&2
+        fatal=1
+      else
+        NEEDS_FIX="${NEEDS_FIX}${err}
+"
+        NEEDS_FIX_COUNT=$((NEEDS_FIX_COUNT + 1))
+      fi
     done <<EOF
 $bad
 EOF

@@ -44,7 +44,10 @@ Act on its messages when they arrive, never in anticipation.
       theirs to decide, and it is written into their repository.
    c. Show the user the **Active lanes** table exactly as generated. That is
       the team board: one row per branch with open work, who owns it, which
-      areas it touches, how far ahead of main it is.
+      areas it touches, how far ahead of main it is. If the index also has a
+      **Needs fixing** section, name those files and branches to the user:
+      another developer's malformed handoff, left out of the catalog until
+      its owner fixes it on their branch. It is not yours to edit.
    d. Your lane is your current branch: `git rev-parse --abbrev-ref HEAD`.
       Read the LAST catalog row whose `Branch` column equals it. If the file
       is in your working tree read it directly; otherwise read it from history:

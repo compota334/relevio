@@ -36,6 +36,7 @@ done
 TOP="$(relevio_top)"
 resolve_main "$MAIN_ARG"
 load_catalog
+[ "$NEEDS_FIX_COUNT" -eq 0 ] || printf 'relevio-trace: %s malformed handoff(s) on other developers'"'"' branches are left out of this trace (relevio-index.sh lists them under Needs fixing).\n' "$NEEDS_FIX_COUNT" >&2
 HERE="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
 
 # Everything except the per-path `git log` is path-independent, so it is

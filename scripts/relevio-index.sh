@@ -83,6 +83,11 @@ HEAD
     # but not printed: the filename in field 4 already starts with it.
     printf '%s\n' "$ROWS" | awk -F'\t' '{ printf("| `%s` | %s | %s | %s | %s | %s |\n", $1, $2, $4, $5, $6, $7) }'
   fi
+  if [ "$NEEDS_FIX_COUNT" -gt 0 ]; then
+    printf '\n## Needs fixing\n\n'
+    printf 'These handoffs exist only on other developers'"'"' branches and their header is\nmalformed, so they are left out of the catalog until they are fixed there. They do\nnot stop this index; whoever owns the branch fixes the header (a pre-v0.22 header\nis converted by `relevio-migrate.sh`) and the session reappears on the next run.\n\n'
+    printf '%s' "$NEEDS_FIX" | grep -v '^$' | sed 's/^ERROR: /- /'
+  fi
   printf '\n## Catalog\n\n'
   if [ "$CATALOG_COUNT" -eq 0 ]; then
     printf '_No handoffs yet: this project has not closed a session._\n'
@@ -116,4 +121,5 @@ trap - EXIT
 # sessions while reporting success.
 SUMMARY="relevio-index: $CATALOG_COUNT handoff(s), $LANES active lane(s)"
 [ "$SUPERSEDED" -eq 0 ] || SUMMARY="$SUMMARY, $SUPERSEDED older cop$([ "$SUPERSEDED" -eq 1 ] && echo y || echo ies) superseded by a newer version and left out"
+[ "$NEEDS_FIX_COUNT" -eq 0 ] || SUMMARY="$SUMMARY, $NEEDS_FIX_COUNT malformed handoff(s) on other developers' branches left out and listed under Needs fixing"
 echo "$SUMMARY -> docs/handoff/INDEX.md"

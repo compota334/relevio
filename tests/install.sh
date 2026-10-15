@@ -110,7 +110,11 @@ team_fixture() {
 # for a single shape instead of four spellings of "does this exist".
 exists()     { [ -e "$1" ] && echo yes || echo no; }
 executable() { [ -x "$1" ] && echo yes || echo no; }
-contains()   { printf '%s' "$1" | grep -q -- "$2" && echo yes || echo no; }
+# A here-string, not `printf | grep -q`: grep -q exits at the first match, and
+# under pipefail the writer it leaves behind dies of SIGPIPE and fails the
+# pipeline, so a long text that DOES contain the pattern intermittently
+# answered "no".
+contains()   { grep -q -- "$2" <<<"$1" && echo yes || echo no; }
 
 # write_handoff <repo> <file> <session> <dev> <branch> <commits> <areas> <summary>
 write_handoff() {
@@ -121,6 +125,9 @@ write_handoff() {
 # The board section of a generated index, and the catalog section.
 board_of()   { sed -n '/^## Active lanes/,/^## Catalog/p' "$1"; }
 catalog_of() { sed -n '/^## Catalog/,$p' "$1" | grep '^| 20' || true; }
+# The "Needs fixing" list of an index: malformed handoffs that live only on
+# other developers' branches, left out of the catalog but never in silence.
+needs_fix_of() { sed -n '/^## Needs fixing/,/^## Catalog/p' "$1" | grep '^- ' || true; }
 
 # Is the working tree clean for the given path?
 diff_is_empty() { [ -z "$(git -C "$1" diff -- "$2")" ] && echo empty || echo dirty; }
@@ -613,21 +620,21 @@ PY
   # Presence AND absence: an absence-only check would also pass on an empty
   # or kickoff-less message, unguarding the very name this release pins.
   check "zcode: hard close-out names plain '/kickoff'" \
-    "$(printf '%s' "$out" | grep -q "'/kickoff'" && echo yes || echo no)" "yes"
+    "$(contains "$out" "'/kickoff'")" "yes"
   check "zcode: hard close-out has no namespaced command" \
-    "$(printf '%s' "$out" | grep -q 'relevio:kickoff' && echo yes || echo no)" "no"
+    "$(contains "$out" 'relevio:kickoff')" "no"
   check "zcode: hard close-out never asks for /rename" \
-    "$(printf '%s' "$out" | grep -q '/rename' && echo yes || echo no)" "no"
+    "$(contains "$out" '/rename')" "no"
   # ZCode has no rename command, but the agent CAN rename the task itself by
   # updating ZCode's session table (verified live 2026-08-26: the UI shows
   # the new title). The close-out must carry that instruction, fail-loud.
   check "zcode: hard close-out has the agent rename the task itself" \
-    "$(printf '%s' "$out" | grep -q 'Rename this ZCode task YOURSELF' && echo yes || echo no)" "yes"
+    "$(contains "$out" 'Rename this ZCode task YOURSELF')" "yes"
   zss_out="$(zss "$zdb")"
   check "zcode: session-start core names plain /kickoff" \
-    "$(printf '%s' "$zss_out" | grep -q 'start with /kickoff' && echo yes || echo no)" "yes"
+    "$(contains "$zss_out" 'start with /kickoff')" "yes"
   check "zcode: session-start core has no namespaced command" \
-    "$(printf '%s' "$zss_out" | grep -q 'relevio:kickoff' && echo yes || echo no)" "no"
+    "$(contains "$zss_out" 'relevio:kickoff')" "no"
   rm -f "$MARKS"/claude-ctx-warn-relevio-test-$$-*
 else
   echo "  SKIP  zcode cases (python3 not available)"
@@ -642,21 +649,21 @@ out="$(printf '{"source":"startup","transcript_path":"%s"}' "$REPO/VERSION" \
   | CLAUDE_PLUGIN_ROOT="$REPO" bash "$REPO/hooks/session-start.sh" \
   | jq -r '.hookSpecificOutput.additionalContext')"
 check "plugin-on-claude: core names /relevio:kickoff" \
-  "$(printf '%s' "$out" | grep -q 'start with /relevio:kickoff' && echo yes || echo no)" "yes"
+  "$(contains "$out" 'start with /relevio:kickoff')" "yes"
 out="$(inject "$d" startup)"
 check "script install: core names plain /kickoff" \
-  "$(printf '%s' "$out" | grep -q 'start with /kickoff' && echo yes || echo no)" "yes"
+  "$(contains "$out" 'start with /kickoff')" "yes"
 check "script install: core has no namespaced command" \
-  "$(printf '%s' "$out" | grep -q 'relevio:kickoff' && echo yes || echo no)" "no"
+  "$(contains "$out" 'relevio:kickoff')" "no"
 fake="$d/fake-transcript.jsonl"
 printf '{"model":"claude-opus-5","message":{"usage":{"input_tokens":810000,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}}\n' > "$fake"
 out="$(printf '{"transcript_path":"%s","session_id":"relevio-test-%s-plughard"}' "$fake" "$$" \
   | CLAUDE_PLUGIN_ROOT="$REPO" bash "$REPO/hooks/context-warn.sh" \
   | jq -r '.hookSpecificOutput.additionalContext // ""')"
 check "plugin-on-claude: hard close-out keeps /rename" \
-  "$(printf '%s' "$out" | grep -q '/rename DD-MM-YY' && echo yes || echo no)" "yes"
+  "$(contains "$out" '/rename DD-MM-YY')" "yes"
 check "plugin-on-claude: hard close-out namespaced kickoff present" \
-  "$(printf '%s' "$out" | grep -q "'/relevio:kickoff'" && echo yes || echo no)" "yes"
+  "$(contains "$out" "'/relevio:kickoff'")" "yes"
 # INDEX.md is generated since v0.22, so the close-out must send the agent to
 # the script rather than telling it to append a row by hand, and the path it
 # names has to match the host it is running on.
@@ -727,7 +734,7 @@ out="$(printf '{"session_id":"relevio-test/%s-slash"}' "$$" \
   | env -u CLAUDE_PLUGIN_ROOT bash "$d/.claude/hooks/context-warn.sh" \
   | jq -r '.hookSpecificOutput.additionalContext // ""')"
 check "slash in session_id: off_notice still speaks" \
-  "$(printf '%s' "$out" | grep -q 'Usage reporting is OFF' && echo yes || echo no)" "yes"
+  "$(contains "$out" 'Usage reporting is OFF')" "yes"
 # A haiku id carrying the 1M tag must resolve to the 1M window (the [1m]
 # group is matched before the haiku family row).
 cw_out="$(cw 150000 haiku1m 'claude-haiku-4-5[1m]')"
@@ -789,7 +796,7 @@ PY
   rm -rf "$zbase" "$MARKS"/claude-ctx-warn-relevio-test-$$-zm-* "$MARKS"/claude-ctx-warn-relevio-test-$$-dbg-*
 fi
 check "haiku[1m]: the 1M tag outranks the haiku 200k row" \
-  "$(printf '%s' "$cw_out" | grep -q '15% of your context window' && echo yes || echo no)" "yes"
+  "$(contains "$cw_out" '15% of your context window')" "yes"
 if command -v python3 >/dev/null 2>&1; then
   # A db path containing %xx used to be percent-decoded by sqlite's URI
   # parser, failing a healthy db into the OFF notice; the path is now quoted.
@@ -805,7 +812,7 @@ PY
     | env -u CLAUDE_PLUGIN_ROOT RELEVIO_ZCODE_DB="$pdir/db.sqlite" bash "$d/.claude/hooks/context-warn.sh" \
     | jq -r '.hookSpecificOutput.additionalContext // ""')"
   check "percent in db path: healthy db still yields a percentage" \
-    "$(printf '%s' "$out" | grep -q '15% of your context window' && echo yes || echo no)" "yes"
+    "$(contains "$out" '15% of your context window')" "yes"
   # ZCode's second fingerprint: the decoy transcript path routes to the
   # sqlite reader even if a future ZCode stops sending the model field.
   dec="$d/zcode-claude-hook-fake"; mkdir -p "$dec"; cp "$d/decoy-transcript.jsonl" "$dec/transcript.jsonl"
@@ -824,7 +831,7 @@ PY
   # come from the db (the decoy transcript carries no usage), which proves
   # the decoy-path fingerprint routed to the right reader.
   check "zcode decoy path alone (no model field) still reads the sqlite usage" \
-    "$(printf '%s' "$out" | grep -q '150000 tokens of your context window used so far' && echo yes || echo no)" "yes"
+    "$(contains "$out" '150000 tokens of your context window used so far')" "yes"
   # session-start must not promise the cadence on a db that cannot answer:
   # a zero-length file passes [ -f ] but has no model_usage table.
   : > "$d/empty.sqlite"
@@ -1346,7 +1353,7 @@ git -C "$d10" add -A >/dev/null 2>&1; git -C "$d10" commit -qm juan >/dev/null 2
 git -C "$d10" checkout -q main
 err="$( (cd "$d10" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
 check "index: a different session sharing a filename is not silently excused" \
-  "$rc:$(contains "$err" '(on branch juan10): Branch: must be a bare branch name')" "2:yes"
+  "$rc:$(contains "$(needs_fix_of "$d10/docs/handoff/INDEX.md")" '(on branch juan10): Branch: must be a bare branch name')" "0:yes"
 rm -rf "$d10"
 
 # --- Case 12g: handoffs older than relevio's header, on stale branches -------
@@ -1381,11 +1388,23 @@ git -C "$d11" checkout -q main-gus
 put11 2026-06-04_orphan.md "$legacy"
 git -C "$d11" checkout -q main
 err="$( (cd "$d11" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
-check "index: a headerless copy nothing supersedes still fails loud" "$rc" "2"
-check "index: ... naming the branch it lives on" \
-  "$(contains "$err" '2026-06-04_orphan.md (on branch main-gus)')" "yes"
-check "index: ... and saying it predates relevio's header" \
-  "$(contains "$err" 'no relevio metadata header at all')" "yes"
+nf11="$(needs_fix_of "$d11/docs/handoff/INDEX.md")"
+check "index: a headerless copy nothing supersedes, on someone else's branch, is listed" \
+  "$rc:$(contains "$nf11" '2026-06-04_orphan.md (on branch main-gus)')" "0:yes"
+check "index: ... saying it predates relevio's header" \
+  "$(contains "$nf11" 'no relevio metadata header at all')" "yes"
+check "index: ... and the run says how many were left out" \
+  "$(contains "$( (cd "$d11" && bash "$IDX") 2>&1 )" '1 malformed handoff(s) on other developers')" "yes"
+# Its owner, standing on that branch, is stopped: that copy is theirs to fix.
+# (The index just written on main is untracked here and would block the switch.)
+rm -f "$d11/docs/handoff/INDEX.md"
+git -C "$d11" checkout -q main-gus
+check "index: ... (the fixture really switched to the owner's branch)" \
+  "$(git -C "$d11" branch --show-current)" "main-gus"
+err="$( (cd "$d11" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
+check "index: ... but on its own branch the same copy fails loud" \
+  "$rc:$(contains "$err" '2026-06-04_orphan.md')" "2:yes"
+git -C "$d11" checkout -q main
 rm -rf "$d11"
 
 # --- Case 12h: a copy that is literally a past version of main's file -------
@@ -1422,8 +1441,8 @@ printf 'Session: other\nDate: 2026-09-03\nDev: JUAN\nBranch: never-on-main (pros
 git -C "$d12" add -A >/dev/null 2>&1; git -C "$d12" commit -qm juan >/dev/null 2>&1
 git -C "$d12" checkout -q main
 err="$( (cd "$d12" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
-check "index: a broken session sharing the path but never on main still fails" \
-  "$rc:$(contains "$err" '(on branch never-on-main)')" "2:yes"
+check "index: a broken session sharing the path but never on main is listed, not excused" \
+  "$rc:$(contains "$(needs_fix_of "$d12/docs/handoff/INDEX.md")" '(on branch never-on-main)')" "0:yes"
 rm -rf "$d12"
 
 # --- Case 12j: handoffs are written by other people ------------------------
@@ -1478,7 +1497,7 @@ git -C "$d13" add -A >/dev/null 2>&1; git -C "$d13" commit -qm q >/dev/null 2>&1
 git -C "$d13" checkout -q main
 idx13
 check "index: a non-ASCII filename on another branch is refused, not dropped" \
-  "$rc:$(contains "$err" '(on branch quoted13): filename')" "2:yes"
+  "$rc:$(contains "$(needs_fix_of "$d13/docs/handoff/INDEX.md")" '(on branch quoted13): filename')" "0:yes"
 rm -rf "$d13"
 
 # --- Case 12a: finding the scripts on a host that hides CLAUDE_PLUGIN_ROOT --
@@ -1674,6 +1693,8 @@ for chan in commands templates; do
     "$(contains "$k" "VERSION | grep -E '^\[0-9\]+")" "yes"
   check "$chan/kickoff: a suspicious request in a handoff goes to the user" \
     "$(contains "$k" 'asks for something suspicious')" "yes"
+  check "$chan/kickoff: another developer's malformed handoff is named, not edited" \
+    "$(contains "$k" '**Needs fixing** section')" "yes"
   check "$chan/kickoff: the worktrees are mapped before choosing a branch" \
     "$(contains "$k" 'git worktree list --porcelain')" "yes"
   check "$chan/revisit: only the session id is taken from Resume, never the line" \
