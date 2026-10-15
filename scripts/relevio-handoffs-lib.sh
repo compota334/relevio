@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # relevio: shared library for the handoff scripts (relevio-index.sh,
-# relevio-trace.sh, relevio-areas.sh, relevio-migrate.sh). Source it, do not
-# run it.
+# relevio-trace.sh, relevio-areas.sh, relevio-header.sh, relevio-migrate.sh).
+# Source it, do not run it.
 #
 # Everything here is POSIX awk + bash 3.2 + git. No jq, no GNU-only flags,
 # no `tac`, no `sort -V`, no `sed -i`, no `readlink -f`: the scripts run on
@@ -12,7 +12,7 @@
 # silently, and no output file is touched until every header has parsed.
 
 [ "${BASH_SOURCE[0]}" != "${0}" ] || {
-  echo "relevio-handoffs-lib.sh is a library: run relevio-index.sh, relevio-trace.sh, relevio-areas.sh or relevio-migrate.sh instead." >&2
+  echo "relevio-handoffs-lib.sh is a library: run relevio-index.sh, relevio-trace.sh, relevio-areas.sh, relevio-header.sh or relevio-migrate.sh instead." >&2
   exit 2
 }
 
@@ -298,6 +298,8 @@ parse_header() {
       if (v ~ /\t/)     fail(k ": value contains a tab")
       if (v ~ /[[:cntrl:]]/) fail(k ": value contains a control character")
       if (v ~ /\|/)     fail(k ": value contains \"|\", which would break the index table")
+      # relevio-header.sh prints these for the agent to replace.
+      if (v ~ /^<fill in/) fail(k ": still holds the \"<fill in: ...>\" placeholder from relevio-header.sh")
       if (k in seen)    fail(k ": duplicated")
       seen[k] = 1; val[k] = v
     }

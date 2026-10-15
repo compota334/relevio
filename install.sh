@@ -18,7 +18,7 @@ TEMPLATES=(context-warn.sh session-start.sh handoff.md kickoff.md revisit.md IND
 # Since v0.22 docs/handoff/INDEX.md is generated rather than hand-edited, so
 # the commands need the generator next to them. These live in scripts/, not
 # templates/: both install channels ship the same copy.
-SCRIPTS=(relevio-handoffs-lib.sh relevio-index.sh relevio-trace.sh relevio-areas.sh relevio-migrate.sh)
+SCRIPTS=(relevio-handoffs-lib.sh relevio-index.sh relevio-trace.sh relevio-areas.sh relevio-header.sh relevio-migrate.sh)
 STAMPED=(context-warn.sh session-start.sh)
 # Legacy markers: only ever used to REMOVE the pre-v0.18 block from CLAUDE.md.
 MARK_START="<!-- relevio:start -->"

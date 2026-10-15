@@ -65,8 +65,9 @@ Nothing is ever lost to compaction again.
 | `.claude/scripts/relevio-index.sh` | Regenerates `docs/handoff/INDEX.md` from the header of every handoff on every branch. Fails loud naming the file and field if a header is malformed. |
 | `.claude/scripts/relevio-trace.sh` | Answers "which sessions touched this path, and who has unmerged work on it right now". |
 | `.claude/scripts/relevio-areas.sh` | Derives a handoff's `Areas:` value from its commit range. `/handoff` calls it instead of re-typing the pipeline, so the inclusive-range subtlety is handled in one place. |
+| `.claude/scripts/relevio-header.sh` | Prints a session's handoff header with the mechanical fields (date, dev, branch, commits, areas, resume) computed, so the agent writes only the title, topics and summary. |
 | `.claude/scripts/relevio-migrate.sh` | One-time conversion of pre-v0.22 handoff headers. Run once per repo when upgrading. |
-| `.claude/scripts/relevio-handoffs-lib.sh` | Shared library for the three scripts above (sourced, not run). |
+| `.claude/scripts/relevio-handoffs-lib.sh` | Shared library for the scripts above (sourced, not run). |
 | `docs/handoff/INDEX.md` | The library index, **generated** by `relevio-index.sh`: an **Active lanes** board (branches with open work) plus the full **Catalog** (date, conversation name, handoff file, dev, branch, areas, commit range, topics, summary). Never edited by hand, never overwritten by the installer. |
 
 ## What the methodology makes your agent do

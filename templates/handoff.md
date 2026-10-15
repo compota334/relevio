@@ -16,37 +16,51 @@ belongs in the metadata header below. Only if that exact filename already
 exists (same date, same title), append the next letter in alphabetical order
 (`_B`, `_C`, ...) to keep them ordered.
 
-Start the file with this metadata header. A script parses it to build the
+Start the file with its metadata header. A script parses it to build the
 library index: one `Key: value` line per field, nothing else in the block,
 and anything you want to explain goes in the body rather than in a field.
-
-    Session: DD-MM-YY <short title>
-    Date: YYYY-MM-DD
-    Dev: NAME (the dev's short name, uppercase; ask if you do not know it)
-    Branch: <bare branch name, e.g. feat-parser; never "main (via worktree x)">
-    Commits: <first>..<last> (bare short hashes, e.g. a1b2c3d..e4f5a6b; or exactly: none)
-    Areas: <comma-separated paths this session touched; or exactly: none>
-    Resume: claude --resume <session-id>
-    Topics: <comma-separated lowercase tags>
-    Summary: <one line, and no "|" character in it>
-
-`Areas` is what lets a future session on another branch discover that you
-were here. Derive it from git, do not guess it, and do not hand-roll the
-pipeline: the range in the header is inclusive of `<first>` while git's
-`a..b` excludes `a`, so this script exists to get that right for you.
+Do not write the header by hand, and never copy it from an earlier handoff:
+relevio computes the mechanical fields for you.
 
     S=<the path from relevio's "WHERE THE SCRIPTS ARE" line>
-    bash "$S/relevio-areas.sh" <first>..<last>
+    bash "$S/relevio-header.sh" <session-id>
 
-Paste what it prints after `Areas: `. If it reports that the range no longer resolves,
-say so to the user and set the field by hand.
+`<session-id>` is the id relevio gave you at session start, on the line
+beginning "SESSION ID". Run it once the session's work is committed (the
+handoff and the index go in a commit of their own right after), so that the
+range ends at your last real commit. The script prints all nine lines:
 
-To find <session-id>: this session's transcript is the most recently modified
-`.jsonl` file in `~/.claude/projects/<slug>/`, where `<slug>` is this
-project's absolute path with every `/` replaced by `-`; the filename without
-`.jsonl` is the session id. The `Resume:` command lets anyone (human or
-operator agent) reopen this exact conversation later, from this project's
-root, with its full context intact.
+    Session: <fill in: ...>
+    Date: YYYY-MM-DD
+    Dev: NAME
+    Branch: <the branch checked out here>
+    Commits: <first>..<last>, or none
+    Areas: <the paths those commits touched>, or none
+    Resume: claude --resume <session-id>
+    Topics: <fill in: ...>
+    Summary: <fill in: ...>
+
+Paste them unchanged and replace only the three `<fill in: ...>` values:
+`Session` (see below), `Topics` (comma-separated lowercase tags) and
+`Summary` (one line, with no vertical bar character). The index refuses a
+header that still holds a placeholder.
+
+The other six are facts, so they come from git and from relevio's record of
+when this session began: `Commits` holds the commits you made on this branch
+since then, and `Areas` the paths they touched, which is what lets a future
+session on another branch discover that you were here. `Resume` is built from
+the id, and it lets anyone (human or operator agent) reopen this exact
+conversation later, from this project's root, with its full context intact.
+
+When the script stops, it says what is missing, and the answer comes from the
+user, not from a guess:
+- no dev name: ask the user for their short name and record it once for this
+  clone with the `git config relevio.dev <NAME>` line the script prints;
+- no "SESSION ID" line in your context, or no record of when the session
+  began (both mean it started before relevio v0.25): ask the user when the
+  session started and rerun with `--since "<date>"`, adding
+  `--no-session-id` if there is no id;
+- a detached HEAD: switch to the branch the work lives on first.
 
 `Session` is the exact name this conversation will get with `/rename` (you
 build it: date plus a short title of what was done). It ties the handoff to

@@ -172,6 +172,34 @@ session_was_closed() {
   } | grep -qF -- "$SESSION_ID"
 }
 
+# --- This session's identity, for the handoff header ------------------------
+# The handoff header needs two facts an agent cannot reliably find on its own:
+# its session id, and when the session began (where its commit range starts).
+# The old method for the id, "the newest transcript in the project folder",
+# picks the OTHER conversation whenever two are open in one project, and a
+# wrong id makes a live session look archived on its next restart. The payload
+# carries the real id and this hook runs at the start, so both facts are
+# recorded here. Once per session: a restart keeps the first record. The record
+# lives in git's common directory, so every worktree of the clone sees it and
+# nothing is ever committed. relevio-header.sh reads it back.
+SESSION_ID_LINE=""
+record_session_start() {
+  local proj="${CLAUDE_PROJECT_DIR:-$PWD}" dir f
+  # A Claude Code UUID or a ZCode sess_ id. Anything else is not used as a
+  # filename, and the agent is not told an id relevio cannot vouch for.
+  case "$SESSION_ID" in ""|*[!A-Za-z0-9_-]*) return 0 ;; esac
+  SESSION_ID_LINE="SESSION ID: this conversation's id is $SESSION_ID. relevio's handoff command asks for it; nothing needs doing with it now."
+  dir="$(cd "$proj" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd)" || return 0
+  f="$dir/relevio/sessions/$SESSION_ID"
+  [ -f "$f" ] && return 0
+  # The time AND the commit HEAD stood on: commits already reachable from
+  # there were not made in this session, whatever their timestamp says.
+  if ! { mkdir -p "$dir/relevio/sessions" \
+         && printf '%s %s\n' "$(date +%s)" "$(git -C "$proj" rev-parse -q --verify HEAD 2>/dev/null)" > "$f"; } 2>/dev/null; then
+    SESSION_ID_LINE="$SESSION_ID_LINE relevio could not record when this session started (in $dir/relevio/sessions), so a handoff will have to be given the start by hand; mention it to the user if a handoff comes up."
+  fi
+}
+
 if [ -n "$HAVE_USAGE" ]; then
   DURING="DURING THE SESSION: a PostToolUse hook tracks your context-window usage and reports it to you; you cannot see your own usage without it. Its first report arrives on your first tool call, so you have a real number almost at once, and after that it posts a status update roughly every 10% of the window; if it cannot size this model's window it reports a running token count every 100k tokens instead, and its first report says so. That cadence is information you can use: silence means you have NOT crossed the next mark, so never guess or assume your usage is higher than the last report you received, and never ration your work out of worry about the window. Most of its messages are plain status updates that need no response and no change in behavior: just a number so you know where you stand. When the hook needs you to do something, the message itself will say so clearly and carry complete instructions. Until such a message arrives, the window needs nothing from you and is never a reason to change course: let the user's request, not the window, decide what you do and when you are done."
 else
@@ -242,13 +270,16 @@ ensure_idle_compaction_off() {
 
 core() {
   ensure_idle_compaction_off
+  record_session_start
   emit "relevio v0.24.1: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 $1
 
 $DURING
 
-$SCRIPTS_LINE
+$SCRIPTS_LINE${SESSION_ID_LINE:+
+
+$SESSION_ID_LINE}
 
 $CHANNEL_LINE${IDLE_LINE:+
 
@@ -280,7 +311,8 @@ case "$SOURCE" in
     fi
     ;;
   compact)
-    emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, then regenerate docs/handoff/INDEX.md with relevio-index.sh) with whatever detail remains, then recommend closing this session and opening a fresh one with $KICKOFF. $SCRIPTS_LINE $SUBAGENT_LINE"
+    record_session_start
+    emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, then regenerate docs/handoff/INDEX.md with relevio-index.sh) with whatever detail remains, then recommend closing this session and opening a fresh one with $KICKOFF. $SCRIPTS_LINE${SESSION_ID_LINE:+ $SESSION_ID_LINE} $SUBAGENT_LINE"
     ;;
   *)
     core "$OPEN_LINE"

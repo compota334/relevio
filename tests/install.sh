@@ -1689,6 +1689,81 @@ hidden_hits="$(cd "$REPO" && git ls-files -- '*.md' '*.sh' '*.json' | while IFS=
 done)"
 check "repo: no tracked text file carries hidden or control characters" "${hidden_hits:-none}" "none"
 
+# --- Case 12l: the mechanical header fields are computed, not typed ---------
+# An agent that writes Commits, Dev or Resume by hand copies the previous
+# header, does not know where its session began, and takes its id from the
+# newest transcript in the folder, which is the OTHER conversation whenever two
+# are open. The session-start hook records the id and the start; the header
+# script turns them into the six fields.
+d14="$(fixture '')"
+git -C "$d14" config relevio.main main
+echo x > "$d14/f"; git -C "$d14" add -A >/dev/null 2>&1; git -C "$d14" commit -qm base >/dev/null 2>&1
+git -C "$d14" checkout -q -b feat14
+id14=14a94261-6409-412a-9ef9-dafb55e2cdbd
+ss14() {  # $1 source  $2 session id
+  printf '{"source":"%s","session_id":"%s","transcript_path":"/tmp/x.jsonl","model":"claude-opus-5"}' "$1" "$2" \
+    | env -u CLAUDE_PLUGIN_ROOT CLAUDE_PROJECT_DIR="$d14" bash "$REPO/hooks/session-start.sh" \
+    | jq -r '.hookSpecificOutput.additionalContext'
+}
+out14="$(ss14 startup "$id14")"
+rec14="$d14/.git/relevio/sessions/$id14"
+check "session-start: the agent is told its own session id" \
+  "$(contains "$out14" "SESSION ID: this conversation's id is $id14")" "yes"
+check "session-start: ... and when it began is recorded in git's directory" \
+  "$(grep -Ec '^[0-9]+ [0-9a-f]{40}$' "$rec14" 2>/dev/null)" "1"
+echo 1000 > "$rec14"
+ss14 resume "$id14" >/dev/null
+check "session-start: a restart keeps the first start record" "$(cat "$rec14")" "1000"
+check "session-start: an id that is not a plain id is neither announced nor used as a filename" \
+  "$(contains "$(ss14 startup '../../x')" 'SESSION ID'):$(ls "$d14/.git/relevio/sessions" | grep -c .)" "no:1"
+check "session-start: the auto-compact message repeats the id" \
+  "$(contains "$(ss14 compact "$id14")" "SESSION ID: this conversation's id is $id14")" "yes"
+HDR="$REPO/scripts/relevio-header.sh"
+hdr14() { (cd "$d14" && bash "$HDR" "$@") 2>&1; }
+check "header: no dev name is refused, with the one-line fix" \
+  "$(contains "$(hdr14 "$id14")" 'git config relevio.dev NICO')" "yes"
+git -C "$d14" config relevio.dev NICO
+printf '%s %s\n' "$(date +%s)" "$(git -C "$d14" rev-parse HEAD)" > "$rec14"
+mkdir -p "$d14/src"; echo a > "$d14/src/a"; git -C "$d14" add -A >/dev/null 2>&1; git -C "$d14" commit -qm mine1 >/dev/null 2>&1
+first14="$(git -C "$d14" rev-parse --short HEAD)"
+git -C "$d14" -c user.email=other@relevio.local commit -q --allow-empty -m theirs >/dev/null 2>&1
+echo b > "$d14/b"; git -C "$d14" add -A >/dev/null 2>&1; git -C "$d14" commit -qm mine2 >/dev/null 2>&1
+last14="$(git -C "$d14" rev-parse --short HEAD)"
+h14="$(hdr14 "$id14")"
+check "header: Commits spans this session's own commits" \
+  "$(printf '%s\n' "$h14" | grep '^Commits:')" "Commits: $first14..$last14"
+check "header: Dev, Branch, Areas and Resume are filled in" \
+  "$(printf '%s\n' "$h14" | grep -Ec '^(Dev: NICO|Branch: feat14|Areas: b, src/a|Resume: claude --resume '"$id14"')$')" "4"
+check "header: a ZCode id gets the ZCode form" \
+  "$(hdr14 sess_67e77651-aaaa-bbbb-cccc-0123456789ab --since '1 hour ago' | grep -c "^Resume: sess_67e77651-aaaa-bbbb-cccc-0123456789ab (reopen")" "1"
+check "header: something that is not an id is refused" \
+  "$(contains "$(hdr14 'x; rm -rf ~')" 'is not a session id')" "yes"
+check "header: a session with no start record is told to give --since" \
+  "$(contains "$(hdr14 00000000-0000-0000-0000-000000000000)" 'rerun with --since')" "yes"
+check "header: a detached HEAD is refused" \
+  "$(git -C "$d14" switch -q --detach; contains "$(hdr14 "$id14")" 'detached HEAD'; git -C "$d14" switch -q feat14)" "yes"
+# What the script prints must parse once the agent fills it in, and must not
+# while a placeholder is left.
+mkdir -p "$d14/docs/handoff"
+printf '%s\n\nBody.\n' "$h14" > "$d14/docs/handoff/$(date +%Y-%m-%d)_h14.md"
+err="$( (cd "$d14" && bash "$IDX" >/dev/null) 2>&1 )"; rc=$?
+check "index: an unfilled placeholder is refused" \
+  "$rc:$(contains "$err" 'placeholder from relevio-header.sh')" "2:yes"
+printf '%s\n\nBody.\n' "$h14" | sed 's/^Session: <fill in.*/Session: 15-10-26 h14/; s/^Topics: <fill in.*/Topics: t/; s/^Summary: <fill in.*/Summary: s/' \
+  > "$d14/docs/handoff/$(date +%Y-%m-%d)_h14.md"
+( cd "$d14" && bash "$IDX" >/dev/null 2>&1 ); rc=$?
+check "index: the computed header, filled in, parses" "$rc" "0"
+rm -rf "$d14"
+for chan in commands templates; do
+  h="$(cat "$REPO/$chan/handoff.md")"
+  check "$chan/handoff: the header comes from relevio-header.sh" \
+    "$(contains "$h" 'bash "$S/relevio-header.sh" <session-id>')" "yes"
+  check "$chan/handoff: ... and the newest-transcript guess is gone" \
+    "$(contains "$h" 'most recently modified')" "no"
+done
+check "install: the header script is shipped" \
+  "$(grep -c 'relevio-header.sh' "$REPO/install.sh")" "1"
+
 # --- Case 12b: the format has one definition, not four ----------------------
 # The header is described in three languages: the awk parser, the /handoff
 # prose (twice, once per install channel) and these fixtures. Nothing stops
