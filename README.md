@@ -569,8 +569,8 @@ they do NOT interfere:
 ### Debugging a wrong context percentage
 
 `RELEVIO_DEBUG=1` makes the PostToolUse hook append one line per session to
-`$TMPDIR/relevio-<uid>/claude-ctx-warn-<session>-debug.log` (`$TMPDIR`
-defaults to `/tmp`) with the payload's model id, what
+`~/.cache/relevio/markers/claude-ctx-warn-<session>-debug.log` (or under
+`$XDG_CACHE_HOME` when it is set) with the payload's model id, what
 relevio resolved it to, the window it picked and the tokens it read. A model id
 relevio does not recognize fails silently by design (it falls back to raw token
 counts rather than inventing a window), so that line is the fastest way to see

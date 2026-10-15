@@ -84,6 +84,11 @@ agent gets complete context. Handoffs ACCUMULATE: never delete or overwrite
 older ones (that is why they carry dates); yours becomes the new starting
 point and the old ones remain as history.
 
+Keep the whole file plain text. When you paste a log or test output, strip
+its terminal color codes and any other control characters: the index refuses
+a handoff that carries them, body included, because they can show a human
+reviewer something different from what the next agent reads.
+
 Also record any operational state that git does not capture: services or jobs
 left running, which database or environment is the source of truth right now,
 and any long process in progress with the information needed to resume it.

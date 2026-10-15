@@ -37,10 +37,10 @@ set -euo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/relevio-handoffs-lib.sh"
 
-ID=""; NO_ID=no; SINCE=""; EXCLUDE=""
+ID=""; NO_ID=no; SINCE=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --since) [ $# -ge 2 ] || die "--since needs a date"; SINCE="$2"; shift 2 ;;
+    --since) [ -n "${2:-}" ] || die "--since needs a date"; SINCE="$2"; shift 2 ;;
     --no-session-id) NO_ID=yes; shift ;;
     -h|--help) relevio_usage "${BASH_SOURCE[0]}"; exit 0 ;;
     -*) die "unknown argument: $1 (usage: relevio-header.sh <session-id> [--since <date>])" ;;
@@ -81,7 +81,16 @@ BRANCH="$(git branch --show-current 2>/dev/null || true)"
 [ -n "$BRANCH" ] || die "this checkout is on a detached HEAD, so there is no branch to record. A handoff names the branch its work lives on: switch to that branch first (the close-out detaches only AFTER the handoff is pushed)."
 
 # --- Commits, from when the session began ---------------------------------------
-if [ -z "$SINCE" ]; then
+# The start, as a timestamp, plus the commit HEAD stood on when the session
+# began, when relevio recorded one. git's own --since is not used to walk the
+# history: it may stop at the first commit older than the date, and a commit
+# with an older date (an amend, a cherry-pick, a skewed clock) would hide this
+# session's earlier commits behind it. The date is applied as a filter instead.
+AT=""
+if [ -n "$SINCE" ]; then
+  START="$(git rev-parse --since="$SINCE" 2>/dev/null | sed -n 's/^--max-age=//p')"
+  printf '%s' "$START" | grep -Eq '^[0-9]+$' || die "git does not read \"$(relevio_safe "$SINCE")\" as a date. Use a form such as \"2026-10-15 09:30\"."
+else
   if [ "$NO_ID" = yes ]; then
     die "with --no-session-id there is no start record to read, so give the session's start with --since \"<date>\" (ask the user if you do not know it)."
   fi
@@ -89,26 +98,33 @@ if [ -z "$SINCE" ]; then
   [ -r "$rec" ] || die "relevio holds no record of when session $ID began (it started before relevio v0.25, or in another clone). Ask the user when this session started and rerun with --since \"<date>\"."
   read -r START AT < "$rec" || true
   printf '%s' "${START:-}" | grep -Eq '^[0-9]+$' || die "the start record $rec is not a timestamp. Rerun with --since \"<date>\"."
-  SINCE="@$START"
-  # The commit HEAD stood on when the session began. Everything reachable from
-  # it predates the session, even a commit made in the same second.
-  if [ -n "${AT:-}" ] && git rev-parse -q --verify "$AT^{commit}" >/dev/null 2>&1; then EXCLUDE="^$AT"; fi
+  # Everything reachable from the start commit predates the session, even a
+  # commit made in the same second. A start commit that no longer exists means
+  # that boundary is gone: say so instead of counting by time alone.
+  if [ -n "${AT:-}" ] && ! git rev-parse -q --verify "$AT^{commit}" >/dev/null 2>&1; then
+    die "the commit this session started on (${AT:0:12}) no longer exists in this clone, so relevio cannot tell where the session's commits begin. Ask the user when the session started and rerun with --since \"<date>\"."
+  fi
 fi
+# Said out loud, because a mistyped --since is still a valid git date.
+echo "relevio-header: counting your commits since $(date -d "@$START" '+%Y-%m-%d %H:%M' 2>/dev/null || date -r "$START" '+%Y-%m-%d %H:%M')" >&2
 ME="$(git config --get user.email 2>/dev/null || true)"
 [ -n "$ME" ] || die "git has no user.email here, so relevio cannot tell your commits from the ones you pulled. Set it (git config user.email ...) and rerun."
-# Committed by you, after the start, and on the branch you are recording.
-# Commits pulled from teammates during the session carry their own email; a
-# rebase re-commits yours with a fresh date, so they still count.
-OURS="$(git log --reverse --since="$SINCE" --format='%h %ce' HEAD ${EXCLUDE:+"$EXCLUDE"} 2>/dev/null \
-  | awk -v me="$ME" '$2 == me { print $1 }')" \
-  || die "git could not read the history since \"$(relevio_safe "$SINCE")\". Check the --since value."
+# Committed by you, after the start, on the branch you are recording, and not a
+# merge. Commits pulled from teammates carry their own email; a rebase
+# re-commits yours with a fresh date, so they still count; and a merge commit
+# you made by pulling is yours only in name: its content is the teammates'.
+OURS="$(git log --reverse --no-merges --format='%h %ct %ce' HEAD ${AT:+"^$AT"} 2>/dev/null \
+  | awk -v me="$ME" -v start="$START" '$2 >= start && $3 == me { print $1 }')" \
+  || die "git could not read this branch's history."
 if [ -z "$OURS" ]; then
   COMMITS=none
 else
   COMMITS="$(printf '%s\n' "$OURS" | head -1)..$(printf '%s\n' "$OURS" | tail -1)"
 fi
-AREAS="$(areas_for_range "$COMMITS")" \
-  || die "the range $COMMITS does not resolve, so Areas cannot be derived from it."
+# From the session's own commits only: the range between the first and the
+# last can hold a teammate's commit, whose paths are not this session's.
+# shellcheck disable=SC2086  # one argument per commit hash
+AREAS="$(areas_for_commits $OURS)"
 
 cat <<EOF
 Session: <fill in: DD-MM-YY short title, the name /rename will give this conversation>

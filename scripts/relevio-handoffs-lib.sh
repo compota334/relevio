@@ -293,6 +293,9 @@ parse_header() {
       if (line !~ /^[A-Za-z]+: .+$/)
         fail("line " NR " is not \"Key: value\"")
       k = line; sub(/:.*/, "", k)
+      # Checked first, so that every message below names a known field: an
+      # unknown key is text from the handoff, and is never repeated back.
+      if (!(k in allowed)) fail("line " NR " has an unknown header field (allowed: " fields ")")
       v = line; sub(/^[A-Za-z]+: /, "", v)
       if (v ~ /^[ \t]/) fail(k ": value starts with whitespace (one space after the colon, and no wrapped lines)")
       if (v ~ /\t/)     fail(k ": value contains a tab")
@@ -316,8 +319,6 @@ parse_header() {
             fail("missing field Areas: this header predates relevio v0.22. Run relevio-migrate.sh to convert it (it derives Areas from the commit range).")
           fail("missing field " want[i])
         }
-      for (k in seen)
-        if (!(k in allowed)) fail(k ": unknown header field (allowed: " fields ")")
       if (val["Date"] !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/)
         fail("Date: is not YYYY-MM-DD")
       if (val["Branch"] ~ /^(origin|refs)\//)
@@ -587,11 +588,25 @@ range_of() {
 # the `^` and silently loses the session's own first commit. Returns 1 when the range no longer
 # resolves, so the caller can report it instead of inventing a value.
 areas_for_range() {
-  local range a
+  local range
   [ "$1" = none ] && { echo none; return 0; }
   range="$(range_of "$1")"
   [ -n "$range" ] || return 1
-  a="$(git log --format= --name-only "$range" 2>/dev/null | cut -d/ -f1-2 | sort -u | grep -v '^$' || true)"
+  git log --format= --name-only "$range" 2>/dev/null | areas_from_paths
+}
+
+# The same value for an explicit list of commits (as arguments), which is what
+# relevio-header.sh has: a session's own commits are not always a contiguous
+# range, since a teammate's commit pulled in mid-session sits between them.
+areas_for_commits() {
+  [ $# -gt 0 ] || { echo none; return 0; }
+  git log --no-walk=unsorted --format= --name-only "$@" 2>/dev/null | areas_from_paths
+}
+
+# Changed paths on stdin -> the Areas value. One collapse rule for both callers.
+areas_from_paths() {
+  local a
+  a="$(cut -d/ -f1-2 | sort -u | grep -v '^$' || true)"
   # A session that touched dozens of files makes an unreadable row; those
   # collapse to their top-level directory.
   if [ "$(printf '%s\n' "$a" | grep -c '')" -gt 12 ]; then

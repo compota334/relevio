@@ -185,12 +185,18 @@ session_was_closed() {
 SESSION_ID_LINE=""
 record_session_start() {
   local proj="${CLAUDE_PROJECT_DIR:-$PWD}" dir f
+  # C collation, or a UTF-8 locale may count accented letters as inside A-Z.
+  local LC_ALL=C
   # A Claude Code UUID or a ZCode sess_ id. Anything else is not used as a
   # filename, and the agent is not told an id relevio cannot vouch for.
   case "$SESSION_ID" in ""|*[!A-Za-z0-9_-]*) return 0 ;; esac
   SESSION_ID_LINE="SESSION ID: this conversation's id is $SESSION_ID. relevio's handoff command asks for it; nothing needs doing with it now."
   dir="$(cd "$proj" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd)" || return 0
   f="$dir/relevio/sessions/$SESSION_ID"
+  # A record is needed until its session writes a handoff; a month covers a
+  # session resumed weeks later. One that old answering "when did this session
+  # begin" would be stale anyway, and the header script then asks for --since.
+  find "$dir/relevio/sessions" -type f -mtime +30 -exec rm -f {} + 2>/dev/null
   [ -f "$f" ] && return 0
   # The time AND the commit HEAD stood on: commits already reachable from
   # there were not made in this session, whatever their timestamp says.
@@ -268,9 +274,17 @@ ensure_idle_compaction_off() {
   IDLE_LINE="IDLE COMPACTION OFF: relevio just set \"idleCompaction\": false in $cfg, once.$switched Claude Code compacts a conversation left idle for about an hour, and that would destroy this conversation's full detail, the thing relevio exists to keep. Tell the user in one line that relevio did this and why. Claude Code versions before v2.1.290 ignore the key; it is there for when they update."
 }
 
+# The context hook's once-per-session markers (see context-warn.sh) are only
+# read during their own session; a couple of days covers any restart.
+prune_markers() {
+  find "${XDG_CACHE_HOME:-$HOME/.cache}/relevio/markers" -type f -mtime +2 -exec rm -f {} + 2>/dev/null
+  return 0
+}
+
 core() {
   ensure_idle_compaction_off
   record_session_start
+  prune_markers
   emit "relevio v0.25.0: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 $1

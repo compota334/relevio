@@ -105,14 +105,15 @@ emit() {
   jq -n --arg msg "$1" \
     '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":$msg}}'
 }
-# The once-per-session markers live in a directory only this user owns. Shared
+# The once-per-session markers live in the user's own cache directory. Shared
 # /tmp names were guessable, so another account on the machine could create a
-# marker first and silence a warning band, or plant a symlink there. If the
-# directory cannot be made safe, say so on every call rather than run with
-# markers someone else may control.
-MARK_DIR="${TMPDIR:-/tmp}"
-MARK_DIR="${MARK_DIR%/}/relevio-$(id -u)"
-mkdir -p -m 700 "$MARK_DIR" 2>/dev/null
+# marker first and silence a warning band, or plant a symlink there; a
+# directory under $HOME is out of their reach. session-start.sh prunes old
+# markers. If the directory still cannot be made safe, say so rather than run
+# with markers someone else may control (with no safe marker there is no way
+# to say it only once, so it is said on each call until fixed).
+MARK_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/relevio/markers"
+mkdir -p "$MARK_DIR" 2>/dev/null && chmod 700 "$MARK_DIR" 2>/dev/null
 if [ -L "$MARK_DIR" ] || [ ! -d "$MARK_DIR" ] || [ ! -O "$MARK_DIR" ]; then
   emit "relevio: its private marker directory ($MARK_DIR) is missing, is a symlink, or belongs to another user, so context-window reporting is OFF until it is fixed. Tell the user."
   exit 0
