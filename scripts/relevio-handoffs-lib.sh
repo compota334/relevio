@@ -186,6 +186,10 @@ scan_handoffs() {
   # the same reason: the remote is what the team can see). Scanning both
   # refs/heads/x and refs/remotes/origin/x would resurrect the older side of a
   # stale local branch as though it were a second session.
+  # The optional quotes: git prints a path holding non-ASCII or control bytes
+  # quoted and escaped. Such a name must reach parse_header, whose filename
+  # whitelist refuses it out loud, instead of failing this match and dropping
+  # out of the catalog without a word.
   pairs="$(
     { git for-each-ref --format='%(refname:short)' refs/heads
       git for-each-ref --format='%(refname:short)' refs/remotes/origin | sed 's|^origin/||'
@@ -197,7 +201,7 @@ scan_handoffs() {
           git ls-tree -r "$r" -- docs/handoff/ 2>/dev/null \
             | awk -v b="$b" '$2 == "blob" { oid = $3; sub(/^[^	]*	/, ""); print $0 "	" oid "	" b }'
         done \
-      | grep -E '^docs/handoff/[0-9]{4}-[0-9]{2}-[0-9]{2}_[^/]+\.md	' || true
+      | grep -E '^"?docs/handoff/[0-9]{4}-[0-9]{2}-[0-9]{2}_[^/]+\.md"?	' || true
   )"
 
   # A handoff being written right now exists only in the working tree:
@@ -234,25 +238,65 @@ scan_handoffs() {
 }
 
 # --- the header parser ------------------------------------------------------
+# Handoffs are written by other people, on other branches, and both the index
+# and the error messages below end up in an agent's context. So nothing a
+# handoff contains is ever echoed back in an error: the messages name the
+# file, the line or the field, and the reason, never the offending value. A
+# planted line must not reach the agent in the voice of relevio's own tooling.
+#
+# A path or branch name made printable for a message: anything outside a
+# plain filename alphabet becomes "?".
+relevio_safe() { printf '%s' "$1" | tr -c 'A-Za-z0-9._/ -' '?'; }
+
+# Characters that hide or disguise text from a human reader while the model
+# still reads them, as bytes (the parser runs under LC_ALL=C):
+#   U+200B zero-width space, U+202A-U+202E and U+2066-U+2069 bidirectional
+#   controls (they reorder what a reviewer sees), U+2060 word joiner, U+FEFF
+#   zero-width no-break space, U+E0000-U+E007F tag characters (invisible ASCII
+#   look-alikes, the "ASCII smuggling" channel), and the C1 controls.
+# Left out on purpose: U+200C and U+200D (ZWNJ and ZWJ), which real text needs
+# (emoji sequences, several scripts) and which cannot carry text by themselves.
+RELEVIO_HIDDEN='\342\200[\213\252-\256]|\342\201[\240\246-\251]|\357\273\277|\363\240[\200-\201]|\302[\200-\237]'
+
 # Reads a handoff on stdin, prints ONE tab-separated record on stdout:
 #   path  date  session  dev  branch  areas  commits  topics  summary  resume
 # Exit 2 with "ERROR: <path>: <field>: <reason>" on stderr otherwise.
 parse_header() {
-  local label="$1" rec date branch
-  rec="$(awk -v F="$label" -v fields="$RELEVIO_FIELDS" '
+  local label="$1" safe rec date branch
+  safe="$(relevio_safe "$label")"
+  # The filename reaches commands the agent runs (the kickoff reads a handoff
+  # by name), and git allows names such as "x$(cmd).md". A whitelist, so a
+  # name can never carry shell syntax, quotes or invisible characters.
+  case "${label##*/}" in
+    *[!A-Za-z0-9._-]*)
+      echo "ERROR: $safe: filename: only letters, digits, '.', '_' and '-' are allowed after the date (rename the file)" >&2
+      return 2 ;;
+  esac
+  rec="$(awk -v F="$safe" -v fields="$RELEVIO_FIELDS" -v hidden="$RELEVIO_HIDDEN" '
     function fail(m) { printf("ERROR: %s: %s\n", F, m) > "/dev/stderr"; failed = 1; exit 2 }
     BEGIN { n = split(fields, want, " "); for (i = 1; i <= n; i++) allowed[want[i]] = 1 }
-    /^[ \t]*$/ { done = 1; exit }
+    # The body is not parsed, but it is read by the next agent just the same,
+    # so it gets the same hidden-text check as the header. Tab and CR are the
+    # only control characters a text file legitimately carries.
+    body {
+      if ($0 ~ hidden) fail("line " NR " contains an invisible or bidirectional Unicode character, which can hide text from a human reader")
+      l = $0; gsub(/[\t\r]/, "", l)
+      if (l ~ /[[:cntrl:]]/) fail("line " NR " contains a control character")
+      next
+    }
+    /^[ \t\r]*$/ { body = 1; next }
     {
       if (NR > 20) fail("header block not terminated by a blank line within 20 lines")
       line = $0
-      sub(/[ \t]+$/, "", line)        # trailing whitespace carries no meaning
+      sub(/[ \t\r]+$/, "", line)      # trailing whitespace carries no meaning
+      if (line ~ hidden) fail("line " NR " contains an invisible or bidirectional Unicode character, which can hide text from a human reader")
       if (line !~ /^[A-Za-z]+: .+$/)
-        fail("line " NR " is not \"Key: value\": " line)
+        fail("line " NR " is not \"Key: value\"")
       k = line; sub(/:.*/, "", k)
       v = line; sub(/^[A-Za-z]+: /, "", v)
       if (v ~ /^[ \t]/) fail(k ": value starts with whitespace (one space after the colon, and no wrapped lines)")
       if (v ~ /\t/)     fail(k ": value contains a tab")
+      if (v ~ /[[:cntrl:]]/) fail(k ": value contains a control character")
       if (v ~ /\|/)     fail(k ": value contains \"|\", which would break the index table")
       if (k in seen)    fail(k ": duplicated")
       seen[k] = 1; val[k] = v
@@ -273,14 +317,14 @@ parse_header() {
       for (k in seen)
         if (!(k in allowed)) fail(k ": unknown header field (allowed: " fields ")")
       if (val["Date"] !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/)
-        fail("Date: \"" val["Date"] "\" is not YYYY-MM-DD")
+        fail("Date: is not YYYY-MM-DD")
       if (val["Branch"] ~ /^(origin|refs)\//)
-        fail("Branch: \"" val["Branch"] "\" must be a bare branch name, not a ref path")
+        fail("Branch: must be a bare branch name, not a ref path such as origin/x")
       if (val["Branch"] ~ /[ ()]/)
-        fail("Branch: \"" val["Branch"] "\" must be a bare branch name; move the explanation into the body. A header written before relevio v0.22 is converted by relevio-migrate.sh.")
+        fail("Branch: must be a bare branch name, with no spaces or parentheses; move the explanation into the body. A header written before relevio v0.22 is converted by relevio-migrate.sh.")
       if (val["Commits"] != "none") {
         if (val["Commits"] !~ /^[0-9a-f]+\.\.[0-9a-f]+$/)
-          fail("Commits: \"" val["Commits"] "\" must be <first>..<last> with bare hashes, or exactly \"none\" (a suffix such as \"(10 commits)\" is the pre-v0.22 form: run relevio-migrate.sh)")
+          fail("Commits: must be <first>..<last> with bare hashes, or exactly \"none\" (a suffix such as \"(10 commits)\" is the pre-v0.22 form: run relevio-migrate.sh)")
         i = index(val["Commits"], "..")
         a = substr(val["Commits"], 1, i - 1); b = substr(val["Commits"], i + 2)
         if (length(a) < 7 || length(a) > 40 || length(b) < 7 || length(b) > 40)
@@ -290,16 +334,14 @@ parse_header() {
         m = split(val["Areas"], items, ",")
         for (j = 1; j <= m; j++) {
           it = items[j]; sub(/^[ \t]+/, "", it); sub(/[ \t]+$/, "", it)
-          if (it == "") fail("Areas: empty item (a stray comma?)")
-          if (it ~ /^\//) fail("Areas: \"" it "\" must be a path relative to the repository root")
-          # A blacklist, not a whitelist. Areas are real folder names, and real
-          # folders are called "backend chacras" or "diseño": relevio-areas.sh
-          # derives them from git and was producing values this parser then
-          # rejected. The only characters that break anything are the ones that
-          # break the record or the table: tab and "|" are refused for every
-          # field above, the comma is the item separator, and control characters
-          # would corrupt the rendered index.
-          if (it ~ /[[:cntrl:]]/) fail("Areas: \"" it "\" contains a control character")
+          if (it == "") fail("Areas: item " j " is empty (a stray comma?)")
+          if (it ~ /^\//) fail("Areas: item " j " must be a path relative to the repository root")
+          # No whitelist on the item itself. Areas are real folder names, and
+          # real folders are called "backend chacras" or "diseño":
+          # relevio-areas.sh derives them from git and was producing values
+          # this parser then rejected. What breaks anything is already refused
+          # for every field above (tab, "|", control and hidden characters),
+          # and the comma is the item separator.
         }
       }
       printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", F, val["Date"], val["Session"],
@@ -314,10 +356,10 @@ $rec
 EOF
   case "${label##*/}" in
     "$date"_*) : ;;
-    *) echo "ERROR: $label: Date: \"$date\" disagrees with the filename (the catalog is ordered by filename, so they must match)" >&2; return 2 ;;
+    *) echo "ERROR: $safe: Date: disagrees with the filename (the catalog is ordered by filename, so they must match)" >&2; return 2 ;;
   esac
   git check-ref-format --branch "$branch" >/dev/null 2>&1 \
-    || { echo "ERROR: $label: Branch: \"$branch\" is not a valid git branch name" >&2; return 2; }
+    || { echo "ERROR: $safe: Branch: is not a valid git branch name" >&2; return 2; }
   printf '%s\n' "$rec"
 }
 
@@ -441,7 +483,9 @@ EOF
       # Name the branch. The copy of this file in the user's own checkout is
       # often fine, and an error pointing at a file that looks correct is one
       # nobody can act on.
-      [ "$where" = "working tree" ] || err="${err/$p:/$p (on branch $where):}"
+      # parse_header names the file in its printable form, so the match does too.
+      [ "$where" = "working tree" ] \
+        || err="${err/"$(relevio_safe "$p")":/$(relevio_safe "$p") (on branch $(relevio_safe "$where")):}"
       case "$shown" in *"<$err>"*) continue ;; esac
       shown="$shown<$err>"
       printf '%s\n' "$err" >&2

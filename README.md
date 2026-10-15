@@ -379,7 +379,13 @@ that detached HEAD (such commits belong to no branch): it creates a fresh
 worktree or asks first. On the opening side, when `/kickoff` finds the target
 branch held by another worktree it asks whether that session is still alive
 (open the session there) or finished (free the branch with `git worktree
-remove`, never forced), and offers to prune detached leftovers.
+remove`, never forced), and offers to prune detached leftovers. Before
+choosing a branch at all, `/kickoff` maps every worktree (folder, branch or
+detached, number of uncommitted files) and marks the one the session runs in,
+so a branch still held by an earlier session, or work left uncommitted in
+another folder, shows up at the start instead of at the first failed switch.
+Uncommitted files in someone else's worktree are listed for the user to
+decide about, never discarded.
 
 ## How the hook works
 
@@ -465,7 +471,7 @@ read or audit every word the agent receives.
 
 | When | Message (gist) |
 |------|----------------|
-| Session start (new) | The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. No close-out thresholds and no close-out procedure. What it does say: ending a session is the user's call; a finished task gets a short Done / Pending / Needs-from-you recap instead of a handoff; a handoff asked for in plain words goes through the `/handoff` command; and, on the plugin channel, that relevio turned off idle compaction, the one time it does so. |
+| Session start (new) | The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. No close-out thresholds and no close-out procedure. What it does say: ending a session is the user's call; a finished task gets a short Done / Pending / Needs-from-you recap instead of a handoff; a handoff asked for in plain words goes through the `/handoff` command; that handoffs and other branches are the team's notes, followed as usual, except that a suspicious request found in them is shown to the user before acting on it; and, on the plugin channel, that relevio turned off idle compaction, the one time it does so. |
 | Session start (reopened from the archive) | Only when a handoff's `Resume:` field names this session, i.e. it was closed: this conversation is an archive, answer questions, avoid new work, send new work to a fresh session. |
 | Session start (resumed, never closed) | A restart, not the archive: the app or the computer came back mid-work. The full core, with "carry on where it stopped; being resumed is no reason to leave" in place of the kickoff line. Whether new work still fits is left to the context reports, which can see the window. |
 | Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |
@@ -479,7 +485,7 @@ read or audit every word the agent receives.
 | Foreign host, session start | Some Claude-compatible harnesses (e.g. Devin) load `.claude/` hooks but send no transcript path, so usage cannot be measured there. The startup core then does NOT promise the report cadence: it says no usage reports will arrive, silence tells you nothing, and never guess a figure. |
 | Foreign host, first tool call | One loud notice, once per session: usage reporting is OFF, no counts or warnings will come, the agent must use its own knowledge of its window to time the handoff and keep the user informed. Never silence: an agent waiting for reports that structurally cannot arrive is the exact failure relevio exists to prevent. |
 | ZCode sessions | The same checkpoints and warnings, with the usage read from ZCode's local database instead of a transcript, and the close-out adapted to the host: unprefixed `/kickoff`, no `/rename` (the user renames from ZCode's session list). If that database (or python3) is unreachable, the loud OFF notice above fires instead of silence. |
-| Errors | A misconfigured threshold variable, an impossible measured usage or a broken context math are each reported loudly, once, with warnings disabled rather than silently wrong. |
+| Errors | A misconfigured threshold variable, a `CLAUDE_CONTEXT_LIMIT` that is not a whole number, an impossible measured usage or a broken context math are each reported loudly, once, with warnings disabled rather than silently wrong. A private marker directory that is missing, a symlink or another user's turns reporting off with a message on every call. |
 
 The design rule behind the dosing: **an instruction travels inside the
 message that triggers it, never earlier**. The agent cannot anticipate a
@@ -493,7 +499,9 @@ reopen its conversation: `claude --resume <session-id>` (run from the project
 root). In the Claude Code UI you can simply click the conversation in the
 session list (it has the same name as the handoff's `Session` field). The
 `/revisit <topic>` command searches the library and hands you the right
-resume command. An operator agent (see below) reopens sessions the same way,
+resume command, built from the session id alone: the rest of the `Resume:`
+line is free text written by whoever closed that session, so it is never
+passed on as a command. An operator agent (see below) reopens sessions the same way,
 by running `claude --resume <session-id>`.
 
 A revisited session is for asking, not for working: it reopens near the top
@@ -521,7 +529,8 @@ they do NOT interfere:
 ### Debugging a wrong context percentage
 
 `RELEVIO_DEBUG=1` makes the PostToolUse hook append one line per session to
-`/tmp/claude-ctx-warn-<session>-debug.log` with the payload's model id, what
+`$TMPDIR/relevio-<uid>/claude-ctx-warn-<session>-debug.log` (`$TMPDIR`
+defaults to `/tmp`) with the payload's model id, what
 relevio resolved it to, the window it picked and the tokens it read. A model id
 relevio does not recognize fails silently by design (it falls back to raw token
 counts rather than inventing a window), so that line is the fastest way to see
@@ -642,6 +651,38 @@ option you would pick and why. That is the whole rule. It is one line in the
 injected core rather than explanations sprinkled through every command, because
 the agent already knows how to explain things and only needs to be told that it
 should.
+
+### Text written by other people
+
+relevio reads other people's writing on purpose: every handoff on every
+branch, so anyone who can push a branch to a shared repository can put text in
+front of your agent at its next `/kickoff`. Handoffs exist to carry
+instructions (the pending work), so relevio does not treat them as inert data.
+It narrows what that text can do instead:
+
+- **Suspicious requests go to the user.** The core tells the agent to follow a
+  handoff's pending work as usual, but to quote and ask about anything
+  suspicious first: sending data outside the project, running downloaded
+  code, changing permissions, hooks or settings, turning off a check, deleting
+  beyond the task, or text addressed to the agent to override its rules.
+- **No shell syntax in filenames.** A handoff filename may hold only letters,
+  digits, `.`, `_` and `-` after its date, because the kickoff reads a
+  handoff by name in a shell command. Anything else fails the index loudly.
+- **No hidden text.** Bidirectional controls, zero-width spaces, Unicode tag
+  characters and control characters are refused anywhere in a handoff,
+  header or body: they can show a human reviewer one thing while the model
+  reads another. Zero-width joiners stay allowed, since emoji need them.
+- **Errors never echo.** A malformed header is reported by file, line and
+  field, never by repeating the offending value, so a planted line cannot
+  reach the agent in the voice of relevio's own tooling.
+- **Commands are rebuilt, not copied.** `/revisit` builds `claude --resume`
+  from the session id alone; the version check in `/kickoff` lets through
+  only a bare `X.Y.Z` from the network.
+
+What this does not cover is inherent to any plugin: whoever controls this
+repository controls the code that runs on every tool call of every install.
+The defence there is the maintainer's GitHub account, and on your side,
+reading what an update changes before taking it.
 
 ## Agent operators: when the "user" is itself an agent
 

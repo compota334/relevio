@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.24.0
+# relevio v0.24.1
 # relevio: context warning for the agent.
 # The model is blind to its own window %: this hook un-blinds it by reading the
 # usage from the transcript and injecting a notice via additionalContext
@@ -105,8 +105,20 @@ emit() {
   jq -n --arg msg "$1" \
     '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":$msg}}'
 }
+# The once-per-session markers live in a directory only this user owns. Shared
+# /tmp names were guessable, so another account on the machine could create a
+# marker first and silence a warning band, or plant a symlink there. If the
+# directory cannot be made safe, say so on every call rather than run with
+# markers someone else may control.
+MARK_DIR="${TMPDIR:-/tmp}"
+MARK_DIR="${MARK_DIR%/}/relevio-$(id -u)"
+mkdir -p -m 700 "$MARK_DIR" 2>/dev/null
+if [ -L "$MARK_DIR" ] || [ ! -d "$MARK_DIR" ] || [ ! -O "$MARK_DIR" ]; then
+  emit "relevio: its private marker directory ($MARK_DIR) is missing, is a symlink, or belongs to another user, so context-window reporting is OFF until it is fixed. Tell the user."
+  exit 0
+fi
 once() {
-  local mark="/tmp/claude-ctx-warn-${SAFE_SESSION}-$1"
+  local mark="$MARK_DIR/claude-ctx-warn-${SAFE_SESSION}-$1"
   [ -f "$mark" ] && return 1
   touch "$mark"
 }
@@ -204,6 +216,13 @@ fi
 #    silent fallback fail-loud forbids -- a model relevio cannot identify gets
 #    raw token counts, and the agent applies its own window knowledge.
 LIMIT="${CLAUDE_CONTEXT_LIMIT:-}"
+# Validated before any arithmetic: bash evaluates $(...) hidden inside an
+# array subscript in $(( )), so a value such as a[$(cmd)] would RUN cmd on
+# every tool call. The value is not echoed back, for the same reason.
+if [ -n "$LIMIT" ] && ! [[ "$LIMIT" =~ ^[1-9][0-9]*$ ]]; then
+  once config && emit "relevio: CLAUDE_CONTEXT_LIMIT is invalid: it must be a whole number of tokens, such as 1000000. Context warnings are DISABLED until it is fixed; tell the user."
+  exit 0
+fi
 if [ -z "$LIMIT" ]; then
   case "$MODEL" in
     # The [1m] group goes FIRST: a haiku id carrying the 1M tag must resolve
@@ -231,7 +250,7 @@ if [ -n "${RELEVIO_DEBUG:-}" ] && once debug; then
   printf 'relevio %s host=%s payload_model=%s resolved_model=%s limit=%s used=%s\n' \
     "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$HOST" "${PAYLOAD_MODEL:-<none>}" \
     "${MODEL:-<none>}" "${LIMIT:-<raw-count>}" "${USED:-<none>}" \
-    >> "/tmp/claude-ctx-warn-${SAFE_SESSION}-debug.log" 2>/dev/null || true
+    >> "$MARK_DIR/claude-ctx-warn-${SAFE_SESSION}-debug.log" 2>/dev/null || true
 fi
 
 # RAW-COUNT mode: unknown window. Report the current 100k mark once. Only the
