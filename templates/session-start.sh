@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.24.5
+# relevio v0.24.6
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -160,16 +160,28 @@ HANDOFF_LINE="IF THE USER ASKS FOR A HANDOFF in their own words instead of runni
 # path, with the full core dumped into a nearly full window. The working tree
 # is searched too, for a handoff written but not yet committed.
 # It runs only for a resume, the one case that reads the answer.
+#
+# The answer is evidence, not proof. A session that wrote a handoff when asked
+# and then kept working, or a handoff that recorded the wrong id (the old
+# "newest transcript" method picked the other open conversation), both name a
+# LIVE session. So the handoff found is handed to the agent by name, and the
+# agent, which can see its own conversation, makes the call.
+# Sets CLOSED_BY to the newest handoff naming this id (its filename, made
+# printable), or leaves it empty.
+CLOSED_BY=""
 session_was_closed() {
-  local proj="${CLAUDE_PROJECT_DIR:-$PWD}" refs
+  local proj="${CLAUDE_PROJECT_DIR:-$PWD}" refs hit
   [ -n "$SESSION_ID" ] || return 1
   refs="$(git -C "$proj" for-each-ref --format='%(refname)' refs/heads refs/remotes 2>/dev/null)"
-  {
-    grep -h '^Resume:' "$proj"/docs/handoff/[0-9]*_*.md 2>/dev/null
+  # "<where>:docs/handoff/<file>:Resume: ...", newest filename (= date) last.
+  hit="$( {
+    ( cd "$proj" 2>/dev/null && grep -H '^Resume:' docs/handoff/[0-9]*_*.md 2>/dev/null )
     # shellcheck disable=SC2086  # one argument per ref, deliberately split
-    [ -n "$refs" ] && git -C "$proj" grep -h '^Resume:' $refs -- docs/handoff/ 2>/dev/null
+    [ -n "$refs" ] && git -C "$proj" grep '^Resume:' $refs -- docs/handoff/ 2>/dev/null
     true
-  } | grep -qF -- "$SESSION_ID"
+  } | grep -F -- "$SESSION_ID" | sed -n 's#.*docs/handoff/\([^:]*\):Resume:.*#\1#p' | sort -u | tail -1 )"
+  [ -n "$hit" ] || return 1
+  CLOSED_BY="$(printf '%s' "$hit" | LC_ALL=C tr -c 'A-Za-z0-9._-' '?')"
 }
 
 # --- This session's identity, for the handoff header ------------------------
@@ -285,7 +297,7 @@ core() {
   ensure_idle_compaction_off
   record_session_start
   prune_markers
-  emit "relevio v0.24.5: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+  emit "relevio v0.24.6: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 $1
 
@@ -319,7 +331,10 @@ $SUBAGENT_LINE"
 case "$SOURCE" in
   resume)
     if session_was_closed; then
-      emit "relevio: this is a REOPENED conversation, part of the session archive. Its purpose is answering questions about what happened here, not doing new work: it sits near the top of its context window, and auto-compact would destroy the detail that makes it valuable. Keep answers brief, avoid reading files or starting tasks that consume significant context, and if the user wants new work done, suggest opening a fresh session with $KICKOFF. $SUBAGENT_LINE"
+      emit "relevio: this conversation was resumed, and a handoff names its session id in its Resume field: docs/handoff/$CLOSED_BY. That USUALLY means it was closed with that handoff and is now reopened from the archive, but check it against your own conversation before acting on it, because the same evidence appears in two situations where the session is still live.
+- If your conversation ENDS with writing that handoff and its close-out, this is a REOPENED conversation from the session archive. Its purpose is answering questions about what happened here, not doing new work: it sits near the top of its context window, and auto-compact would destroy the detail that makes it valuable. Keep answers brief, avoid reading files or starting tasks that consume significant context, and if the user wants new work done, suggest opening a fresh session with $KICKOFF.
+- If you KEPT WORKING after writing that handoff, or that handoff describes work this conversation never did (a session that recorded the wrong id), this is NOT the archive: the app or the computer restarted in the middle of the work. Say so to the user in one line and carry on where you stopped. Context reports arrive on your tool calls as usual, and they, not this message, say how much room is left.
+$SCRIPTS_LINE${SESSION_ID:+ The session id of this conversation is $SESSION_ID.} $SUBAGENT_LINE"
     else
       core "$RESUMED_LINE"
     fi

@@ -512,7 +512,7 @@ read or audit every word the agent receives.
 | When | Message (gist) |
 |------|----------------|
 | Session start (new) | This conversation's session id, which `/handoff` passes to `relevio-header.sh` (also repeated after an auto-compact). The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. No close-out thresholds and no close-out procedure. What it does say: ending a session is the user's call; a finished task gets a short Done / Pending / Needs-from-you recap instead of a handoff; a handoff asked for in plain words goes through the `/handoff` command; that handoffs and other branches are the team's notes, followed as usual, except that a suspicious request found in them is shown to the user before acting on it; and, on the plugin channel, that relevio turned off idle compaction, the one time it does so. |
-| Session start (reopened from the archive) | Only when a handoff's `Resume:` field names this session, i.e. it was closed: this conversation is an archive, answer questions, avoid new work, send new work to a fresh session. |
+| Session start (resumed, and a handoff names it) | Names the handoff whose `Resume:` field carries this session's id and has the agent check it against its own conversation. If the conversation ends with that handoff, it is the archive: answer questions, avoid new work, send new work to a fresh session. If the agent kept working after it, or the handoff describes work it never did (a wrong id), it is a restart: tell the user in one line and carry on. |
 | Session start (resumed, never closed) | A restart, not the archive: the app or the computer came back mid-work. The full core, with "carry on where it stopped; being resumed is no reason to leave" in place of the kickoff line. Whether new work still fits is left to the context reports, which can see the window. |
 | Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |
 | First tool call | One status line with a real number (percentage, used, free), even below 10%, so no session spends its opening stretch without a figure. In raw-count mode, the running token count instead. |
@@ -640,12 +640,25 @@ auto-compact. The other is a session that was never closed at all, picked up
 again after the app or the computer restarted, possibly at 30% with a task
 half done.
 
-relevio tells them apart exactly rather than by guessing from the usage: a
+relevio tells them apart by evidence rather than by guessing from the usage: a
 closed session wrote a handoff, and that handoff's `Resume:` field carries the
 session's id. If no handoff names it, the session was never closed, and the
 agent is told to carry on where it stopped instead of sending the user to a new
 session. Only the `Resume:` field counts, so a session merely mentioned in
 another handoff's body is never mistaken for a closed one.
+
+A handoff naming the id is strong evidence, not proof, and it was once treated
+as proof. Two real situations produce it for a session that is still live: a
+handoff written mid-session because the user asked, after which the work went
+on; and a handoff that recorded the wrong id (before v0.24.5 the agent took it
+from the newest transcript in the folder, which is the other conversation
+whenever two are open). Agents restarted after a reboot were told they were in
+the archive and stopped working. So relevio now names the handoff it found and
+lets the agent decide, since only the agent can see its own conversation: if it
+ends with that handoff, it is the archive; if work went on after it, or the
+handoff describes work this conversation never did, it is a restart, and the
+agent says so in one line and carries on. Erring towards "restart" is the cheap
+mistake: the context reports still guard a window that really is full.
 
 The search covers every branch, not only the current checkout, because a
 handoff lives on the branch that wrote it and `/revisit` gives you a resume

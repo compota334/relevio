@@ -862,6 +862,13 @@ printf 'Session: s\nDate: 2026-09-01\nDev: N\nBranch: main\nCommits: none\nAreas
 out="$(resume_as sess-archived-1)"
 check "session-start: a session a handoff closed gets the short revisit rules" \
   "$(contains "$out" 'REOPENED conversation')" "yes"
+# The handoff is evidence, not proof: a session that kept working after a
+# handoff, or one whose id a handoff recorded by mistake, is live. The agent
+# is told which handoff it was and decides against its own conversation.
+check "session-start: the archive message names the handoff that carries the id" \
+  "$(contains "$out" 'docs/handoff/2026-09-01_closed.md')" "yes"
+check "session-start: ... and lets a session that kept working carry on" \
+  "$(contains "$out" 'If you KEPT WORKING after writing that handoff'):$(contains "$out" 'carry on where you stopped')" "yes:yes"
 out="$(resume_as sess-live-2)"
 check "session-start: a session never closed is treated as a restart, not the archive" \
   "$(contains "$out" 'RESUMED, NOT ARCHIVED')" "yes"
