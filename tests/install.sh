@@ -1816,6 +1816,55 @@ printf '%s\n\nBody.\n' "$h14" | sed 's/^Session: <fill in.*/Session: 15-10-26 h1
 ( cd "$d14" && bash "$IDX" >/dev/null 2>&1 ); rc=$?
 check "index: the computed header, filled in, parses" "$rc" "0"
 rm -rf "$d14"
+
+# --- Case 12m: a session relevio first sees on a resume ---------------------
+# The start record is written the first time the hook sees an id. For a
+# session that began before relevio recorded starts, that first time is a
+# resume, and recording "now" would silently drop every commit it made before.
+# Its start comes from its transcript, and its commit from before that moment.
+d15="$(fixture '')"
+git -C "$d15" config relevio.dev NICO
+id15=15a94261-6409-412a-9ef9-dafb55e2cdbd
+rec15="$d15/.git/relevio/sessions/$id15"
+ss15() {  # $1 source  $2 transcript path
+  printf '{"source":"%s","session_id":"%s","transcript_path":"%s","model":"claude-opus-5"}' "$1" "$id15" "$2" \
+    | env -u CLAUDE_PLUGIN_ROOT CLAUDE_PROJECT_DIR="$d15" bash "$REPO/hooks/session-start.sh" \
+    | jq -r '.hookSpecificOutput.additionalContext'
+}
+GIT_COMMITTER_DATE="2026-10-15T10:00:00Z" git -C "$d15" commit -q --allow-empty -m before >/dev/null 2>&1
+before15="$(git -C "$d15" rev-parse HEAD)"
+GIT_COMMITTER_DATE="2026-10-15T20:00:00Z" git -C "$d15" commit -q --allow-empty -m during >/dev/null 2>&1
+during15="$(git -C "$d15" rev-parse --short HEAD)"
+t15="$d15/t.jsonl"
+# Out of time order (as measured in real transcripts), a line with no
+# timestamp, and a half-written last line.
+printf '%s\n' '{"type":"custom-title"}' \
+  '{"type":"queue-operation","timestamp":"2026-10-15T17:54:25.448Z"}' \
+  '{"type":"attachment","timestamp":"2026-10-15T17:54:23.429Z"}' \
+  '{"type":"user","timest' > "$t15"
+start15="$(jq -n '"2026-10-15T17:54:23Z" | fromdateiso8601')"
+ss15 resume "$t15" >/dev/null
+check "session-start: a first-seen resume starts at the transcript's earliest timestamp" \
+  "$(cat "$rec15" 2>/dev/null)" "$start15 $before15"
+check "header: ... so the commits made before the resume are counted" \
+  "$( (cd "$d15" && bash "$REPO/scripts/relevio-header.sh" "$id15") 2>/dev/null | grep '^Commits:')" "Commits: $during15..$during15"
+rm -f "$rec15"
+ss15 compact "$t15" >/dev/null
+check "session-start: a first-seen compaction reads the transcript too" \
+  "$(cat "$rec15" 2>/dev/null)" "$start15 $before15"
+rm -f "$rec15"
+out15="$(ss15 resume "$d15/none.jsonl")"
+check "session-start: a resume with no readable start writes no record" \
+  "$([ -e "$rec15" ] && echo written || echo none)" "none"
+check "session-start: ... and says so, instead of counting from now" \
+  "$(contains "$out15" 'could not tell when this session started')" "yes"
+# A new session starts now, whatever an old transcript at that path says.
+now15="$(date +%s)"
+ss15 startup "$t15" >/dev/null
+read -r got15 at15 < "$rec15"
+check "session-start: a new session still starts now, on HEAD" \
+  "$([ "$got15" -ge "$now15" ] && echo now || echo "$got15"):$at15" "now:$(git -C "$d15" rev-parse HEAD)"
+rm -rf "$d15"
 for chan in commands templates; do
   h="$(cat "$REPO/$chan/handoff.md")"
   check "$chan/handoff: the header comes from relevio-header.sh" \

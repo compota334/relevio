@@ -212,10 +212,48 @@ record_session_start() {
   [ -f "$f" ] && return 0
   # The time AND the commit HEAD stood on: commits already reachable from
   # there were not made in this session, whatever their timestamp says.
+  # A new session begins now, since this hook runs at its start. A resumed or
+  # compacted one with no record began earlier (before relevio v0.24.5, or its
+  # record was pruned or lives in another clone): recording "now" for it would
+  # silently drop every commit it made before. Its start is the earliest
+  # timestamp in its own transcript, and its commit the last one on HEAD from
+  # before that moment. With no timestamp to read there is no record at all,
+  # and the header script asks for the start out loud. A fork copies its
+  # parent's messages with their original times, so it counts from the
+  # parent's start: that error adds the parent's commits, it never drops any.
+  local start at
+  case "$SOURCE" in
+    resume|compact)
+      start="$(transcript_start)"
+      if [ -z "$start" ]; then
+        SESSION_ID_LINE="$SESSION_ID_LINE relevio could not tell when this session started (its transcript carries no timestamp relevio can read), so a handoff will have to be given the start by hand; mention it to the user if a handoff comes up."
+        return 0
+      fi
+      at="$(git -C "$proj" log --format='%H %ct' HEAD 2>/dev/null | awk -v s="$start" '$2 <= s { print $1; exit }')"
+      ;;
+    *)
+      start="$(date +%s)"
+      at="$(git -C "$proj" rev-parse -q --verify HEAD 2>/dev/null)"
+      ;;
+  esac
   if ! { mkdir -p "$dir/relevio/sessions" \
-         && printf '%s %s\n' "$(date +%s)" "$(git -C "$proj" rev-parse -q --verify HEAD 2>/dev/null)" > "$f"; } 2>/dev/null; then
+         && printf '%s %s\n' "$start" "$at" > "$f"; } 2>/dev/null; then
     SESSION_ID_LINE="$SESSION_ID_LINE relevio could not record when this session started (in $dir/relevio/sessions), so a handoff will have to be given the start by hand; mention it to the user if a handoff comes up."
   fi
+}
+
+# The earliest timestamp in the transcript, in seconds, or nothing. Lines are
+# not in time order (measured: an attachment line is written after a queue
+# line two seconds younger), so the whole file is read: 0.13 s for the largest
+# transcript on a PC holding 970 of them. Each line is parsed on its own, so a
+# half-written last line does not hide the others.
+transcript_start() {
+  local s
+  [ -n "$TRANSCRIPT" ] && [ -r "$TRANSCRIPT" ] || return 0
+  s="$(jq -nR '[inputs | fromjson? | objects | .timestamp? | strings
+                | sub("\\.[0-9]+"; "") | fromdateiso8601?] | min // empty' "$TRANSCRIPT" 2>/dev/null)"
+  case "$s" in ""|*[!0-9]*) return 0 ;; esac
+  printf '%s' "$s"
 }
 
 if [ -n "$HAVE_USAGE" ]; then

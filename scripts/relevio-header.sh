@@ -95,7 +95,7 @@ else
     die "with --no-session-id there is no start record to read, so give the session's start with --since \"<date>\" (ask the user if you do not know it)."
   fi
   rec="$(cd "$(git rev-parse --git-common-dir)" && pwd)/relevio/sessions/$ID"
-  [ -r "$rec" ] || die "relevio holds no record of when session $ID began (it started before relevio v0.24.5, or in another clone). Ask the user when this session started and rerun with --since \"<date>\"."
+  [ -r "$rec" ] || die "relevio holds no record of when session $ID began (it started before relevio v0.24.5 and its transcript gave no start, or it ran in another clone). Ask the user when this session started and rerun with --since \"<date>\"."
   read -r START AT < "$rec" || true
   printf '%s' "${START:-}" | grep -Eq '^[0-9]+$' || die "the start record $rec is not a timestamp. Rerun with --since \"<date>\"."
   # Everything reachable from the start commit predates the session, even a
