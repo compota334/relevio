@@ -1620,12 +1620,12 @@ rm -rf "$cfg"
 # a settings file can hold secrets in env.
 cfg="$(mktemp -d)"
 printf '{\n  "permissions": {"allow": ["Bash(ls)"]},\n  "env": {"SOME_TOKEN": "secret-value-xyz"}\n}\n' > "$cfg/settings.json"
-before="$(jq -S 'del(.idleCompaction)' "$cfg/settings.json")"
+before="$(jq -S 'del(.idleCompaction, .cleanupPeriodDays)' "$cfg/settings.json")"
 out="$(idle "$cfg" startup)"
 check "idle: an existing settings file gets the key added" \
   "$(jq -c '.idleCompaction' "$cfg/settings.json")" "false"
 check "idle: ... with every other setting preserved" \
-  "$(yesno "$([ "$before" = "$(jq -S 'del(.idleCompaction)' "$cfg/settings.json")" ]; echo $?)")" "yes"
+  "$(yesno "$([ "$before" = "$(jq -S 'del(.idleCompaction, .cleanupPeriodDays)' "$cfg/settings.json")" ]; echo $?)")" "yes"
 check "idle: ... and none of its values printed" \
   "$(contains "$out" 'secret-value-xyz')" "no"
 rm -rf "$cfg"
@@ -1673,8 +1673,9 @@ sc="$(mktemp -d)"; mkdir -p "$sc/.claude/hooks" "$sc/.claude/scripts"
 cp "$REPO"/templates/*.sh "$sc/.claude/hooks/"; cp "$REPO"/scripts/*.sh "$sc/.claude/scripts/"
 printf '{"source":"startup","transcript_path":"/tmp/x.jsonl","model":"claude-opus-5"}' \
   | env -u CLAUDE_PLUGIN_ROOT CLAUDE_CONFIG_DIR="$cfg" bash "$sc/.claude/hooks/session-start.sh" >/dev/null
-check "idle: a script install leaves the user's settings alone" \
-  "$(yesno "$([ -e "$cfg/settings.json" ]; echo $?)")" "no"
+# (it does write the user's retention setting: see Case 12n)
+check "idle: a script install does not turn it off in the user's settings" \
+  "$(jq -c 'has("idleCompaction")' "$cfg/settings.json" 2>/dev/null)" "false"
 rm -rf "$cfg" "$sc" "$pl"
 # The script installer: project scope, idempotent, an explicit true respected.
 d13="$(fixture '')"
@@ -1692,6 +1693,97 @@ check "install: a true in the project is switched to false" \
 check "install: ... saying what it was and why it changed" \
   "$(contains "$out" 'idleCompaction was true, now false')" "yes"
 rm -rf "$d13"
+
+# --- Case 12n: Claude Code's retention sweep --------------------------------
+# Claude Code silently deletes every transcript older than cleanupPeriodDays
+# (30 by default), and a deleted conversation cannot be resumed. The sweep is
+# global, so on BOTH channels the session-start hook raises the key to 36500 in
+# the user's settings, once, and says so.
+rp="$(mktemp -d)"; mkdir -p "$rp/hooks" "$rp/scripts"
+cp "$REPO"/hooks/*.sh "$rp/hooks/"; cp "$REPO"/scripts/*.sh "$rp/scripts/"
+rs="$(mktemp -d)"; mkdir -p "$rs/.claude/hooks" "$rs/.claude/scripts"
+cp "$REPO"/templates/*.sh "$rs/.claude/hooks/"; cp "$REPO"/scripts/*.sh "$rs/.claude/scripts/"
+rman="$(mktemp -d)"  # an empty managed-settings directory unless a test fills it
+ret() {  # $1 config dir, $2 hook (plugin|script), $3 source, $4 model -> message
+  local h="$rp/hooks/session-start.sh"; [ "$2" = script ] && h="$rs/.claude/hooks/session-start.sh"
+  printf '{"source":"%s","session_id":"12ab0000-0000-4000-8000-000000000012","transcript_path":"/tmp/x.jsonl","model":"%s"}' "$3" "${4:-claude-opus-5}" \
+    | env -u CLAUDE_PLUGIN_ROOT CLAUDE_CONFIG_DIR="$1" RELEVIO_MANAGED_DIR="$rman" bash "$h" \
+    | jq -r '.hookSpecificOutput.additionalContext // ""'
+}
+for chan in plugin script; do
+  cfg="$(mktemp -d)"
+  out="$(ret "$cfg" "$chan" startup)"
+  check "retention ($chan): no settings file gets one with 36500 days" \
+    "$(jq -c '.cleanupPeriodDays' "$cfg/settings.json" 2>/dev/null)" "36500"
+  check "retention ($chan): ... and the agent is told, with the default it replaced" \
+    "$(contains "$out" 'RETENTION RAISED'):$(contains "$out" 'It was unset (default 30 days)')" "yes:yes"
+  check "retention ($chan): ... once: the next session says nothing about it" \
+    "$(contains "$(ret "$cfg" "$chan" startup)" 'RETENTION')" "no"
+  rm -rf "$cfg"
+done
+# An existing value is replaced unless it is an integer of at least 36500.
+# Other keys are kept and no value is printed: settings can hold secrets.
+for v in 30 '"30"' 0 36499 36500.5 null; do
+  cfg="$(mktemp -d)"
+  printf '{"cleanupPeriodDays": %s, "env": {"SOME_TOKEN": "secret-value-xyz"}}\n' "$v" > "$cfg/settings.json"
+  out="$(ret "$cfg" script startup)"
+  check "retention: $v is raised to 36500, keeping the other keys" \
+    "$(jq -c '[.cleanupPeriodDays, .env.SOME_TOKEN]' "$cfg/settings.json")" '[36500,"secret-value-xyz"]'
+  check "retention: ... the announcement names what it was, and no secret" \
+    "$(contains "$out" "It was $(printf '%s' "$v" | LC_ALL=C tr -c 'A-Za-z0-9.-' '?')."):$(contains "$out" 'secret-value-xyz')" "yes:no"
+  rm -rf "$cfg"
+done
+for v in 36500 99999; do
+  cfg="$(mktemp -d)"; printf '{"cleanupPeriodDays": %s}\n' "$v" > "$cfg/settings.json"; cp "$cfg/settings.json" "$cfg/orig"
+  out="$(ret "$cfg" script startup)"
+  check "retention: $v is kept as it is, and nothing is said" \
+    "$(cmp -s "$cfg/settings.json" "$cfg/orig" && echo same):$(contains "$out" 'RETENTION')" "same:no"
+  rm -rf "$cfg"
+done
+# A file that is not a JSON object, or a symlink, is never rewritten, and the
+# agent is told so every session until it is fixed.
+cfg="$(mktemp -d)"; printf '{ "broken": \n' > "$cfg/settings.json"; cp "$cfg/settings.json" "$cfg/orig"
+out="$(ret "$cfg" script startup)"
+check "retention: an invalid settings file is not touched, and the user is told" \
+  "$(cmp -s "$cfg/settings.json" "$cfg/orig" && echo same):$(contains "$out" 'CONVERSATIONS STILL EXPIRE')" "same:yes"
+rm -rf "$cfg"
+cfg="$(mktemp -d)"; printf '{}\n' > "$cfg/real.json"; ln -s "$cfg/real.json" "$cfg/settings.json"
+out="$(ret "$cfg" script startup)"
+check "retention: a symlinked settings file stays a symlink with its target intact" \
+  "$(yesno "$([ -L "$cfg/settings.json" ]; echo $?)"):$(cat "$cfg/real.json")" "yes:{}"
+check "retention: ... and the user is asked to set it themselves" \
+  "$(contains "$out" 'is a symbolic link'):$(contains "$out" '"cleanupPeriodDays": 36500')" "yes:yes"
+rm -rf "$cfg"
+# Never silently: not from an auto-compact message, never on ZCode.
+cfg="$(mktemp -d)"; ret "$cfg" script compact >/dev/null
+check "retention: an auto-compact session does not write it silently" \
+  "$(yesno "$([ -e "$cfg/settings.json" ]; echo $?)")" "no"
+ret "$cfg" plugin startup builtin:zai/GLM-5.3 >/dev/null
+check "retention: ZCode never writes Claude Code's settings" \
+  "$(yesno "$([ -e "$cfg/settings.json" ]; echo $?)")" "no"
+rm -rf "$cfg"
+# Managed settings win over the user's file: the announcement says so, for
+# each place an organization's value can come from.
+for src in managed-settings.json managed-settings.d/50-retention.json remote-settings.json; do
+  cfg="$(mktemp -d)"
+  case "$src" in remote-*) mf="$cfg/$src" ;; *) mf="$rman/$src" ;; esac
+  mkdir -p "$(dirname "$mf")"; printf '{"cleanupPeriodDays": 14}\n' > "$mf"
+  out="$(ret "$cfg" plugin startup)"
+  check "retention: a value set in $src is named as the one that wins" \
+    "$(contains "$out" "managed settings in $mf set it to 14 and win")" "yes"
+  rm -rf "$cfg" "$rman/managed-settings.json" "$rman/managed-settings.d"
+done
+cfg="$(mktemp -d)"
+check "retention: with no managed value, none is mentioned" \
+  "$(contains "$(ret "$cfg" plugin startup)" 'managed settings in')" "no"
+rm -rf "$cfg"
+# The worst case: a plugin's first session announces both settings at once,
+# with a managed value named too.
+cfg="$(mktemp -d)"; printf '{"cleanupPeriodDays": 14}\n' > "$rman/managed-settings.json"
+n=$(printf '%s' "$(ret "$cfg" plugin startup)" | wc -c)
+check "retention: a first session announcing both settings fits the budget ($n <= $INJECT_BUDGET)" \
+  "$([ "$n" -le "$INJECT_BUDGET" ] && echo yes || echo no)" "yes"
+rm -rf "$cfg" "$rp" "$rs" "$rman"
 
 # --- Case 12k: the commands treat other people's text as text ---------------
 # The kickoff and revisit prompts hand the agent commands built from handoff
