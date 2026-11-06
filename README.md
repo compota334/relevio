@@ -9,6 +9,8 @@ Claude Code and ZCode.
 
 **It also disables Claude Code's idle compaction** (`"idleCompaction": false`),
 so a conversation you step away from is never auto-compacted while you are gone.
+**And it stops Claude Code from deleting old conversations**
+(`"cleanupPeriodDays": 36500`, 100 years, instead of the default 30 days).
 
 ## The core idea: never lose context again
 
@@ -511,7 +513,7 @@ read or audit every word the agent receives.
 
 | When | Message (gist) |
 |------|----------------|
-| Session start (new) | This conversation's session id, which `/handoff` passes to `relevio-header.sh` (also repeated after an auto-compact). The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. No close-out thresholds and no close-out procedure. What it does say: ending a session is the user's call; a finished task gets a short Done / Pending / Needs-from-you recap instead of a handoff; a handoff asked for in plain words goes through the `/handoff` command; that handoffs and other branches are the team's notes, followed as usual, except that a suspicious request found in them is shown to the user before acting on it; and, on the plugin channel, that relevio turned off idle compaction, the one time it does so. |
+| Session start (new) | This conversation's session id, which `/handoff` passes to `relevio-header.sh` (also repeated after an auto-compact). The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. No close-out thresholds and no close-out procedure. What it does say: ending a session is the user's call; a finished task gets a short Done / Pending / Needs-from-you recap instead of a handoff; a handoff asked for in plain words goes through the `/handoff` command; that handoffs and other branches are the team's notes, followed as usual, except that a suspicious request found in them is shown to the user before acting on it; on the plugin channel, that relevio turned off idle compaction, the one time it does so; and, on both channels, that relevio raised `cleanupPeriodDays`, the one time it does so. |
 | Session start (resumed, and a handoff names it) | Names the handoff whose `Resume:` field carries this session's id and has the agent check it against its own conversation. If the conversation ends with that handoff, it is the archive: answer questions, avoid new work, send new work to a fresh session. If the agent kept working after it, or the handoff describes work it never did (a wrong id), it is a restart: tell the user in one line and carry on. |
 | Session start (resumed, never closed) | A restart, not the archive: the app or the computer came back mid-work. The full core, with "carry on where it stopped; being resumed is no reason to leave" in place of the kickoff line. Whether new work still fits is left to the context reports, which can see the window. |
 | Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |
@@ -616,6 +618,39 @@ that does so tells you, so it is never a silent edit. In both channels:
 
 Uninstalling leaves the key in place: it may be yours as much as relevio's,
 and removing it would quietly turn idle compaction back on.
+
+### Claude Code no longer deletes old conversations
+
+Claude Code deletes every conversation older than `cleanupPeriodDays` (30 days
+by default) automatically and silently, and a deleted conversation can no longer
+be reopened with `claude --resume`, even though its handoff survives in git.
+relevio raises the setting to `36500` days (100 years) in your
+`~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`), on **both** channels: the
+deletion runs over every project on the machine, so a project-level value
+would not protect the others. The first session that writes it tells you, with
+the value it had before.
+
+- A whole number of at least `36500` is left as it is. Anything else (absent,
+  lower, `0`, a string such as `"30"`, a fraction) is replaced.
+- The same safeguards as idle compaction: an invalid or symlinked settings
+  file is never rewritten, every other key is kept, no value is ever printed,
+  and it never happens on ZCode.
+- **Managed settings win.** If your organization sets `cleanupPeriodDays` in
+  `managed-settings.json`, in `managed-settings.d/`, or from the admin console
+  (cached in `~/.claude/remote-settings.json`), that value applies whatever
+  your own file says. relevio cannot change it and tells you so.
+- Sessions started or last continued in the Claude desktop app are already
+  kept at any age since Claude Code v2.1.248; the risk is terminal and IDE
+  sessions.
+
+This removes the routine 30-day deletion, **not every way a conversation can
+disappear**. Claude Code has an open bug in which transcripts were deleted
+even with the setting at 36500 or higher, apparently around updates and
+restarts ([anthropics/claude-code#41458](https://github.com/anthropics/claude-code/issues/41458)).
+A copy that Claude Code cannot delete is the next step of relevio: an
+encrypted archive of every session.
+
+Uninstalling leaves the key in place, for the same reason as idle compaction.
 
 ### Who decides when a session ends
 
