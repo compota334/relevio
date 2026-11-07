@@ -31,10 +31,15 @@ export CLAUDE_CONFIG_DIR
 # the developer's live sessions, and MARKS names where they land.
 XDG_CACHE_HOME="$(mktemp -d)"
 export XDG_CACHE_HOME
+# The session archive lives in ~/.relevio unless RELEVIO_HOME says otherwise:
+# never the developer's real archive.
+RELEVIO_HOME="$(mktemp -d)/relevio"
+export RELEVIO_HOME
 MARKS="$XDG_CACHE_HOME/relevio/markers"
 INSTALLER="$REPO/install.sh"
 UNINSTALLER="$REPO/uninstall.sh"
 FAILURES=0
+SKIPS=0
 
 pass() { echo "  PASS  $1"; }
 failed() { echo "  FAIL  $1"; FAILURES=$((FAILURES + 1)); }
@@ -2072,6 +2077,64 @@ check "install: ... naming relevio and what is missing" \
 check "install: ... and installs nothing" "$(exists "$d7/.claude")" "no"
 rm -rf "$c2" "$d7"
 
+# --- Case 14: the session archive, setup / status / off ---------------------
+# relevio-archive.sh keeps an age-encrypted copy of every conversation. Setup
+# asks for a passphrase, which age reads only from a terminal, so these tests
+# run under RELEVIO_TEST_INSECURE_KEYS, honoured only for a throwaway home.
+ARC="$REPO/scripts/relevio-archive.sh"
+check "install: the archive script is shipped" \
+  "$(grep -c 'relevio-archive.sh' "$REPO/install.sh")" "1"
+arc_t="$(mktemp -d)"
+# Setup and status refuse what could leak or be committed, with or without age.
+check "archive: setup refuses without a terminal, and creates nothing" \
+  "$(contains "$(RELEVIO_HOME="$arc_t/h0" bash "$ARC" setup </dev/null 2>&1)" 'runs only in your own terminal'):$(yesno "$([ -e "$arc_t/h0/keys" ]; echo $?)")" "yes:no"
+check "archive: the test gate is refused for the real home" \
+  "$(contains "$(env -u RELEVIO_HOME RELEVIO_TEST_INSECURE_KEYS=1 bash "$ARC" setup </dev/null 2>&1)" 'tests only')" "yes"
+git -C "$arc_t" init -q 2>/dev/null
+check "archive: a home inside a git work tree is refused" \
+  "$(contains "$(RELEVIO_HOME="$arc_t/inrepo" bash "$ARC" status 2>&1)" 'inside a git work tree')" "yes"
+rm -rf "$arc_t/.git"
+mkdir -p "$arc_t/real"; ln -s "$arc_t/real" "$arc_t/link"
+check "archive: a symlinked home is refused" \
+  "$(contains "$(RELEVIO_HOME="$arc_t/link" bash "$ARC" status 2>&1)" 'symbolic link')" "yes"
+out="$(RELEVIO_HOME="$arc_t/h1" bash "$ARC" status 2>&1)"; rc=$?
+check "archive: status before setup says NOT SET UP and exits 1" \
+  "$rc:$(contains "$out" 'NOT SET UP')" "1:yes"
+RELEVIO_HOME="$arc_t/h1" bash "$ARC" off >/dev/null
+check "archive: off is a file, and on removes it" \
+  "$(yesno "$([ -e "$arc_t/h1/off" ]; echo $?)"):$(RELEVIO_HOME="$arc_t/h1" bash "$ARC" on >/dev/null; yesno "$([ -e "$arc_t/h1/off" ]; echo $?)")" "yes:no"
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  age-keygen 2>/dev/null > "$arc_t/rec.key"
+  arcg() {  # gated run in home $1
+    local h="$1"; shift
+    RELEVIO_HOME="$h" RELEVIO_TEST_INSECURE_KEYS=1 RELEVIO_TEST_RECOVERY_IDENTITY="$arc_t/rec.key" bash "$ARC" "$@"
+  }
+  printf 'wrong\nwrong\nwrong\n' | arcg "$arc_t/h2" setup >/dev/null 2>&1; rc=$?
+  check "archive: a recovery key typed wrong three times sets nothing up" \
+    "$rc:$(yesno "$([ -e "$arc_t/h2/keys" ]; echo $?)")" "2:no"
+  out="$(grep '^AGE-SECRET-KEY' "$arc_t/rec.key" | tr '[:upper:]' '[:lower:]' | arcg "$arc_t/h2" setup 2>&1)"; rc=$?
+  check "archive: setup succeeds when the recovery key is typed back (case-insensitive)" "$rc" "0"
+  check "archive: ... with two recipients, a canary and a config" \
+    "$(grep -c '^age1' "$arc_t/h2/keys/recipients.txt"):$(head -1 "$arc_t/h2/keys/canary.age"):$(grep -c '^format=1$' "$arc_t/h2/config")" "2:age-encryption.org/v1:1"
+  check "archive: ... the home and the keys readable only by you" \
+    "$(ls -ld "$arc_t/h2" | cut -c1-10):$(ls -l "$arc_t/h2/keys" | awk 'NR > 1 { print substr($1, 1, 10) }' | sort -u | tr '\n' ' ')" "drwx------:-rw------- "
+  check "archive: ... and the recovery secret is not stored anywhere" \
+    "$(grep -rl "$(grep '^AGE-SECRET-KEY' "$arc_t/rec.key")" "$arc_t/h2" | grep -c .)" "0"
+  check "archive: setup tells you how to backfill" "$(contains "$out" 'backfill')" "yes"
+  check "archive: a second setup is refused" \
+    "$(contains "$(grep '^AGE-SECRET-KEY' "$arc_t/rec.key" | arcg "$arc_t/h2" setup 2>&1)" 'already set up')" "yes"
+  out="$(arcg "$arc_t/h2" status 2>&1)"; rc=$?
+  check "archive: status names the test keys as insecure and is not healthy" \
+    "$rc:$(contains "$out" 'INSECURE TEST KEYS')" "1:yes"
+  check "archive: ... and shows the recipients by prefix" "$(contains "$out" '2 recipient(s): age1')" "yes"
+  sed -i 's|^age=.*|age=/nonexistent/age|' "$arc_t/h2/config"
+  check "archive: an age recorded at a path that is gone fails loud" \
+    "$(contains "$(arcg "$arc_t/h2" status 2>&1)" 'age is missing at')" "yes"
+else
+  echo "  SKIP  archive: setup and status with real keys (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+rm -rf "$arc_t"
+
 # --- Case 13: the one-time migration of pre-v0.22 headers -------------------
 # Other projects (and other people) are running relevio v0.21 and older, where
 # Branch could carry prose and Commits a "(N commits)" suffix. There is no
@@ -2151,6 +2214,7 @@ check "migrate: ... with every session in the catalog" \
 rm -rf "$d"
 
 echo
+[ "$SKIPS" -eq 0 ] || echo "$SKIPS case(s) SKIPPED (a skip is not a pass)"
 if [ "$FAILURES" -eq 0 ]; then
   echo "all cases passed"
   exit 0
