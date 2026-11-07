@@ -226,7 +226,7 @@ record_session_start() {
     resume|compact)
       start="$(transcript_start)"
       if [ -z "$start" ]; then
-        SESSION_ID_LINE="$SESSION_ID_LINE relevio could not tell when this session started (its transcript carries no timestamp relevio can read), so a handoff will have to be given the start by hand; mention it to the user if a handoff comes up."
+        SESSION_ID_LINE="$SESSION_ID_LINE Its start is unknown: a handoff needs --since."
         return 0
       fi
       at="$(git -C "$proj" log --format='%H %ct' HEAD 2>/dev/null | awk -v s="$start" '$2 <= s { print $1; exit }')"
@@ -273,99 +273,50 @@ RESUMED_LINE="RESUMED, NOT ARCHIVED: this conversation was resumed, but no hando
 # The core, parameterised by its opening paragraph. One copy, so a rule added
 # for new sessions cannot be silently missing from restarted ones.
 # --- Keys relevio keeps in the user's Claude Code settings ------------------
-# Two Claude Code defaults destroy what relevio exists to keep: idle compaction
-# summarizes a conversation away, and the retention sweep deletes it. Both are
-# fixed by one key in a settings file, and both are written by the function
-# below, so the safeguards live in one place:
+# Two Claude Code defaults destroy what relevio exists to keep, and each is
+# fixed by one key in the user's settings file:
+#   - cleanupPeriodDays: Claude Code silently deletes every transcript older
+#     than it (30 days by default; minimum 1, 0 is a validation error), and a
+#     deleted conversation can no longer be resumed. relevio raises it to 100
+#     years on BOTH channels: the sweep runs over every project on the
+#     machine, so a project-level value would not protect the others. A whole
+#     number at or above that is kept; anything else (absent, lower, a string,
+#     a fraction) is replaced. The type test matters: jq orders strings above
+#     numbers, so "30" >= 36500 is true.
+#   - idleCompaction: Claude Code compacts a long conversation left idle for
+#     about an hour (on by default from v2.1.290). The script installer turns
+#     it off in the project's .claude/settings.json, the file it already owns.
+#     A plugin cannot carry the key (Claude Code drops every plugin settings
+#     key except agent and subagentStatusLine), so on the plugin channel it is
+#     turned off here, in the user's settings. An explicit true is switched
+#     too: installing relevio IS the decision not to have conversations
+#     compacted.
+# Both keys live in one file, so they are checked with one jq, written with
+# one rename and announced in one notice (two notices on a resumed first
+# session overran the injection budget). Rules, each for a reason:
+#   - only on Claude Code: never on ZCode, and never on a host that sends no
+#     transcript (Devin loads .claude/ hooks but is not Claude Code);
 #   - never through a symlink (a dotfiles manager's file would be replaced by
 #     a plain copy) and never into a file that is not a JSON object;
-#   - every other key is kept, and no value in the file is ever printed: it
-#     can hold secrets in env;
+#   - every other key is kept and none of their values is printed: the file
+#     can hold secrets in env. The previous value of a key relevio changes is
+#     quoted, through safe_value;
 #   - written whatever the Claude Code version: older versions ignore a key
 #     they do not know, and leaving it out would let a later update change
 #     behaviour silently;
-#   - never on ZCode, which is not Claude Code and does not read this file;
-#   - only from a session that will announce it, so it is never a silent edit.
-# user_setting_ensure <key> <json-value> <ok-predicate> sets SETTING_RESULT to
-# ok, created, updated, symlink, invalid or failed, and SETTING_WAS to the
-# key's previous value (JSON, made safe to quote) on an update, or empty when
-# the key was absent. The settled path, every session after the first, costs
-# one jq per key.
+#   - only from a session that announces it, so it is never a silent edit.
+# Managed settings (an organization's, file-based or fetched from the admin
+# console and cached in remote-settings.json) win over the user's file, so
+# when one sets cleanupPeriodDays the notice says relevio cannot change it.
+# Paths from code.claude.com/docs/en/managed-settings (2026-11-04); the
+# remote-settings.json layout is assumed to be the settings object itself.
 SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
-user_setting_ensure() {
-  local key="$1" value="$2" ok="$3" tmp
-  SETTING_WAS=""
-  if [ -e "$SETTINGS_FILE" ] && jq -e "type == \"object\" and ($ok)" "$SETTINGS_FILE" >/dev/null 2>&1; then
-    SETTING_RESULT=ok
-  elif [ -L "$SETTINGS_FILE" ]; then
-    SETTING_RESULT=symlink
-  elif [ ! -e "$SETTINGS_FILE" ]; then
-    mkdir -p "$(dirname "$SETTINGS_FILE")" 2>/dev/null \
-      && jq -n --arg k "$key" --argjson v "$value" '{} | .[$k] = $v' > "$SETTINGS_FILE" 2>/dev/null \
-      && SETTING_RESULT=created || SETTING_RESULT=failed
-  elif ! jq -e 'type == "object"' "$SETTINGS_FILE" >/dev/null 2>&1; then
-    SETTING_RESULT=invalid
-  else
-    SETTING_WAS="$(safe_value "$(jq -r --arg k "$key" 'if has($k) then (.[$k] | tojson) else empty end' "$SETTINGS_FILE" 2>/dev/null)")"
-    if tmp="$(mktemp "$SETTINGS_FILE.relevio.XXXXXX" 2>/dev/null)" \
-       && jq --arg k "$key" --argjson v "$value" '.[$k] = $v' "$SETTINGS_FILE" > "$tmp" 2>/dev/null \
-       && mv "$tmp" "$SETTINGS_FILE"; then
-      SETTING_RESULT=updated
-    else
-      rm -f "${tmp:-}"; SETTING_RESULT=failed
-    fi
-  fi
-}
+RETENTION_DAYS=36500
 # A value from a settings file, quoted to the agent: anything but a short run of
 # plain characters could carry text addressed to it.
 safe_value() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9.-' '?' | cut -c1-20; }
-# Why a key could not be written, for the notice that asks the user to do it.
-setting_problem() {
-  case "$SETTING_RESULT" in
-    symlink) printf '%s' "$SETTINGS_FILE is a symbolic link, usually managed by a dotfiles tool, and writing through it would replace the link with a plain file" ;;
-    invalid) printf '%s' "$SETTINGS_FILE is not a valid JSON object, and rewriting it could destroy settings (once it is valid, relevio does it by itself)" ;;
-    *) printf '%s' "relevio could not write $SETTINGS_FILE" ;;
-  esac
-}
-
-# Idle compaction: Claude Code compacts a long conversation left idle for
-# about an hour, shortly before its prompt cache expires (idleCompaction, on by
-# default from v2.1.290). The script installer turns it off in the project's
-# .claude/settings.json, the file it already owns. A plugin cannot carry the
-# key (Claude Code drops every plugin settings key except agent and
-# subagentStatusLine), so the plugin channel turns it off here, in the user's
-# settings: the plugin is enabled for every project, and so is the setting.
-# An explicit true is switched too: installing relevio IS the decision not to
-# have conversations compacted, and the announcement says it was true.
-ensure_idle_compaction_off() {
-  local switched=""
-  IDLE_LINE=""
-  [ "$HOST" != zcode ] && [ "${CHANNEL_KIND:-}" = plugin ] || return 0
-  user_setting_ensure idleCompaction false '.idleCompaction == false'
-  case "$SETTING_RESULT" in
-    ok) ;;
-    symlink|invalid|failed) IDLE_LINE="IDLE COMPACTION IS STILL ON: Claude Code compacts a conversation left idle for about an hour, which destroys the full conversation relevio exists to keep. relevio did not turn it off because $(setting_problem). Tell the user in one line to add \"idleCompaction\": false to that file themselves." ;;
-    *)
-      [ -z "$SETTING_WAS" ] || switched=" It was set to $SETTING_WAS; relevio switched it, because installing relevio is the choice to keep conversations whole."
-      IDLE_LINE="IDLE COMPACTION OFF: relevio set \"idleCompaction\": false in $SETTINGS_FILE, once.$switched Claude Code compacts a conversation left idle for about an hour, destroying the full detail relevio exists to keep. Tell the user in one line." ;;
-  esac
-}
-
-# Retention: Claude Code deletes every transcript older than cleanupPeriodDays
-# (30 by default, minimum 1, 0 is a validation error), silently, and a deleted
-# conversation can no longer be resumed. relevio raises it to 100 years in the
-# user's settings on BOTH channels: the sweep runs over every project on the
-# machine, so a project-level value would not protect the others. A value
-# already at or above that is kept; anything else (absent, lower, a string,
-# not an integer) is replaced, and the announcement says what it was. The type
-# test matters: jq orders strings above numbers, so "30" >= 36500 is true.
-# Managed settings (an organization's, file-based or fetched from the admin
-# console and cached in remote-settings.json) win over the user's file, so
-# when one sets the key the announcement says relevio cannot change it.
-# Paths from code.claude.com/docs/en/managed-settings (2026-11-04).
-RETENTION_DAYS=36500
 # Sets MANAGED_FILE and MANAGED_VALUE for the first managed source that sets
-# the key, or leaves both empty. RELEVIO_MANAGED_DIR exists for the tests.
+# cleanupPeriodDays, or leaves both empty. RELEVIO_MANAGED_DIR is for tests.
 managed_retention() {
   local dir f v
   MANAGED_FILE=""; MANAGED_VALUE=""
@@ -383,21 +334,67 @@ managed_retention() {
     return 0
   done
 }
-ensure_retention() {
-  local was=" It was unset (default 30 days)." managed=""
-  RETENTION_LINE=""
-  [ "$HOST" != zcode ] || return 0
-  user_setting_ensure cleanupPeriodDays "$RETENTION_DAYS" \
-    "(.cleanupPeriodDays | type) == \"number\" and .cleanupPeriodDays == (.cleanupPeriodDays | floor) and .cleanupPeriodDays >= $RETENTION_DAYS"
-  case "$SETTING_RESULT" in
-    ok) ;;
-    symlink|invalid|failed) RETENTION_LINE="CONVERSATIONS STILL EXPIRE: Claude Code silently deletes conversations older than \"cleanupPeriodDays\" (30 days by default). relevio did not raise it because $(setting_problem). Tell the user in one line to set \"cleanupPeriodDays\": $RETENTION_DAYS in that file themselves." ;;
-    *)
-      [ -z "$SETTING_WAS" ] || was=" It was $SETTING_WAS."
-      managed_retention
-      [ -z "$MANAGED_FILE" ] || managed=" But managed settings in $MANAGED_FILE set it to $MANAGED_VALUE and win; relevio cannot change that, so say it too."
-      RETENTION_LINE="RETENTION RAISED: relevio set \"cleanupPeriodDays\": $RETENTION_DAYS (100 years) in $SETTINGS_FILE, once.$was Claude Code silently deletes older conversations, and a deleted one cannot be reopened.$managed Tell the user in one line." ;;
-  esac
+ensure_user_settings() {
+  local want todo keys tmp k was parts="" why="" managed="" pairs="" problem=""
+  SETTINGS_LINE=""
+  [ "$HOST" != zcode ] && [ -n "$TRANSCRIPT" ] || return 0
+  want="{\"cleanupPeriodDays\": $RETENTION_DAYS}"
+  [ "${CHANNEL_KIND:-}" = plugin ] && want="{\"cleanupPeriodDays\": $RETENTION_DAYS, \"idleCompaction\": false}"
+  # One "key<TAB>previous value" line per key that needs changing; the previous
+  # value is JSON, or empty when the key is absent.
+  local needed='. as $doc | $want | to_entries[] | .key as $k | .value as $v
+    | select(($doc | if $k == "cleanupPeriodDays"
+        then ((.[$k] | type) == "number" and .[$k] == (.[$k] | floor) and .[$k] >= $v)
+        else .[$k] == $v end) | not)
+    | "\($k)\t\(if $doc | has($k) then ($doc[$k] | tojson) else "" end)"'
+  if [ ! -e "$SETTINGS_FILE" ] && [ ! -L "$SETTINGS_FILE" ]; then
+    todo="$(jq -nr --argjson want "$want" "{} | $needed")"
+  elif todo="$(jq -er --argjson want "$want" "if type == \"object\" then ($needed) else error end" "$SETTINGS_FILE" 2>/dev/null)" || [ $? -eq 4 ]; then
+    # jq -e exits 4 when nothing needed changing.
+    [ -n "$todo" ] || return 0
+    [ -L "$SETTINGS_FILE" ] && problem="$SETTINGS_FILE is a symbolic link, usually managed by a dotfiles tool, and writing through it would replace the link with a plain file"
+  else
+    [ -L "$SETTINGS_FILE" ] && [ ! -e "$SETTINGS_FILE" ] \
+      && problem="$SETTINGS_FILE is a symbolic link, usually managed by a dotfiles tool, and writing through it would replace the link with a plain file" \
+      || problem="$SETTINGS_FILE is not a valid JSON object, and rewriting it could destroy settings (once it is valid, relevio does it by itself)"
+    todo="$(jq -nr --argjson want "$want" "{} | $needed")"
+  fi
+  keys="$(printf '%s\n' "$todo" | cut -f1 | jq -Rnc '[inputs | select(length > 0)]')"
+  if [ -z "$problem" ]; then
+    mkdir -p "$(dirname "$SETTINGS_FILE")" 2>/dev/null
+    if tmp="$(mktemp "$SETTINGS_FILE.relevio.XXXXXX" 2>/dev/null)" \
+       && { if [ -e "$SETTINGS_FILE" ]; then cat "$SETTINGS_FILE"; else echo '{}'; fi; } \
+            | jq --argjson want "$want" --argjson keys "$keys" 'reduce $keys[] as $k (.; .[$k] = $want[$k])' > "$tmp" 2>/dev/null \
+       && mv "$tmp" "$SETTINGS_FILE"; then :
+    else
+      rm -f "${tmp:-}"; problem="relevio could not write $SETTINGS_FILE"
+    fi
+  fi
+  while IFS="$(printf '\t')" read -r k was; do
+    [ -n "$k" ] || continue
+    was="$(safe_value "$was")"
+    case "$k" in
+      cleanupPeriodDays)
+        pairs="${pairs:+$pairs and} \"cleanupPeriodDays\": $RETENTION_DAYS"
+        parts="${parts:+$parts and} \"cleanupPeriodDays\": $RETENTION_DAYS (it was ${was:-unset: 30 days})"
+        why="$why By default Claude Code deletes conversations after 30 days." ;;
+      idleCompaction)
+        pairs="${pairs:+$pairs and} \"idleCompaction\": false"
+        parts="${parts:+$parts and} \"idleCompaction\": false${was:+ (it was $was)}"
+        why="$why Idle compaction summarizes a conversation away." ;;
+    esac
+  done <<EOF
+$todo
+EOF
+  if [ -n "$problem" ]; then
+    SETTINGS_LINE="SETTINGS NOT CHANGED:$why relevio did not set$pairs because $problem. Tell the user in one line to set it in that file themselves."
+    return 0
+  fi
+  if printf '%s' "$keys" | grep -q cleanupPeriodDays; then
+    managed_retention
+    [ -z "$MANAGED_FILE" ] || managed=" Managed settings in $MANAGED_FILE set it to $MANAGED_VALUE and win: say so too."
+  fi
+  SETTINGS_LINE="SETTINGS CHANGED: relevio set$parts in $SETTINGS_FILE, once.$why$managed Tell the user in one line."
 }
 
 # The context hook's once-per-session markers (see context-warn.sh) are only
@@ -408,8 +405,7 @@ prune_markers() {
 }
 
 core() {
-  ensure_idle_compaction_off
-  ensure_retention
+  ensure_user_settings
   record_session_start
   prune_markers
   emit "relevio v0.24.7: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
@@ -422,11 +418,9 @@ $SCRIPTS_LINE${SESSION_ID_LINE:+
 
 $SESSION_ID_LINE}
 
-$CHANNEL_LINE${IDLE_LINE:+
+$CHANNEL_LINE${SETTINGS_LINE:+
 
-$IDLE_LINE}${RETENTION_LINE:+
-
-$RETENTION_LINE}
+$SETTINGS_LINE}
 
 WHEN THE SESSION ENDS IS NOT YOUR CALL: never write a handoff, and never suggest wrapping up, on your own initiative. Do it only when the user asks for it, or when a relevio message tells you to in those words. Finishing the task you were given is not a reason to end anything: the user decides what happens next, and a session normally has room for far more work than the one task that opened it. If you think the session should end, say why in one line and let the user answer.
 

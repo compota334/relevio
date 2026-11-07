@@ -1612,9 +1612,9 @@ out="$(idle "$cfg" startup)"
 check "idle: a plugin install with no settings file gets one with the key off" \
   "$(jq -c '.idleCompaction' "$cfg/settings.json" 2>/dev/null)" "false"
 check "idle: ... and the agent is told to say so, so it is never a silent edit" \
-  "$(contains "$out" 'IDLE COMPACTION OFF')" "yes"
+  "$(contains "$out" '"idleCompaction": false in')" "yes"
 check "idle: ... once: the next session says nothing about it" \
-  "$(contains "$(idle "$cfg" startup)" 'IDLE COMPACTION')" "no"
+  "$(contains "$(idle "$cfg" startup)" 'SETTINGS')" "no"
 rm -rf "$cfg"
 # An existing file keeps everything else, and its values are never printed:
 # a settings file can hold secrets in env.
@@ -1636,9 +1636,9 @@ cfg="$(mktemp -d)"; printf '{"idleCompaction": true}\n' > "$cfg/settings.json"
 out="$(idle "$cfg" startup)"
 check "idle: an explicit true is switched to false" "$(jq -c '.idleCompaction' "$cfg/settings.json")" "false"
 check "idle: ... and the announcement says it was true" \
-  "$(contains "$out" 'It was set to true; relevio switched it')" "yes"
+  "$(contains "$out" '"idleCompaction": false (it was true)')" "yes"
 check "idle: ... once: the next session says nothing" \
-  "$(contains "$(idle "$cfg" startup)" 'IDLE COMPACTION')" "no"
+  "$(contains "$(idle "$cfg" startup)" 'SETTINGS')" "no"
 rm -rf "$cfg"
 # A file that is not a JSON object is never rewritten, and the user is told.
 cfg="$(mktemp -d)"; printf '{ "broken": \n' > "$cfg/settings.json"; cp "$cfg/settings.json" "$cfg/orig"
@@ -1716,9 +1716,9 @@ for chan in plugin script; do
   check "retention ($chan): no settings file gets one with 36500 days" \
     "$(jq -c '.cleanupPeriodDays' "$cfg/settings.json" 2>/dev/null)" "36500"
   check "retention ($chan): ... and the agent is told, with the default it replaced" \
-    "$(contains "$out" 'RETENTION RAISED'):$(contains "$out" 'It was unset (default 30 days)')" "yes:yes"
+    "$(contains "$out" 'SETTINGS CHANGED'):$(contains "$out" 'it was unset: 30 days')" "yes:yes"
   check "retention ($chan): ... once: the next session says nothing about it" \
-    "$(contains "$(ret "$cfg" "$chan" startup)" 'RETENTION')" "no"
+    "$(contains "$(ret "$cfg" "$chan" startup)" 'SETTINGS')" "no"
   rm -rf "$cfg"
 done
 # An existing value is replaced unless it is an integer of at least 36500.
@@ -1730,14 +1730,14 @@ for v in 30 '"30"' 0 36499 36500.5 null; do
   check "retention: $v is raised to 36500, keeping the other keys" \
     "$(jq -c '[.cleanupPeriodDays, .env.SOME_TOKEN]' "$cfg/settings.json")" '[36500,"secret-value-xyz"]'
   check "retention: ... the announcement names what it was, and no secret" \
-    "$(contains "$out" "It was $(printf '%s' "$v" | LC_ALL=C tr -c 'A-Za-z0-9.-' '?')."):$(contains "$out" 'secret-value-xyz')" "yes:no"
+    "$(contains "$out" "(it was $(printf '%s' "$v" | LC_ALL=C tr -c 'A-Za-z0-9.-' '?'))"):$(contains "$out" 'secret-value-xyz')" "yes:no"
   rm -rf "$cfg"
 done
 for v in 36500 99999; do
   cfg="$(mktemp -d)"; printf '{"cleanupPeriodDays": %s}\n' "$v" > "$cfg/settings.json"; cp "$cfg/settings.json" "$cfg/orig"
   out="$(ret "$cfg" script startup)"
   check "retention: $v is kept as it is, and nothing is said" \
-    "$(cmp -s "$cfg/settings.json" "$cfg/orig" && echo same):$(contains "$out" 'RETENTION')" "same:no"
+    "$(cmp -s "$cfg/settings.json" "$cfg/orig" && echo same):$(contains "$out" 'SETTINGS')" "same:no"
   rm -rf "$cfg"
 done
 # A file that is not a JSON object, or a symlink, is never rewritten, and the
@@ -1745,7 +1745,7 @@ done
 cfg="$(mktemp -d)"; printf '{ "broken": \n' > "$cfg/settings.json"; cp "$cfg/settings.json" "$cfg/orig"
 out="$(ret "$cfg" script startup)"
 check "retention: an invalid settings file is not touched, and the user is told" \
-  "$(cmp -s "$cfg/settings.json" "$cfg/orig" && echo same):$(contains "$out" 'CONVERSATIONS STILL EXPIRE')" "same:yes"
+  "$(cmp -s "$cfg/settings.json" "$cfg/orig" && echo same):$(contains "$out" 'SETTINGS NOT CHANGED')" "same:yes"
 rm -rf "$cfg"
 cfg="$(mktemp -d)"; printf '{}\n' > "$cfg/real.json"; ln -s "$cfg/real.json" "$cfg/settings.json"
 out="$(ret "$cfg" script startup)"
@@ -1770,13 +1770,30 @@ for src in managed-settings.json managed-settings.d/50-retention.json remote-set
   mkdir -p "$(dirname "$mf")"; printf '{"cleanupPeriodDays": 14}\n' > "$mf"
   out="$(ret "$cfg" plugin startup)"
   check "retention: a value set in $src is named as the one that wins" \
-    "$(contains "$out" "managed settings in $mf set it to 14 and win")" "yes"
+    "$(contains "$out" "Managed settings in $mf set it to 14 and win")" "yes"
   rm -rf "$cfg" "$rman/managed-settings.json" "$rman/managed-settings.d"
 done
 cfg="$(mktemp -d)"
 check "retention: with no managed value, none is mentioned" \
-  "$(contains "$(ret "$cfg" plugin startup)" 'managed settings in')" "no"
+  "$(contains "$(ret "$cfg" plugin startup)" 'Managed settings in')" "no"
 rm -rf "$cfg"
+# A host that sends no transcript is not Claude Code (Devin loads .claude/
+# hooks too): its settings are never written.
+cfg="$(mktemp -d)"
+printf '{"source":"startup"}' | env -u CLAUDE_PLUGIN_ROOT CLAUDE_CONFIG_DIR="$cfg" bash "$rs/.claude/hooks/session-start.sh" >/dev/null
+check "retention: a host that sends no transcript never gets Claude Code's settings" \
+  "$(yesno "$([ -e "$cfg/settings.json" ]; echo $?)")" "no"
+rm -rf "$cfg"
+# The worst case: a plugin's first session that is a RESUME with no start record
+# and no readable start, announcing both settings and a managed value.
+cfg="$(mktemp -d)"; printf '{"cleanupPeriodDays": 14}\n' > "$rman/managed-settings.json"
+dw="$(fixture '')"
+n=$(printf '{"source":"resume","session_id":"12ab0000-0000-4000-8000-0000000000ff","transcript_path":"%s/none.jsonl","model":"claude-opus-5"}' "$dw" \
+  | env -u CLAUDE_PLUGIN_ROOT CLAUDE_CONFIG_DIR="$cfg" RELEVIO_MANAGED_DIR="$rman" CLAUDE_PROJECT_DIR="$dw" bash "$rp/hooks/session-start.sh" \
+  | jq -r '.hookSpecificOutput.additionalContext' | wc -c)
+check "retention: a resumed first session with every notice fits the budget ($n <= $INJECT_BUDGET)" \
+  "$([ "$n" -le "$INJECT_BUDGET" ] && echo yes || echo no)" "yes"
+rm -rf "$cfg" "$dw" "$rman/managed-settings.json"
 # The worst case: a plugin's first session announces both settings at once,
 # with a managed value named too.
 cfg="$(mktemp -d)"; printf '{"cleanupPeriodDays": 14}\n' > "$rman/managed-settings.json"
@@ -1949,7 +1966,7 @@ out15="$(ss15 resume "$d15/none.jsonl")"
 check "session-start: a resume with no readable start writes no record" \
   "$([ -e "$rec15" ] && echo written || echo none)" "none"
 check "session-start: ... and says so, instead of counting from now" \
-  "$(contains "$out15" 'could not tell when this session started')" "yes"
+  "$(contains "$out15" 'Its start is unknown: a handoff needs --since')" "yes"
 # A new session starts now, whatever an old transcript at that path says.
 now15="$(date +%s)"
 ss15 startup "$t15" >/dev/null

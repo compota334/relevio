@@ -633,14 +633,19 @@ the value it had before.
 - A whole number of at least `36500` is left as it is. Anything else (absent,
   lower, `0`, a string such as `"30"`, a fraction) is replaced.
 - The same safeguards as idle compaction: an invalid or symlinked settings
-  file is never rewritten, every other key is kept, no value is ever printed,
-  and it never happens on ZCode.
+  file is never rewritten, and every other key is kept with none of its values
+  printed (only the previous value of the key relevio changes is quoted). It
+  happens only on Claude Code: never on ZCode, nor on a host that loads
+  relevio's hooks without being Claude Code.
+- When both keys need changing (the plugin's first session), they are written
+  together and announced in one notice.
 - A settings file relevio rewrites ends up readable only by you (mode `600`),
   the safer mode for a file that can hold keys in `env`.
 - **Managed settings win.** If your organization sets `cleanupPeriodDays` in
   `managed-settings.json`, in `managed-settings.d/`, or from the admin console
   (cached in `~/.claude/remote-settings.json`), that value applies whatever
-  your own file says. relevio cannot change it and tells you so.
+  your own file says. relevio cannot change it, and says so in the notice it
+  gives when it writes the key.
 - Sessions started or last continued in the Claude desktop app are already
   kept at any age since Claude Code v2.1.248; the risk is terminal and IDE
   sessions.
