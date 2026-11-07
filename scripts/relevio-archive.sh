@@ -242,6 +242,9 @@ cmd_status() {
   keys="$(grep -c '^age1' "$RH/keys/recipients.txt" || true)"
   echo "  keys: $keys recipient(s):$(grep '^age1' "$RH/keys/recipients.txt" | cut -c1-12 | sed 's/^/ /;s/$/.../' | tr -d '\n')"
   state="$(status_field state)"; at="$(status_field at)"; pid="$(status_field pid)"
+  # Digits only, as the notice does: these reach arithmetic and kill.
+  case "$at" in ""|*[!0-9]*) at=0 ;; esac
+  case "$pid" in ""|*[!0-9]*) pid=0 ;; esac
   if [ -z "$state" ]; then
     echo "  last run: none yet"
   else
@@ -373,6 +376,13 @@ forgotten_load() {
   FORGOTTEN=()
   [ -r "$RH/forgotten.tsv" ] || return 0
   while IFS="$TAB" read -r id _rest; do [ -n "$id" ] && FORGOTTEN["$id"]=1; done < "$RH/forgotten.tsv"
+}
+# The folder and bundle names an index row may hold: a plain directory name,
+# and this session's own bundle or one of its generations. Checked before
+# either becomes part of a path that is written or removed.
+index_names_ok() {  # <id> <folder> <bundle>
+  case "$2" in ""|*/*|.|..) return 1 ;; esac
+  [[ $3 =~ ^$1(\.[0-9]{8}T[0-9]{6}Z|\.orphan-[0-9]{8}T[0-9]{6}Z)?\.tgz\.age$ ]]
 }
 # index_edit <folder> <id> <op> [arg]: op put <line> (replaces the current
 # line), state <new state>, mtime <epoch>, supersede <generation bundle name>,
@@ -786,6 +796,7 @@ cmd_restore() {
     exit 1
   fi
   IFS="$TAB" read -r st _ fo _ _ ab asha _ _ bundle _ _ <<<"$lines"
+  index_names_ok "$id" "$fo" "$bundle" || die "the index entry for $id names an unexpected folder or file. Nothing was restored."
   dest="$PROJECTS/$fo"
   # A copy of the same id in another folder makes claude --resume report it
   # as not found: never create that duplicate.
@@ -957,8 +968,11 @@ cmd_forget() {
   files="$( { awk -F'\t' -v id="$id" 'NR > 1 && $2 == id { print $3 "/" $10 }' "$INDEX" 2>/dev/null
               find "$RH/archive" -mindepth 2 -maxdepth 2 -name "$id.orphan-*.tgz.age" 2>/dev/null | sed "s|^$RH/archive/||"; } | sort -u)"
   [ -n "$files" ] || die "session $id is not archived."
+  while IFS= read -r f; do
+    index_names_ok "$id" "${f%%/*}" "${f#*/}" || die "the index names an unexpected file for $id ($(relevio_safe "$f")). Nothing was removed."
+  done <<<"$files"
   echo "This removes from the archive, FOR GOOD:"
-  while IFS= read -r f; do echo "  $f ($(human_bytes "$(file_stat "$RH/archive/$f" | cut -d' ' -f1)"))"; done <<<"$files"
+  while IFS= read -r f; do echo "  $(relevio_safe "$f") ($(human_bytes "$(file_stat "$RH/archive/$f" | cut -d' ' -f1)"))"; done <<<"$files"
   echo "and the session will never be archived again. This cannot be undone."
   printf 'Type the first 8 characters of the id to confirm: '
   if test_gate; then IFS= read -r typed || typed=""; else IFS= read -r typed < /dev/tty || typed=""; fi

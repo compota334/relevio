@@ -2374,6 +2374,15 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     "$rc:$(age -d -i "$arh/keys/main.key" "$arh/archive/-f2/$r2.tgz.age" >/dev/null 2>&1 && echo new-opens):$(age -d -i "$ar/old-main.key" "$arh/archive/-f2/$r2.tgz.age" >/dev/null 2>&1 && echo old-opens || echo old-refused)" \
     "0:new-opens:old-refused"
   check "archive: ... keeping the old main key in keys/old" "$(ls "$arh/keys/old" | grep -c '^main\.')" "1"
+  # Index rows are relevio's, but a planted one must not steer a path.
+  cp "$arh/index.tsv" "$ar/idx3"; echo precious > "$ar/precious"
+  printf 'active\t%s\t../..\t-\t-\t1\tx\t1\t1\tprecious\t1\t-\n' "$r2" >> "$arh/index.tsv"
+  check "archive: forget refuses an index row whose path leaves the archive" \
+    "$(contains "$(echo "${r2:0:8}" | arcr forget "$r2" 2>&1)" 'unexpected file'):$(cat "$ar/precious")" "yes:precious"
+  cp "$ar/idx3" "$arh/index.tsv"
+  printf 'state ok\nat BASH_VERSINFO[$(touch %s/pwned)]\npid 1\n' "$ar" > "$arh/status"
+  arcr status >/dev/null 2>&1
+  check "archive: a status field is never evaluated as code" "$(yesno "$([ -e "$ar/pwned" ]; echo $?)")" "no"
   # forget: confirmation, removal, and never archived again.
   check "archive: forget refuses a wrong confirmation, removing nothing" \
     "$(contains "$(echo nope | arcr forget "$r2" 2>&1)" 'nothing was removed'):$(ls "$arh/archive/-f2" | grep -c .)" "yes:1"
