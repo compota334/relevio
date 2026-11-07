@@ -188,6 +188,14 @@ previous session.
      that explicitly, alongside the installed version. Never let a failed
      check pass as "up to date": silence would be indistinguishable from a
      clean result.
+   Then report the encrypted conversation archive in one line:
+
+       bash "$S/relevio-archive.sh" status
+
+   Say which is true: on and healthy, failing (name its reason), off, or not
+   set up. If it is not set up, tell the user they can run that same script
+   with `setup` in their own terminal. Never run `setup`, `restore`, `keys` or
+   `forget` yourself: they ask for the user's secrets or confirmation.
 HOST NOTE (ZCode): if this session runs inside ZCode rather than Claude Code,
 every relevio command is unprefixed there: `/kickoff`, `/handoff`, `/revisit`
 (never `/relevio:...`). ZCode has no `/rename` and no `claude --resume`:

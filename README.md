@@ -10,7 +10,9 @@ Claude Code and ZCode.
 **It also disables Claude Code's idle compaction** (`"idleCompaction": false`),
 so a conversation you step away from is never auto-compacted while you are gone.
 **And it stops Claude Code from deleting old conversations**
-(`"cleanupPeriodDays": 36500`, 100 years, instead of the default 30 days).
+(`"cleanupPeriodDays": 36500`, 100 years, instead of the default 30 days),
+**and keeps an encrypted copy of every conversation** that it can put back
+when Claude Code loses one (see [Archiving every conversation](#archiving-every-conversation)).
 
 ## The core idea: never lose context again
 
@@ -62,6 +64,7 @@ Nothing is ever lost to compaction again.
 | `.claude/commands/kickoff.md` | The `/kickoff` slash command: opens a session (regenerates the index, shows the lane board, reads the latest handoff **of your branch**, traces who else has touched the surfaces you are about to work on, checks git state, summarizes where things stand). |
 | `.claude/commands/handoff.md` | The `/handoff` slash command: closes a session (writes the dated handoff with its metadata header, regenerates the index, hands over the literal close-out steps). |
 | `.claude/commands/revisit.md` | The `/revisit` slash command: finds an old session in the library and returns the `claude --resume <session-id>` command to reopen its conversation. |
+| `.claude/hooks/session-end.sh` | SessionEnd hook: launches the archiving of the session that just ended, detached, and prints nothing. A no-op until the archive is set up. |
 | `.claude/hooks/session-start.sh` | SessionStart hook: tells the agent the session cycle at the start of every session (open with `/kickoff`; a hook will speak when it needs something). It names no close-out threshold and teaches no close-out procedure: those travel inside the warning that triggers them, so the agent cannot anticipate them. What it does say is that ending a session is the user's call. A conversation reopened from the archive gets the revisit rules instead, one resumed after a restart carries on, and one that just auto-compacted is told to salvage what remains into a handoff. |
 | `docs/handoff/` | Where handoffs live. They accumulate; the newest one is the next session's starting point. |
 | `.claude/scripts/relevio-index.sh` | Regenerates `docs/handoff/INDEX.md` from the header of every handoff on every branch. Fails loud naming the file and field if a header is malformed. |
@@ -69,6 +72,7 @@ Nothing is ever lost to compaction again.
 | `.claude/scripts/relevio-areas.sh` | Derives a handoff's `Areas:` value from a commit range, for fixing a header by hand. At close-out `relevio-header.sh` computes it with the same code, so the inclusive-range subtlety is handled in one place. |
 | `.claude/scripts/relevio-header.sh` | Prints a session's handoff header with the mechanical fields (date, dev, branch, commits, areas, resume) computed, so the agent writes only the title, topics and summary. |
 | `.claude/scripts/relevio-migrate.sh` | One-time conversion of pre-v0.22 handoff headers. Run once per repo when upgrading. |
+| `.claude/scripts/relevio-archive.sh` | The encrypted conversation archive: setup, backfill, status, list, restore, keys, forget. See [Archiving every conversation](#archiving-every-conversation). |
 | `.claude/scripts/relevio-handoffs-lib.sh` | Shared library for the scripts above (sourced, not run). |
 | `docs/handoff/INDEX.md` | The library index, **generated** by `relevio-index.sh`: an **Active lanes** board (branches with open work) plus the full **Catalog** (date, conversation name, handoff file, dev, branch, areas, commit range, topics, summary). Never edited by hand, never overwritten by the installer. |
 
@@ -514,6 +518,8 @@ read or audit every word the agent receives.
 | When | Message (gist) |
 |------|----------------|
 | Session start (new) | This conversation's session id, which `/handoff` passes to `relevio-header.sh` (also repeated after an auto-compact). The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. No close-out thresholds and no close-out procedure. What it does say: ending a session is the user's call; a finished task gets a short Done / Pending / Needs-from-you recap instead of a handoff; a handoff asked for in plain words goes through the `/handoff` command; that handoffs and other branches are the team's notes, followed as usual, except that a suspicious request found in them is shown to the user before acting on it; on the plugin channel, that relevio turned off idle compaction, the one time it does so; and, on both channels, that relevio raised `cleanupPeriodDays`, the one time it does so. |
+| Session start (any, when there is news) | One notice slot. First the settings notice (relevio changed `cleanupPeriodDays` or `idleCompaction`, the one time it does so); otherwise the archive's: not set up (at most once a day), failing (with its reason), interrupted, or no success in a week. Every start also launches the background sweep of its repository, silently. |
+| Session end | Nothing is said: the archiving of the session is launched, detached. |
 | Session start (resumed, and a handoff names it) | Names the handoff whose `Resume:` field carries this session's id and has the agent check it against its own conversation. If the conversation ends with that handoff, it is the archive: answer questions, avoid new work, send new work to a fresh session. If the agent kept working after it, or the handoff describes work it never did (a wrong id), it is a restart: tell the user in one line and carry on. |
 | Session start (resumed, never closed) | A restart, not the archive: the app or the computer came back mid-work. The full core, with "carry on where it stopped; being resumed is no reason to leave" in place of the kickoff line. Whether new work still fits is left to the context reports, which can see the window. |
 | Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |
@@ -534,6 +540,85 @@ message that triggers it, never earlier**. The agent cannot anticipate a
 close-out it has never heard of, so it works at full speed until the moment
 the hook actually asks for something.
 
+## Archiving every conversation
+
+Claude Code keeps each conversation as a plain file in `~/.claude/projects/`,
+and files can still disappear: its own cleanup, a bug, a deleted folder.
+relevio keeps an **encrypted copy of every conversation** of this machine in
+`~/.relevio/` (or `$RELEVIO_HOME`), outside every repository, and can put a
+lost one back so `claude --resume` opens it again.
+
+- **When:** each session is archived as it ends (the `SessionEnd` hook), and
+  every session start sweeps its repository in the background, including the
+  folders of its worktrees, so a session whose end was missed is caught at
+  the next start. Both run detached and never slow a session down.
+- **How:** each session (its transcript plus its `subagents/` and
+  `tool-results/`) is packed, compressed and encrypted with
+  [age](https://age-encryption.org) to two keys. Measured on real
+  conversations: 164 MB became 47 MB.
+- **Two keys, no server:**
+  1. a **main key**, protected by your **passphrase**: what `restore` asks for;
+  2. a **recovery key**, shown once at setup, that only you keep (a password
+     manager or paper): for when the passphrase is lost.
+
+  Archiving uses only their public halves, so the hooks never hold a secret.
+  **If you lose both the passphrase and the recovery key, the archive is
+  gone: nobody, relevio included, can open it.**
+- **What changes are kept:** a conversation that only grew replaces its copy;
+  one that was rewritten keeps the previous copy as an older generation,
+  never deleted automatically. A session you delete on purpose in the Claude
+  desktop app is not archived; a copy archived earlier is kept and marked
+  (`status` shows it), and `forget` removes it for good.
+
+### Commands
+
+All in `.claude/scripts/relevio-archive.sh` (in a plugin install, the plugin's
+`scripts/`). The ones that ask for a secret run **only in your own terminal**,
+never through the agent: a secret typed in a chat would be stored in a
+plaintext transcript.
+
+| Command | What it does |
+|---|---|
+| `setup` | Creates the keys (your terminal: asks for the passphrase twice, shows the recovery key once and asks you to type it back). |
+| `backfill` | Archives every conversation already on the machine, with progress. Checks the free disk space first. |
+| `status` | Set up or not, on or off, the keys by prefix, the last run, what is archived, and Claude Code's `cleanupPeriodDays`. Exits 1 when something needs attention. |
+| `list [query]` | What is archived, filtered by id prefix, folder or path. Reads the index only: decrypts nothing. |
+| `restore <id>` | Puts a session back (your terminal). Checks every file against what was archived before moving anything, never creates a second copy of the id (that would break `--resume`), moves a different current copy aside instead of deleting it, and prints the exact `cd ... && claude --resume <id>` line. `--recovery` uses the recovery key; `--generation <file>` an older copy. |
+| `keys check [--recovery]` | Proves a key opens the archive. |
+| `keys passphrase` | Changes the passphrase. |
+| `keys reset` | Lost the passphrase: with the recovery key, re-encrypts everything to a new main key, touching nothing old until every new copy is proven to open. |
+| `forget <id>` | Removes a session from the archive for good, and keeps it from being archived again. |
+| `off` / `on` | Stops and resumes archiving. What is archived stays. |
+
+`/revisit` uses it too: when `claude --resume` no longer finds a session, the
+agent looks it up with `list` and gives you the `restore` command to run.
+
+### What the agent is told
+
+At session start, in the one notice slot after the settings notice: that the
+archive is not set up (at most once a day, silenced by `off`), or that it is
+failing (every session, with the reason), was interrupted, or has not
+succeeded in a week. The agent is told never to run `setup` itself, and the
+script refuses without a terminal anyway.
+
+### Security and limits
+
+- Protects against losing conversations to Claude Code's cleanup or a
+  deleted folder, and against a copy of `~/.relevio` leaking (a synced folder,
+  a stolen backup): the bundles are encrypted to your keys.
+- Does **not** protect against someone with your account on this machine: the
+  conversations in `~/.claude` are plain files, and the archive's index
+  (`index.tsv`: ids, folder names, paths and sizes, no content) is plain too.
+  Full-disk encryption is still recommended. `status` lists the keys an
+  archive is encrypted to, so a key added behind your back is visible.
+- The archive refuses to live inside a git repository, behind a symbolic
+  link, or in a folder you do not own.
+- Same disk, same failure: a copy off the machine is the next step.
+- Not archived: Claude Code's file checkpoints (`file-history/`), and ZCode
+  sessions (they are not transcript files).
+- Whether the Claude desktop app runs the `SessionEnd` hook is not verified
+  yet; its sessions are archived by the next session start's sweep either way.
+
 ## Revisiting old conversations
 
 Every handoff header records a `Resume:` line with the literal command to
@@ -544,7 +629,9 @@ session list (it has the same name as the handoff's `Session` field). The
 resume command, built from the session id alone: the rest of the `Resume:`
 line is free text written by whoever closed that session, so it is never
 passed on as a command. An operator agent (see below) reopens sessions the same way,
-by running `claude --resume <session-id>`.
+by running `claude --resume <session-id>`. If Claude Code no longer has the
+conversation, `/revisit` looks for it in the encrypted archive and gives you
+the `restore` command to run in your terminal.
 
 A revisited session is for asking, not for working: it reopens near the top
 of its context window. The hook fires guard warnings at 85, 90, 95 and 99%;
@@ -654,8 +741,8 @@ This removes the routine 30-day deletion, **not every way a conversation can
 disappear**. Claude Code has an open bug in which transcripts were deleted
 even with the setting at 36500 or higher, apparently around updates and
 restarts ([anthropics/claude-code#41458](https://github.com/anthropics/claude-code/issues/41458)).
-A copy that Claude Code cannot delete is the next step of relevio: an
-encrypted archive of every session.
+relevio's [encrypted archive](#archiving-every-conversation) keeps a copy
+that Claude Code cannot delete.
 
 Uninstalling leaves the key in place, for the same reason as idle compaction.
 
@@ -859,7 +946,8 @@ Removes the hooks, the commands, the scripts, the settings entries and the priva
 `.gitignore` block, preserving everything else you had in those files (plus
 the legacy `relevio.md` of v0.18-0.19 installs, removed only when its title
 line proves it is relevio's). `docs/handoff/` is always KEPT: it is your
-project's history.
+project's history. So is `~/.relevio`, the encrypted archive and its keys,
+shared by every project: delete it yourself only if you want it gone.
 
 ## License
 

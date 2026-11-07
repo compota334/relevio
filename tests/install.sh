@@ -2526,6 +2526,19 @@ d19="$(fixture 'Our cycle: write docs/handoff/NOTES.md at the end of every sessi
 check "install: ... while a methodology of its own still blocks" "$rc" "1"
 rm -rf "$d19"
 
+# --- Case 20: the archive is documented where people look -------------------
+rd="$(cat "$REPO/README.md")"
+check "README: it documents the encrypted archive" "$(contains "$rd" '## Archiving every conversation')" "yes"
+check "README: ... says plainly that losing both keys loses the archive" \
+  "$(contains "$rd" 'If you lose both the passphrase and the recovery key, the archive is')" "yes"
+check "README: ... and lists both new files" \
+  "$(contains "$rd" '`.claude/hooks/session-end.sh`'):$(contains "$rd" '`.claude/scripts/relevio-archive.sh`')" "yes:yes"
+for chan in commands templates; do
+  kd="$(cat "$REPO/$chan/kickoff.md")"
+  check "$chan/kickoff: it reports the archive's status in one line" "$(contains "$kd" 'relevio-archive.sh" status')" "yes"
+  check "$chan/kickoff: ... and never runs setup or restore itself" "$(contains "$kd" 'Never run `setup`, `restore`, `keys` or')" "yes"
+done
+
 # --- Case 13: the one-time migration of pre-v0.22 headers -------------------
 # Other projects (and other people) are running relevio v0.21 and older, where
 # Branch could carry prose and Commits a "(N commits)" suffix. There is no
