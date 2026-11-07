@@ -15,8 +15,12 @@
 # Usage: relevio-archive.sh <command>
 #   setup     create the keys (your terminal only: asks for a passphrase)
 #   status    is archiving set up, on and healthy; exit 1 when it is not
+#   backfill  archive every conversation already on this machine, now
+#   list [q]  what is archived (filter by id prefix, folder or cwd); decrypts nothing
 #   off       stop archiving new sessions (what is archived stays)
 #   on        start again after off
+#   sync      what the hooks run: --session <id> --transcript <path> [--wait-stable],
+#             --repo <dir>, --folder <project folder name>, or --all
 set -euo pipefail
 
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/relevio-handoffs-lib.sh"
@@ -238,13 +242,395 @@ cmd_status() {
   fi
   [ -s "$RH/forgotten.tsv" ] && echo "  forgotten: $(grep -c . "$RH/forgotten.tsv") session(s), never archived again"
   if [ -e "$CC_DIR/settings.json" ]; then
-    k="$(jq -r 'if type == "object" and has("cleanupPeriodDays") then (.cleanupPeriodDays | tojson) else "unset (30 days)" end' "$CC_DIR/settings.json" 2>/dev/null || echo "unreadable")"
-  else
-    k="unset (30 days)"
+    k="$(jq -r 'if type == "object" and has("cleanupPeriodDays") then (.cleanupPeriodDays | tojson) else "" end' "$CC_DIR/settings.json" 2>/dev/null || echo "?unreadable")"
   fi
-  echo "  Claude Code keeps conversations: cleanupPeriodDays $(relevio_safe "$k") in $CC_DIR/settings.json"
+  case "$k" in "") k="unset (30 days)" ;; "?unreadable") k="unreadable" ;; *) k="$(relevio_safe "$k")" ;; esac
+  echo "  Claude Code keeps conversations: cleanupPeriodDays $k in $CC_DIR/settings.json"
   echo "  Claude Code's own conversations: $(human_bytes "$(du -sk "$CC_DIR/projects" 2>/dev/null | awk '{ print $1 * 1024 }')") in $CC_DIR/projects"
   [ "$healthy" = yes ] || exit 1
+}
+
+# --- Archiving ------------------------------------------------------------------
+# Every path below goes through $RH and $PROJECTS, so the tests can point both
+# at throwaway directories. The transcript content is only ever read by tar and
+# by the sha256 tool: it is never echoed, logged or written unencrypted.
+PROJECTS="$CC_DIR/projects"
+INDEX="$RH/index.tsv"
+INDEX_HEADER="#relevio-archive-index	$ARCHIVE_FORMAT"
+SESSION_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+TAB="$(printf '\t')"
+# Timing, overridable only under the test gate: how long a transcript must sit
+# still before a sweep takes it (minutes), and how long a run waits for the lock.
+QUIET_MIN=2; LOCK_WAIT=120; STABLE_WAIT=1
+if test_gate; then
+  QUIET_MIN="${RELEVIO_TEST_QUIET_MIN:-$QUIET_MIN}"
+  LOCK_WAIT="${RELEVIO_TEST_LOCK_WAIT:-$LOCK_WAIT}"
+  STABLE_WAIT="${RELEVIO_TEST_STABLE_WAIT:-$STABLE_WAIT}"
+fi
+
+log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$RH/log"; }
+cap_log() {
+  [ -f "$RH/log" ] || return 0
+  tail -n 1000 "$RH/log" > "$RH/log.tmp" && mv "$RH/log.tmp" "$RH/log"
+}
+# "<bytes> <mtime>" of a file, GNU stat or BSD stat.
+file_stat() { stat -c '%s %Y' "$1" 2>/dev/null || stat -f '%z %m' "$1" 2>/dev/null; }
+sha_of() { $SHA | awk '{ print $1 }'; }
+# Never an empty field: bash read collapses empty tab-separated fields.
+field() { local v; v="$(printf '%s' "$1" | tr '\t\n' '??')"; printf '%s' "${v:-$RELEVIO_NONE}"; }
+
+# --- status file -------------------------------------------------------------------
+N_ARCHIVED=0; N_SKIPPED=0; N_DEFERRED=0; N_FAILED=0; RUN_SCOPE=""; RUN_DONE=0; LAST_ERROR=""
+counts() { printf 'archived %d skipped %d deferred %d failed %d' "$N_ARCHIVED" "$N_SKIPPED" "$N_DEFERRED" "$N_FAILED"; }
+status_write() {  # $1 state  $2 message
+  { echo "state $1"; echo "at $(date +%s)"; echo "pid $$"; echo "scope ${RUN_SCOPE:-$RELEVIO_NONE}"
+    echo "counts $(counts)"; echo "message $(printf '%s' "${2:-}" | tr '\n\t' '  ' | cut -c1-200)"; } > "$RH/status.tmp"
+  mv "$RH/status.tmp" "$RH/status"
+}
+# A run that stops before its end (an error, a signal) leaves the status
+# saying so, so the next session start can speak for it.
+on_exit() {
+  local rc=$?
+  if [ "$RUN_DONE" != 1 ] && [ -n "$RUN_SCOPE" ] && [ -d "$RH" ]; then
+    status_write fail "the run stopped early (exit $rc)${LAST_ERROR:+: $LAST_ERROR}; details in $RH/log"
+    log "run $RUN_SCOPE stopped early, exit $rc"
+  fi
+  release_lock
+  cap_log
+}
+
+# --- lock --------------------------------------------------------------------------
+# mkdir is atomic everywhere (macOS has no flock). A lock whose process is gone
+# is stale and retaken once.
+LOCKED=0
+release_lock() { [ "$LOCKED" = 1 ] && rm -rf "$RH/lock"; LOCKED=0; }
+try_lock() {
+  if mkdir "$RH/lock" 2>/dev/null; then echo $$ > "$RH/lock/pid"; LOCKED=1; return 0; fi
+  local pid; pid="$(cat "$RH/lock/pid" 2>/dev/null || true)"
+  if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+    rm -rf "$RH/lock"; log "took over a stale lock (pid ${pid:-none})"
+    if mkdir "$RH/lock" 2>/dev/null; then echo $$ > "$RH/lock/pid"; LOCKED=1; return 0; fi
+  fi
+  return 1
+}
+take_lock() {  # $1 quiet|wait
+  local waited=0
+  try_lock && return 0
+  [ "$1" = wait ] || return 1
+  while [ "$waited" -lt "$LOCK_WAIT" ]; do
+    sleep 2; waited=$((waited + 2)); try_lock && return 0
+  done
+  return 1
+}
+
+# --- index ---------------------------------------------------------------------------
+# One line per bundle: state session folder cwd cc_version jsonl_bytes
+# jsonl_sha256 jsonl_mtime files bundle bundle_bytes archived_at. State is
+# active, deleted-in-claude or superseded (an older generation). Rewritten only
+# under the lock, through a temporary file.
+index_init() { [ -s "$INDEX" ] || printf '%s\n' "$INDEX_HEADER" > "$INDEX"; }
+declare -A I_BYTES I_SHA I_MTIME I_FILES I_BUNDLE I_STATE
+index_load() {
+  local st id fo cwd ver by sha mt fi bu bb at
+  I_BYTES=(); I_SHA=(); I_MTIME=(); I_FILES=(); I_BUNDLE=(); I_STATE=()
+  [ -s "$INDEX" ] || return 0
+  [ "$(head -1 "$INDEX")" = "$INDEX_HEADER" ] || die "$INDEX is not a format $ARCHIVE_FORMAT index (first line: '$(relevio_safe "$(head -1 "$INDEX" | cut -c1-60)")')."
+  while IFS="$TAB" read -r st id fo cwd ver by sha mt fi bu bb at; do
+    case "$st" in active|deleted-in-claude) ;; *) continue ;; esac
+    I_STATE["$fo/$id"]="$st"; I_BYTES["$fo/$id"]="$by"; I_SHA["$fo/$id"]="$sha"
+    I_MTIME["$fo/$id"]="$mt"; I_FILES["$fo/$id"]="$fi"; I_BUNDLE["$fo/$id"]="$bu"
+  done < <(tail -n +2 "$INDEX")
+}
+# index_edit <folder> <id> <op> [arg]: op put <line> (replaces the current
+# line), state <new state>, mtime <epoch>, supersede <generation bundle name>.
+index_edit() {
+  local fo="$1" id="$2" op="$3" arg="${4:-}"
+  index_init
+  FO="$fo" ID="$id" OP="$op" ARG="$arg" awk -F'\t' -v OFS='\t' '
+    BEGIN { fo = ENVIRON["FO"]; id = ENVIRON["ID"]; op = ENVIRON["OP"]; arg = ENVIRON["ARG"] }
+    NR == 1 { print; next }
+    $3 == fo && $2 == id && ($1 == "active" || $1 == "deleted-in-claude") {
+      if (op == "put") next
+      if (op == "state") $1 = arg
+      if (op == "mtime") $8 = arg
+      if (op == "supersede") { $1 = "superseded"; $10 = arg }
+    }
+    { print }
+    END { if (op == "put") print arg }' "$INDEX" > "$INDEX.tmp"
+  mv "$INDEX.tmp" "$INDEX"
+}
+
+# --- which repository a project folder belongs to --------------------------------------
+# Claude Code names each folder after an encoding of its cwd that is lossy (and
+# hashes long paths), so the cwd is read from a transcript inside it, once per
+# folder, and cached in folders.tsv.
+folder_cwd() {
+  local fo="$1" c f
+  c="$(awk -F'\t' -v fo="$fo" '$1 == fo { print $2; exit }' "$RH/folders.tsv" 2>/dev/null || true)"
+  if [ -n "$c" ]; then printf '%s' "$c"; return 0; fi
+  for f in "$PROJECTS/$fo"/*.jsonl; do
+    [ -r "$f" ] || continue
+    c="$(grep -m1 '"cwd":' "$f" 2>/dev/null | jq -r '.cwd // empty' 2>/dev/null || true)"
+    [ -n "$c" ] && break
+  done
+  if [ -z "$c" ]; then log "folder $fo: no readable cwd, skipped"; return 0; fi
+  printf '%s\t%s\t%s\n' "$fo" "$(printf '%s' "$c" | tr '\t\n' '??')" "$(date +%s)" >> "$RH/folders.tsv"
+  printf '%s' "$c"
+}
+
+# --- one session ----------------------------------------------------------------------
+# What the transcript and its sidecar look like right now: bytes and mtime of
+# the jsonl, then the number of sidecar files and their newest mtime.
+session_snapshot() {
+  local fo="$1" id="$2" side="$PROJECTS/$1/$2" n=0 newest=0 t
+  if [ -d "$side" ]; then
+    while IFS= read -r -d '' t; do
+      n=$((n + 1)); t="$(file_stat "$t" | cut -d' ' -f2)"; [ "${t:-0}" -gt "$newest" ] && newest="$t"
+    done < <(find "$side" -type f -print0)
+  fi
+  printf '%s %s %s' "$(file_stat "$PROJECTS/$fo/$id.jsonl")" "$n" "$newest"
+}
+# archive_session <folder> <id> <sweep|stable>: counts the outcome.
+archive_session() {
+  local fo="$1" id="$2" mode="$3" key="$1/$2" src="$PROJECTS/$1" j snap bytes mtime nfiles waited sha
+  j="$src/$id.jsonl"
+  if grep -qxF "$id" <(cut -f1 "$RH/forgotten.tsv" 2>/dev/null); then N_SKIPPED=$((N_SKIPPED + 1)); return 0; fi
+  # D5: deleted on purpose in the desktop app. Not archived; an existing copy
+  # is kept, marked, and shown by status. Never deleted automatically.
+  if [ -r "$src/$id.desktop-released.json" ] && jq -e '.reason == "delete"' "$src/$id.desktop-released.json" >/dev/null 2>&1; then
+    if [ "${I_STATE[$key]:-}" = active ]; then index_edit "$fo" "$id" state deleted-in-claude; I_STATE[$key]=deleted-in-claude; log "$id: deleted in Claude, archived copy kept"; fi
+    N_SKIPPED=$((N_SKIPPED + 1)); return 0
+  fi
+  [ -f "$j" ] || { N_SKIPPED=$((N_SKIPPED + 1)); return 0; }
+  # Quiescence: a transcript still being written is taken later.
+  if [ "$mode" = stable ]; then
+    if [ "$STABLE_WAIT" = 1 ]; then
+      sleep 3; waited=3
+      while :; do
+        snap="$(session_snapshot "$fo" "$id")"; sleep 2; waited=$((waited + 2))
+        [ "$snap" = "$(session_snapshot "$fo" "$id")" ] && break
+        if [ "$waited" -ge 30 ]; then N_DEFERRED=$((N_DEFERRED + 1)); log "$id: still changing after 30 s, deferred"; return 0; fi
+      done
+    fi
+  elif [ "$QUIET_MIN" -gt 0 ] && [ -n "$(find "$j" "$src/$id" -type f -mmin "-$QUIET_MIN" -print -quit 2>/dev/null)" ]; then
+    N_DEFERRED=$((N_DEFERRED + 1)); return 0
+  fi
+  # The jsonl alone answers "unchanged" (the common case of a sweep); the
+  # sidecar is walked only when something did change.
+  read -r bytes mtime <<<"$(file_stat "$j")"
+  if [ -n "${I_BYTES[$key]:-}" ]; then
+    if [ "$bytes" = "${I_BYTES[$key]}" ] && [ "$mtime" = "${I_MTIME[$key]}" ]; then N_SKIPPED=$((N_SKIPPED + 1)); return 0; fi
+    read -r _ _ nfiles _ <<<"$(session_snapshot "$fo" "$id")"
+    if [ "$bytes" = "${I_BYTES[$key]}" ]; then
+      sha="$(sha_of < "$j")"
+      if [ "$sha" = "${I_SHA[$key]}" ]; then
+        index_edit "$fo" "$id" mtime "$mtime"; I_MTIME[$key]="$mtime"; N_SKIPPED=$((N_SKIPPED + 1)); return 0
+      fi
+      supersede "$fo" "$id"
+    elif [ "$bytes" -gt "${I_BYTES[$key]}" ] && [ "$nfiles" -ge "$(( ${I_FILES[$key]} - 1 ))" ] \
+         && [ "$(head -c "${I_BYTES[$key]}" "$j" | sha_of)" = "${I_SHA[$key]}" ]; then
+      :  # Append-only growth: the new bundle replaces the current one.
+    else
+      supersede "$fo" "$id"
+    fi
+  fi
+  build_bundle "$fo" "$id"
+}
+# The current bundle becomes an older generation, kept for good.
+supersede() {
+  local fo="$1" id="$2" gen
+  gen="$id.$(date -u +%Y%m%dT%H%M%SZ).tgz.age"
+  [ -f "$RH/archive/$fo/$id.tgz.age" ] && mv "$RH/archive/$fo/$id.tgz.age" "$RH/archive/$fo/$gen"
+  index_edit "$fo" "$id" supersede "$gen"
+  unset "I_BYTES[$fo/$id]"
+  log "$id: rewritten in Claude, previous copy kept as $gen"
+}
+build_bundle() {
+  local fo="$1" id="$2" src="$PROJECTS/$1" dst="$RH/archive/$1" stage tmp before after p n cwd ver line bb
+  local -a st
+  before="$(session_snapshot "$fo" "$id")"
+  mkdir -p "$dst"; chmod 700 "$dst"
+  # A bundle with no index line (a crash between the rename and the index
+  # update) is never overwritten: it becomes a generation.
+  if [ -f "$dst/$id.tgz.age" ] && [ -z "${I_BYTES[$fo/$id]:-}" ] && [ -z "${I_STATE[$fo/$id]:-}" ]; then
+    mv "$dst/$id.tgz.age" "$dst/$id.orphan-$(date -u +%Y%m%dT%H%M%SZ).tgz.age"; log "$id: bundle without index line kept as an orphan generation"
+  fi
+  stage="$(mktemp -d "$RH/tmp.XXXXXX")"
+  # Regular files only: a symlink in a sidecar is not archived.
+  ( cd "$src" && { printf '%s\0' "$id.jsonl"; [ -d "$id" ] && find "$id" -type f -print0; true; } ) > "$stage/list"
+  if grep -q "$TAB" <<<"$(tr '\0' '\n' < "$stage/list")"; then
+    rm -rf "$stage"; N_FAILED=$((N_FAILED + 1)); LAST_ERROR="a file name in session $id holds a tab"; log "$id: a file name holds a tab, not archived"; return 0
+  fi
+  n="$(tr -cd '\0' < "$stage/list" | wc -c | tr -d ' ')"
+  if [ "$n" -ne "$(( $(tr '\0' '\n' < "$stage/list" | wc -l) ))" ]; then
+    rm -rf "$stage"; N_FAILED=$((N_FAILED + 1)); LAST_ERROR="a file name in session $id holds a newline"; log "$id: a file name holds a newline, not archived"; return 0
+  fi
+  cwd="$(grep -m1 '"cwd":' "$src/$id.jsonl" 2>/dev/null | jq -r '.cwd // empty' 2>/dev/null || true)"
+  ver="$(grep -o '"version":"[^"]*"' "$src/$id.jsonl" 2>/dev/null | tail -1 | cut -d'"' -f4 || true)"
+  {
+    echo "relevio-archive-manifest $ARCHIVE_FORMAT"
+    echo "session $id"
+    echo "folder $fo"
+    echo "cwd ${cwd:-$RELEVIO_NONE}" | tr '\t' '?'
+    echo "cc_version ${ver:-$RELEVIO_NONE}"
+    echo "relevio_version $(relevio_version)"
+    echo "archived_at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "container tar"; echo "compression gzip"; echo "encryption age-v1"
+    while IFS= read -r -d '' p; do
+      echo "file $(sha_of < "$src/$p") $(file_stat "$src/$p" | cut -d' ' -f1) $p"
+    done < "$stage/list"
+  } > "$stage/MANIFEST"
+  tmp="$dst/.$id.tgz.age.tmp.$$"
+  tar -cf - -C "$stage" MANIFEST -C "$src" --null -T "$stage/list" | gzip -6 -c | "$AGE" -e -R "$RH/keys/recipients.txt" -o "$tmp" 2>>"$RH/log" \
+    && st=("${PIPESTATUS[@]}") || st=("${PIPESTATUS[@]}")
+  if [ "${st[0]}${st[1]}${st[2]}" != 000 ] || [ "$(head -1 "$tmp" 2>/dev/null)" != "age-encryption.org/v1" ]; then
+    rm -f "$tmp"; rm -rf "$stage"; N_FAILED=$((N_FAILED + 1))
+    LAST_ERROR="encrypting session $id failed (tar ${st[0]:-?}, gzip ${st[1]:-?}, age ${st[2]:-?})"; log "$id: $LAST_ERROR"; return 0
+  fi
+  after="$(session_snapshot "$fo" "$id")"
+  if [ "$before" != "$after" ]; then
+    rm -f "$tmp"; rm -rf "$stage"; N_DEFERRED=$((N_DEFERRED + 1)); log "$id: changed while archiving, deferred"; return 0
+  fi
+  chmod 600 "$tmp"; mv "$tmp" "$dst/$id.tgz.age"
+  read -r p n _ <<<"$before"
+  bb="$(file_stat "$dst/$id.tgz.age" | cut -d' ' -f1)"
+  line="active$TAB$id$TAB$(field "$fo")$TAB$(field "$cwd")$TAB$(field "$ver")$TAB$p$TAB$(sha_of < "$src/$id.jsonl")$TAB$n$TAB$(grep -c . <(tr '\0' '\n' < "$stage/list"))$TAB$id.tgz.age$TAB$bb$TAB$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  index_edit "$fo" "$id" put "$line"
+  rm -rf "$stage"
+  N_ARCHIVED=$((N_ARCHIVED + 1))
+}
+relevio_version() { sed -n 's/^# relevio v//p' "$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" 2>/dev/null && pwd)/session-start.sh" 2>/dev/null | head -1 | grep . || echo "$RELEVIO_NONE"; }
+
+# Every session file directly in a project folder; nothing else (memory/,
+# sessions-index.json, *.desktop-released.json, set-aside copies) is a session.
+sessions_in() {
+  local f id
+  for f in "$PROJECTS/$1"/*.jsonl; do
+    [ -f "$f" ] || continue
+    id="$(basename "$f" .jsonl)"
+    printf '%s' "$id" | grep -Eq "$SESSION_RE" && printf '%s\n' "$id"
+  done
+  return 0
+}
+all_folders() { find "$PROJECTS" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sed 's|.*/||' | LC_ALL=C sort; }
+repo_folders() {  # every folder whose cwd is the repo or one of its worktrees, or under them
+  local dir="$1" fo c roots
+  roots="$(git -C "$dir" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')"
+  [ -n "$roots" ] || roots="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || die "$(relevio_safe "$dir") is not inside a git repository."
+  while IFS= read -r fo; do
+    c="$(folder_cwd "$fo")"; [ -n "$c" ] || continue
+    while IFS= read -r r; do
+      case "$c" in "$r"|"$r"/*) printf '%s\n' "$fo"; break ;; esac
+    done <<<"$roots"
+  done < <(all_folders)
+}
+
+# Shared entry of every archiving run: nothing happens when archiving is off
+# or not set up (the session-start notice says so instead).
+begin_run() {  # $1 scope  $2 quiet|wait
+  check_home
+  [ ! -e "$RH/off" ] && is_set_up || return 1
+  RUN_SCOPE="$1"
+  load_config
+  SHA="$(sha_tool)" || die "no sha256 tool (sha256sum or shasum) found."
+  # Without the lock the status belongs to the run that holds it: only log.
+  take_lock "$2" || { log "run $1: another run holds the lock, nothing done"; RUN_DONE=1; return 1; }
+  status_write running ""
+  index_init; index_load
+}
+end_run() {
+  if [ "$N_FAILED" -gt 0 ]; then status_write fail "$N_FAILED session(s) failed: ${LAST_ERROR:-see $RH/log}"
+  else status_write ok ""; fi
+  log "run $RUN_SCOPE: $(counts)"
+  RUN_DONE=1
+}
+
+cmd_sync() {
+  local scope="" sid="" transcript="" target="" stable=sweep fo id
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --session) sid="${2:-}"; scope=session; shift 2 ;;
+      --transcript) transcript="${2:-}"; shift 2 ;;
+      --wait-stable) stable=stable; shift ;;
+      --repo) target="${2:-}"; scope=repo; shift 2 ;;
+      --folder) target="${2:-}"; scope=folder; shift 2 ;;
+      --all) scope=all; shift ;;
+      *) die "unknown sync argument '$(relevio_safe "$1")'" ;;
+    esac
+  done
+  [ -n "$scope" ] || die "sync needs --session, --repo, --folder or --all."
+  trap on_exit EXIT; trap 'exit 130' INT TERM
+  case "$scope" in
+    session)
+      printf '%s' "$sid" | grep -Eq "$SESSION_RE" || die "'$(relevio_safe "$sid")' is not a session id."
+      # The transcript must sit where relevio reads from; anything else is an
+      # early sign that Claude Code changed its layout.
+      fo="$(basename "$(dirname "$transcript")")"
+      if [ "$(dirname "$(dirname "$transcript")")" != "$PROJECTS" ] || [ "$(basename "$transcript")" != "$sid.jsonl" ]; then
+        check_home; [ -d "$RH" ] && is_set_up && { RUN_SCOPE=session; N_FAILED=1; status_write fail "transcript not where relevio expects it: $(relevio_safe "$transcript")"; RUN_DONE=1; }
+        exit 0
+      fi
+      begin_run session wait || exit 0
+      archive_session "$fo" "$sid" "$stable" ;;
+    repo)
+      begin_run repo quiet || exit 0
+      while IFS= read -r fo; do
+        while IFS= read -r id; do archive_session "$fo" "$id" sweep; done < <(sessions_in "$fo")
+      done < <(repo_folders "$target") ;;
+    folder)
+      case "$target" in ""|*/*|.|..) die "'$(relevio_safe "$target")' is not a project folder name." ;; esac
+      begin_run folder quiet || exit 0
+      while IFS= read -r id; do archive_session "$target" "$id" sweep; done < <(sessions_in "$target") ;;
+    all)
+      begin_run all wait || exit 0
+      while IFS= read -r fo; do
+        while IFS= read -r id; do archive_session "$fo" "$id" sweep; done < <(sessions_in "$fo")
+      done < <(all_folders) ;;
+  esac
+  end_run
+}
+
+# backfill: everything already on the machine, in the foreground, with progress.
+cmd_backfill() {
+  local total=0 bytes=0 need free fo id done_n=0 f s
+  check_home
+  [ -e "$RH/off" ] && die "archiving is off: run 'on' first."
+  is_set_up || die "the archive is not set up: run setup in your own terminal first."
+  while IFS= read -r fo; do
+    while IFS= read -r id; do
+      total=$((total + 1)); s="$(file_stat "$PROJECTS/$fo/$id.jsonl" | cut -d' ' -f1)"; bytes=$((bytes + ${s:-0}))
+    done < <(sessions_in "$fo")
+  done < <(all_folders)
+  # Bundles are about a quarter of the transcripts (gzip, measured 4x), plus
+  # 30% margin, rounded up.
+  need=$(( (bytes * 13 / 40 + 1023) / 1024 ))
+  free="$(df -Pk "$RH" | awk 'NR == 2 { print $4 }')"
+  test_gate && free="${RELEVIO_TEST_FREE_KB:-$free}"
+  [ "$free" -ge "$need" ] || die "not enough free space for the archive: about $need KB needed, $free KB free on the disk holding $RH."
+  echo "Archiving $total conversation(s), $(human_bytes "$bytes") of transcripts, into $RH."
+  trap on_exit EXIT; trap 'exit 130' INT TERM
+  begin_run all wait || die "another archiving run held the lock for ${LOCK_WAIT}s; try again in a minute."
+  while IFS= read -r fo; do
+    while IFS= read -r id; do
+      archive_session "$fo" "$id" sweep; done_n=$((done_n + 1))
+      [ $((done_n % 25)) -eq 0 ] && echo "  $done_n of $total ($(counts))"
+    done < <(sessions_in "$fo")
+  done < <(all_folders)
+  end_run
+  echo "Done: $(counts)."
+  [ "$N_DEFERRED" -eq 0 ] || echo "Deferred sessions were still being written; the next session start archives them."
+  [ "$N_FAILED" -eq 0 ] || { echo "Some sessions failed: details in $RH/log."; exit 1; }
+}
+
+# list [query]: what is archived, from the index alone. Nothing is decrypted.
+cmd_list() {
+  local q="${1:-}"
+  check_home
+  [ -s "$INDEX" ] || { echo "Nothing archived yet."; return 0; }
+  printf '%-36s  %-16s  %10s  %-17s  %s\n' SESSION ARCHIVED SIZE STATE CWD
+  tail -n +2 "$INDEX" | awk -F'\t' -v q="$q" '
+    q == "" || index($2, q) == 1 || index($3, q) || index($4, q) {
+      printf "%-36s  %-16s  %10s  %-17s  %s\n", $2, substr($12, 1, 10) " " substr($12, 12, 5), $11, $1, $4 }'
 }
 
 # --- off / on ------------------------------------------------------------------------
@@ -260,6 +646,9 @@ cmd_on() {
 case "${1:-}" in
   setup) cmd_setup ;;
   status) cmd_status ;;
+  sync) shift; cmd_sync "$@" ;;
+  backfill) cmd_backfill ;;
+  list) cmd_list "${2:-}" ;;
   off) cmd_off ;;
   on) cmd_on ;;
   -h|--help|help|"") relevio_usage "${BASH_SOURCE[0]}"; [ -n "${1:-}" ] || exit 2 ;;

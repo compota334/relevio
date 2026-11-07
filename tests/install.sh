@@ -2135,6 +2135,141 @@ else
 fi
 rm -rf "$arc_t"
 
+# --- Case 15: the session archive, sync / backfill / list -------------------
+# Archiving encrypts each transcript (with its sidecar) to the public keys
+# only, so no run ever holds a secret. These tests run on throwaway project
+# folders under a throwaway CLAUDE_CONFIG_DIR.
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  ab="$(mktemp -d)"; abh="$ab/home"; abc="$ab/cc"; abp="$abc/projects"
+  age-keygen 2>/dev/null > "$ab/rec.key"
+  arcb() {  # gated run against this case's home and projects
+    RELEVIO_HOME="$abh" CLAUDE_CONFIG_DIR="$abc" RELEVIO_TEST_INSECURE_KEYS=1 \
+      RELEVIO_TEST_RECOVERY_IDENTITY="$ab/rec.key" RELEVIO_TEST_STABLE_WAIT=0 \
+      RELEVIO_TEST_LOCK_WAIT=4 bash "$ARC" "$@"
+  }
+  s1=11111111-0000-4000-8000-000000000001; s2=22222222-0000-4000-8000-000000000002
+  s3=33333333-0000-4000-8000-000000000003; s4=44444444-0000-4000-8000-000000000004
+  mkdir -p "$abp/-pa/$s1/subagents" "$abp/-pa/memory" "$abp/-pb"
+  printf '{"cwd":"/w/a b (x)","version":"2.1.1","m":"PLAIN-MARKER-1"}\n' > "$abp/-pa/$s1.jsonl"
+  echo '{"t":"PLAIN-MARKER-2"}' > "$abp/-pa/$s1/subagents/x.jsonl"
+  printf '{"cwd":"/w/b","version":"2.1.2"}\n' > "$abp/-pb/$s2.jsonl"
+  printf '{"cwd":"/w/b"}\n' > "$abp/-pb/$s3.jsonl"
+  echo '{"v":1,"reason":"delete"}' > "$abp/-pb/$s3.desktop-released.json"
+  echo m > "$abp/-pa/memory/notes.md"; echo '{}' > "$abp/-pa/sessions-index.json"
+  touch -d '1 hour ago' $(find "$abp" -type f)
+  grep '^AGE-SECRET-KEY' "$ab/rec.key" | arcb setup >/dev/null 2>&1
+  out="$(arcb backfill 2>&1)"; rc=$?
+  check "archive: backfill archives the sessions and skips a desktop deletion" \
+    "$rc:$(contains "$out" 'archived 2 skipped 1 deferred 0 failed 0')" "0:yes"
+  check "archive: no transcript text is ever written unencrypted" \
+    "$(grep -rl 'PLAIN-MARKER' "$abh" | grep -c .)" "0"
+  check "archive: no secret key on disk but the gated test key" \
+    "$(grep -rl 'AGE-SECRET-KEY' "$abh" | sed "s|$abh/||")" "keys/main.key"
+  check "archive: every bundle is an age file" \
+    "$(find "$abh/archive" -name '*.age' -exec head -1 {} \; | sort -u)" "age-encryption.org/v1"
+  check "archive: a bundle holds the manifest, the transcript and its sidecar" \
+    "$(age -d -i "$abh/keys/main.key" "$abh/archive/-pa/$s1.tgz.age" | tar -tzf - | tr '\n' ' ')" \
+    "MANIFEST $s1.jsonl $s1/subagents/x.jsonl "
+  check "archive: memory/, sessions-index.json and the desktop-released file are never archived" \
+    "$(find "$abh/archive" -type f | sed 's|.*/||' | sort | tr '\n' ' ')" "$s1.tgz.age $s2.tgz.age "
+  cp "$abh/index.tsv" "$ab/idx1"
+  arcb sync --all >/dev/null 2>&1
+  check "archive: an unchanged transcript makes no new bundle and leaves the index alone" \
+    "$(cmp -s "$abh/index.tsv" "$ab/idx1" && echo same):$(find "$abh/archive" -type f | grep -c .)" "same:2"
+  check "archive: list reads the index, filtered by id prefix" \
+    "$(arcb list 1111 | tail -n +2 | awk '{ print $1, $5 }')" "$s1 active"
+  # Growth that only appends replaces the bundle; anything else keeps the old one.
+  echo '{"more":1}' >> "$abp/-pa/$s1.jsonl"; touch -d '1 hour ago' "$abp/-pa/$s1.jsonl"
+  arcb sync --folder -pa >/dev/null 2>&1
+  check "archive: an appended transcript replaces its bundle, one active line" \
+    "$(ls "$abh/archive/-pa" | grep -c .):$(awk -F'\t' -v s="$s1" '$2 == s && $1 == "active"' "$abh/index.tsv" | grep -c .):$(awk -F'\t' -v s="$s1" '$2 == s && $1 == "active" { print $6 }' "$abh/index.tsv")" \
+    "1:1:$(stat -c %s "$abp/-pa/$s1.jsonl")"
+  printf '{"cwd":"/w/a b (x)","rewritten":1}\n' > "$abp/-pa/$s1.jsonl"; touch -d '1 hour ago' "$abp/-pa/$s1.jsonl"
+  arcb sync --folder -pa >/dev/null 2>&1
+  check "archive: a rewritten transcript keeps the old bundle as a generation" \
+    "$(ls "$abh/archive/-pa" | grep -c "^$s1\.2[0-9T]*Z\.tgz\.age$"):$(awk -F'\t' -v s="$s1" '$2 == s { print $1 }' "$abh/index.tsv" | sort | tr '\n' ' ')" \
+    "1:active superseded "
+  # A transcript still being written waits for a later run.
+  echo y >> "$abp/-pb/$s2.jsonl"
+  arcb sync --folder -pb >/dev/null 2>&1
+  check "archive: a transcript touched just now is deferred" "$(sed -n 's/^counts //p' "$abh/status")" "archived 0 skipped 1 deferred 1 failed 0"
+  touch -d '1 hour ago' "$abp/-pb/$s2.jsonl"
+  # D5: a session deleted in the desktop app after it was archived.
+  echo '{"v":1,"reason":"delete"}' > "$abp/-pb/$s2.desktop-released.json"
+  arcb sync --folder -pb >/dev/null 2>&1
+  check "archive: a session deleted in Claude after archiving is marked, its bundle kept" \
+    "$(awk -F'\t' -v s="$s2" '$2 == s { print $1 }' "$abh/index.tsv"):$(yesno "$([ -f "$abh/archive/-pb/$s2.tgz.age" ]; echo $?)")" "deleted-in-claude:yes"
+  check "archive: ... and status counts it" "$(contains "$(arcb status 2>&1)" '1 deleted in Claude, kept')" "yes"
+  # Forgotten ids are never archived again.
+  printf '{"cwd":"/w/b"}\n' > "$abp/-pb/$s4.jsonl"; touch -d '1 hour ago' "$abp/-pb/$s4.jsonl"
+  printf '%s\t2026-11-07\n' "$s4" > "$abh/forgotten.tsv"
+  arcb sync --folder -pb >/dev/null 2>&1
+  check "archive: a forgotten session is not archived again" \
+    "$(yesno "$([ -e "$abh/archive/-pb/$s4.tgz.age" ]; echo $?)")" "no"
+  : > "$abh/forgotten.tsv"
+  # A bundle with no index line is never overwritten.
+  echo orphan > "$abh/archive/-pb/$s4.tgz.age"
+  arcb sync --folder -pb >/dev/null 2>&1
+  check "archive: a bundle without an index line is kept as an orphan generation" \
+    "$(ls "$abh/archive/-pb" | grep -c "^$s4\.orphan-.*\.tgz\.age$"):$(head -1 "$abh/archive/-pb/$s4.tgz.age")" "1:age-encryption.org/v1"
+  # The lock: a live holder blocks a sweep quietly; a dead one is taken over.
+  mkdir "$abh/lock"; sleep 30 & lp=$!; echo "$lp" > "$abh/lock/pid"
+  echo z >> "$abp/-pb/$s4.jsonl"; touch -d '1 hour ago' "$abp/-pb/$s4.jsonl"
+  cp "$abh/index.tsv" "$ab/idx2"
+  arcb sync --folder -pb >/dev/null 2>&1; rc=$?
+  check "archive: a live lock makes a sweep exit quietly, changing nothing" \
+    "$rc:$(cmp -s "$abh/index.tsv" "$ab/idx2" && echo same)" "0:same"
+  kill "$lp" 2>/dev/null; wait "$lp" 2>/dev/null
+  arcb sync --folder -pb >/dev/null 2>&1
+  check "archive: a lock whose process is gone is taken over" \
+    "$(cmp -s "$abh/index.tsv" "$ab/idx2" && echo same || echo changed):$(yesno "$([ -d "$abh/lock" ]; echo $?)")" "changed:no"
+  # --repo: every folder of the repository and its worktrees, removed ones too.
+  rr="$ab/repo"; mkdir -p "$rr"; git -C "$rr" init -q; git -C "$rr" -c user.email=t@t -c user.name=t commit -q --allow-empty -m i
+  git -C "$rr" worktree add -q "$rr/.claude/worktrees/wt" 2>/dev/null
+  s5=55555555-0000-4000-8000-000000000005; s6=66666666-0000-4000-8000-000000000006; s7=77777777-0000-4000-8000-000000000007
+  mkdir -p "$abp/-r-main" "$abp/-r-wt" "$abp/-r-gone" "$abp/-other"
+  printf '{"cwd":"%s"}\n' "$rr" > "$abp/-r-main/$s5.jsonl"
+  printf '{"cwd":"%s/.claude/worktrees/wt"}\n' "$rr" > "$abp/-r-wt/$s6.jsonl"
+  printf '{"cwd":"%s/.claude/worktrees/removed-long-ago"}\n' "$rr" > "$abp/-r-gone/$s7.jsonl"
+  printf '{"cwd":"/elsewhere"}\n' > "$abp/-other/$s1.jsonl"
+  touch -d '1 hour ago' $(find "$abp/-r-main" "$abp/-r-wt" "$abp/-r-gone" "$abp/-other" -type f)
+  arcb sync --repo "$rr" >/dev/null 2>&1
+  check "archive: --repo takes the repo, its worktrees and a removed worktree's folder, nothing else" \
+    "$(ls -d "$abh"/archive/-r-* "$abh"/archive/-other 2>/dev/null | sed 's|.*/||' | tr '\n' ' ')" "-r-gone -r-main -r-wt "
+  # A transcript outside projects/ is an early sign Claude Code changed layout.
+  arcb sync --session "$s5" --transcript "/tmp/elsewhere/$s5.jsonl" >/dev/null 2>&1
+  check "archive: a transcript where relevio does not expect it is reported as a failure" \
+    "$(sed -n 's/^state //p' "$abh/status"):$(contains "$(arcb status 2>&1)" 'not where relevio expects it')" "fail:yes"
+  arcb sync --session "$s5" --transcript "$abp/-r-main/$s5.jsonl" >/dev/null 2>&1
+  check "archive: --session archives that one session and the status recovers" \
+    "$(sed -n 's/^state //p' "$abh/status")" "ok"
+  # Fail loud: a failing age, then an age that is gone. Nothing half-written.
+  printf '#!/bin/sh\nexit 1\n' > "$ab/age-fail"; chmod +x "$ab/age-fail"
+  cp "$abh/config" "$ab/config.ok"; sed -i "s|^age=.*|age=$ab/age-fail|" "$abh/config"
+  echo w >> "$abp/-r-main/$s5.jsonl"; touch -d '1 hour ago' "$abp/-r-main/$s5.jsonl"
+  arcb sync --folder -r-main >/dev/null 2>&1
+  check "archive: a failing age leaves status fail and no temporary file" \
+    "$(sed -n 's/^state //p' "$abh/status"):$(find "$abh/archive" -name '.*tmp*' | grep -c .)" "fail:0"
+  sed -i "s|^age=.*|age=$ab/nowhere/age|" "$abh/config"
+  arcb sync --folder -r-main >/dev/null 2>&1
+  check "archive: an age that is gone fails loud in the status" \
+    "$(sed -n 's/^state //p' "$abh/status"):$(contains "$(sed -n 's/^message //p' "$abh/status")" 'stopped early')" "fail:yes"
+  check "archive: list still works without age (it never decrypts)" \
+    "$(arcb list | grep -c "$s5")" "1"
+  cp "$ab/config.ok" "$abh/config"
+  # backfill: too little disk is refused before anything; progress every 25.
+  check "archive: backfill refuses when the disk is too small" \
+    "$(contains "$(RELEVIO_TEST_FREE_KB=0 arcb backfill 2>&1)" 'not enough free space')" "yes"
+  mkdir -p "$abp/-many"
+  for i in $(seq 10 40); do printf '{"cwd":"/w/m"}\n' > "$abp/-many/$i$i$i$i-0000-4000-8000-0000000000$i.jsonl" 2>/dev/null; done
+  for f in "$abp"/-many/*.jsonl; do mv "$f" "$abp/-many/$(printf '%08d' "$(basename "$f" | cut -c1-2)")-0000-4000-8000-0000000000$(basename "$f" | cut -c1-2).jsonl"; done
+  touch -d '1 hour ago' "$abp"/-many/*.jsonl
+  check "archive: backfill prints its progress" "$(contains "$(arcb backfill 2>&1)" '25 of ')" "yes"
+  rm -rf "$ab"
+else
+  echo "  SKIP  archive: sync, backfill and list (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+
 # --- Case 13: the one-time migration of pre-v0.22 headers -------------------
 # Other projects (and other people) are running relevio v0.21 and older, where
 # Branch could carry prose and Commits a "(N commits)" suffix. There is no
