@@ -2449,6 +2449,18 @@ else
 fi
 rm -rf "$an" "$anp"
 
+# The notice is the script's: it also speaks for a home it refuses, and for
+# test keys that must never be a real archive's.
+nt="$(mktemp -d)"; mkdir -p "$nt/real"; ln -s "$nt/real" "$nt/link"
+check "archive notice: a home relevio refuses is reported, not silenced" \
+  "$(contains "$(RELEVIO_HOME="$nt/link" bash "$ARC" notice)" 'ARCHIVE FAILING: ')" "yes"
+mkdir -p "$nt/h/keys"; echo age1x > "$nt/h/keys/recipients.txt"; echo k > "$nt/h/keys/main.key"
+check "archive notice: unprotected test keys are reported" \
+  "$(contains "$(RELEVIO_HOME="$nt/h" bash "$ARC" notice)" 'INSECURE TEST KEYS')" "yes"
+check "archive notice: a healthy, never-run archive says nothing" \
+  "$(rm "$nt/h/keys/main.key"; RELEVIO_HOME="$nt/h" bash "$ARC" notice)" ""
+rm -rf "$nt"
+
 # --- Case 18: the SessionEnd hook --------------------------------------------
 # Each session is archived as it ends. The hook only launches the archiving,
 # detached, prints nothing, and does nothing where it must not.

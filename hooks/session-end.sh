@@ -11,9 +11,9 @@
 # anyone, and a background run reports through the archive's status file,
 # which the next session start reads.
 #
-# A no-op on ZCode (its sessions are not JSONL transcripts), when relevio's
-# scripts are not beside its hooks, when archiving is off or not set up, and
-# for an id that is not a Claude Code session id. Requires jq.
+# A no-op on ZCode (its sessions are not JSONL transcripts) and when relevio's
+# scripts are not beside its hooks; the archive script decides the rest.
+# Requires jq.
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
@@ -29,20 +29,9 @@ case "$TRANSCRIPT" in */zcode-claude-hook-*) exit 0 ;; esac
 RELEVIO_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" 2>/dev/null && pwd)"
 [ -n "$RELEVIO_SCRIPTS" ] && [ -r "$RELEVIO_SCRIPTS/relevio-archive.sh" ] || exit 0
 
-RH="${RELEVIO_HOME:-$HOME/.relevio}"
-[ ! -e "$RH/off" ] && [ -s "$RH/keys/recipients.txt" ] || exit 0
-
-LC_ALL=C
-case "$SESSION_ID" in
-  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
-  *) exit 0 ;;
-esac
-
-# Detached, all three descriptors closed, so Claude Code is never held up.
-# Measured (Claude Code 2.1.316): a child started this way finishes after the
-# claude process has exited. The archive script itself reports a transcript
-# that is not where it expects one.
-l=""; command -v setsid >/dev/null 2>&1 && l=setsid
-$l nohup bash "$RELEVIO_SCRIPTS/relevio-archive.sh" sync --session "$SESSION_ID" \
-  --transcript "$TRANSCRIPT" --wait-stable </dev/null >/dev/null 2>&1 &
+# Detached by the script itself, so Claude Code is never held up. The script
+# answers everything else: off, not set up, an id that is not a session id,
+# a transcript that is not where it expects one.
+bash "$RELEVIO_SCRIPTS/relevio-archive.sh" sync --session "$SESSION_ID" --transcript "$TRANSCRIPT" \
+  --wait-stable --detach </dev/null >/dev/null 2>&1
 exit 0
