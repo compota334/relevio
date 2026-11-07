@@ -397,6 +397,66 @@ EOF
   SETTINGS_LINE="SETTINGS CHANGED: relevio set$parts in $SETTINGS_FILE, once.$why$managed Tell the user in one line."
 }
 
+# --- The session archive --------------------------------------------------------
+# relevio-archive.sh keeps an encrypted copy of every conversation. Each
+# session start sweeps this repository's sessions in the background (a session
+# that ended without its SessionEnd hook, or one Claude Code is about to
+# delete), and a background run cannot speak, so this hook speaks for it: the
+# archive's state goes in the notice slot, one notice per session, after the
+# settings notice. Only on Claude Code, the one host whose transcripts the
+# archive reads.
+RELEVIO_ARCHIVE_HOME="${RELEVIO_HOME:-$HOME/.relevio}"
+ARCHIVE_LINE=""
+archive_ready() {
+  [ "$HOST" != zcode ] && [ -n "$TRANSCRIPT" ] && [ -n "$RELEVIO_SCRIPTS" ] \
+    && [ -r "$RELEVIO_SCRIPTS/relevio-archive.sh" ] && [ ! -e "$RELEVIO_ARCHIVE_HOME/off" ]
+}
+archive_sweep() {
+  local proj="${CLAUDE_PROJECT_DIR:-$PWD}" scope l=""
+  archive_ready && [ -s "$RELEVIO_ARCHIVE_HOME/keys/recipients.txt" ] || return 0
+  if git -C "$proj" rev-parse --show-toplevel >/dev/null 2>&1; then
+    scope="--repo"
+  elif [ "$(basename "$(dirname "$(dirname "$TRANSCRIPT")")")" = projects ]; then
+    scope="--folder"; proj="$(basename "$(dirname "$TRANSCRIPT")")"
+  else
+    return 0
+  fi
+  # Detached, all three descriptors closed: the session start never waits.
+  command -v setsid >/dev/null 2>&1 && l=setsid
+  $l nohup bash "$RELEVIO_SCRIPTS/relevio-archive.sh" sync "$scope" "$proj" </dev/null >/dev/null 2>&1 &
+  return 0
+}
+archive_notice() {
+  local st at pid msg day mark
+  ARCHIVE_LINE=""
+  archive_ready || return 0
+  if [ ! -s "$RELEVIO_ARCHIVE_HOME/keys/recipients.txt" ]; then
+    # At most once a day per machine: a reminder, not a nag.
+    day="$(date +%Y%m%d)"; mark="${XDG_CACHE_HOME:-$HOME/.cache}/relevio/markers/archive-notice-$day"
+    [ -e "$mark" ] && return 0
+    mkdir -p "$(dirname "$mark")" 2>/dev/null && : > "$mark" 2>/dev/null
+    ARCHIVE_LINE="ARCHIVE NOT SET UP: relevio is not archiving this machine's conversations yet. Tell the user in one line that they can set it up in their own terminal with: bash \"$RELEVIO_SCRIPTS/relevio-archive.sh\" setup (or 'off' to stop this notice). Never run setup yourself: it asks for a passphrase."
+    return 0
+  fi
+  [ -r "$RELEVIO_ARCHIVE_HOME/status" ] || return 0
+  st="$(sed -n 's/^state //p' "$RELEVIO_ARCHIVE_HOME/status" | head -1)"
+  at="$(sed -n 's/^at //p' "$RELEVIO_ARCHIVE_HOME/status" | head -1)"
+  pid="$(sed -n 's/^pid //p' "$RELEVIO_ARCHIVE_HOME/status" | head -1)"
+  case "$at" in ""|*[!0-9]*) at=0 ;; esac
+  case "$st" in
+    fail)
+      msg="$(sed -n 's/^message //p' "$RELEVIO_ARCHIVE_HOME/status" | head -1 | LC_ALL=C tr -c 'A-Za-z0-9 ._/:(),-' '?' | cut -c1-150)"
+      ARCHIVE_LINE="ARCHIVE FAILING since $(date -d "@$at" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$at"): $msg. Tell the user in one line; the details are in: bash \"$RELEVIO_SCRIPTS/relevio-archive.sh\" status" ;;
+    running)
+      case "$pid" in ""|*[!0-9]*) pid=0 ;; esac
+      kill -0 "$pid" 2>/dev/null && return 0
+      ARCHIVE_LINE="ARCHIVE INTERRUPTED: the last archiving run stopped before finishing; the next one resumes it. Tell the user in one line only if they ask about the archive." ;;
+    ok)
+      [ $(( $(date +%s) - at )) -gt $((7 * 86400)) ] || return 0
+      ARCHIVE_LINE="ARCHIVE STALE: no archiving run has succeeded in over a week. Tell the user in one line; the details are in: bash \"$RELEVIO_SCRIPTS/relevio-archive.sh\" status" ;;
+  esac
+}
+
 # The context hook's once-per-session markers (see context-warn.sh) are only
 # read during their own session; a couple of days covers any restart.
 prune_markers() {
@@ -406,6 +466,10 @@ prune_markers() {
 
 core() {
   ensure_user_settings
+  # One notice slot: the settings notice first, then the archive's. The
+  # notice reports the PREVIOUS run, so it is read before this start's sweep.
+  [ -n "$SETTINGS_LINE" ] || archive_notice
+  archive_sweep
   record_session_start
   prune_markers
   emit "relevio v0.24.7: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
@@ -420,7 +484,9 @@ $SESSION_ID_LINE}
 
 $CHANNEL_LINE${SETTINGS_LINE:+
 
-$SETTINGS_LINE}
+$SETTINGS_LINE}${ARCHIVE_LINE:+
+
+$ARCHIVE_LINE}
 
 WHEN THE SESSION ENDS IS NOT YOUR CALL: never write a handoff, and never suggest wrapping up, on your own initiative. Do it only when the user asks for it, or when a relevio message tells you to in those words. Finishing the task you were given is not a reason to end anything: the user decides what happens next, and a session normally has room for far more work than the one task that opened it. If you think the session should end, say why in one line and let the user answer.
 
@@ -442,6 +508,7 @@ $SUBAGENT_LINE"
 case "$SOURCE" in
   resume)
     if session_was_closed; then
+      archive_sweep
       emit "relevio: this conversation was resumed, and a handoff names its session id in its Resume field: docs/handoff/$CLOSED_BY. That USUALLY means it was closed with that handoff and is now reopened from the archive, but check it against your own conversation before acting on it, because the same evidence appears in two situations where the session is still live.
 - If your conversation ENDS with writing that handoff and its close-out, this is a REOPENED conversation from the session archive. Its purpose is answering questions about what happened here, not doing new work: it sits near the top of its context window, and auto-compact would destroy the detail that makes it valuable. Keep answers brief, avoid reading files or starting tasks that consume significant context, and if the user wants new work done, suggest opening a fresh session with $KICKOFF.
 - If you KEPT WORKING after writing that handoff, or that handoff describes work this conversation never did (a session that recorded the wrong id), this is NOT the archive: the app or the computer restarted in the middle of the work. Say so to the user in one line and carry on where you stopped. Context reports arrive on your tool calls as usual, and they, not this message, say how much room is left.
@@ -451,6 +518,7 @@ $SCRIPTS_LINE${SESSION_ID:+ The session id of this conversation is $SESSION_ID.}
     fi
     ;;
   compact)
+    archive_sweep
     record_session_start
     emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, then regenerate docs/handoff/INDEX.md with relevio-index.sh) with whatever detail remains, then recommend closing this session and opening a fresh one with $KICKOFF. $SCRIPTS_LINE${SESSION_ID_LINE:+ $SESSION_ID_LINE} $SUBAGENT_LINE"
     ;;

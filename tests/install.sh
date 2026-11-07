@@ -2371,6 +2371,84 @@ for chan in commands templates; do
     "$(contains "$(cat "$REPO/$chan/revisit.md")" 'never run it yourself')" "yes"
 done
 
+# --- Case 17: the session archive at session start --------------------------
+# A background archiving run cannot speak, so the session-start hook speaks
+# for it, in the one notice slot after the settings notice; and every start
+# sweeps the repository's sessions in the background.
+an="$(mktemp -d)"; anh="$an/home"; anc="$an/cc"; anx="$an/cache"
+mkdir -p "$anc"; printf '{"cleanupPeriodDays": 36500}\n' > "$anc/settings.json"
+anp="$(mktemp -d)"; mkdir -p "$anp/.claude/hooks" "$anp/.claude/scripts"
+cp "$REPO"/templates/*.sh "$anp/.claude/hooks/"; cp "$REPO"/scripts/*.sh "$anp/.claude/scripts/"
+# The notice tests run where no sweep can start (no git, a transcript outside
+# projects/), so a background run never rewrites the status they set up.
+ANT="$an/t/17ab0000-0000-4000-8000-000000000017.jsonl"
+ans() {  # $1 source, $2 transcript path, $3 model -> message
+  printf '{"source":"%s","session_id":"17ab0000-0000-4000-8000-000000000017","transcript_path":"%s","model":"%s"}' \
+    "$1" "${2-$ANT}" "${3:-claude-opus-5}" \
+    | env -u CLAUDE_PLUGIN_ROOT RELEVIO_HOME="$anh" CLAUDE_CONFIG_DIR="$anc" XDG_CACHE_HOME="$anx" \
+        CLAUDE_PROJECT_DIR="$anp" bash "$anp/.claude/hooks/session-start.sh" \
+    | jq -r '.hookSpecificOutput.additionalContext // ""'
+}
+out="$(ans startup)"
+check "archive notice: not set up is said, with the setup command and a warning not to run it" \
+  "$(contains "$out" 'ARCHIVE NOT SET UP'):$(contains "$out" 'relevio-archive.sh" setup'):$(contains "$out" 'Never run setup yourself')" "yes:yes:yes"
+check "archive notice: ... at most once a day" "$(contains "$(ans startup)" 'ARCHIVE')" "no"
+rm -rf "$anx"
+mkdir -p "$anh"; : > "$anh/off"
+check "archive notice: off silences it" "$(contains "$(ans startup)" 'ARCHIVE')" "no"
+rm -f "$anh/off"; rm -rf "$anx"
+check "archive notice: never on ZCode" \
+  "$(contains "$(ans startup /tmp/zcode-claude-hook-x/t.jsonl builtin:zai/GLM-5.3)" 'ARCHIVE')" "no"
+check "archive notice: never on a host that sends no transcript" "$(contains "$(ans startup '')" 'ARCHIVE')" "no"
+rm -rf "$anx"
+printf '{"cleanupPeriodDays": 30}\n' > "$anc/settings.json"
+out="$(ans startup)"
+check "archive notice: the settings notice takes the slot first" \
+  "$(contains "$out" 'SETTINGS CHANGED'):$(contains "$out" 'ARCHIVE')" "yes:no"
+check "archive notice: ... and the archive's comes at the next start" "$(contains "$(ans startup)" 'ARCHIVE NOT SET UP')" "yes"
+# Once set up: failing, interrupted and stale runs are reported, a healthy one is not.
+mkdir -p "$anh/keys"; echo "age1x" > "$anh/keys/recipients.txt"
+printf 'state fail\nat %s\npid 1\nscope repo\ncounts archived 0 skipped 0 deferred 0 failed 1\nmessage encrypting session x failed (tar 0, gzip 0, age 1)\n' "$(date +%s)" > "$anh/status"
+out="$(ans startup)"
+check "archive notice: a failing archive is reported every session, with its reason" \
+  "$(contains "$out" 'ARCHIVE FAILING since'):$(contains "$out" 'age 1'):$(contains "$(ans startup)" 'ARCHIVE FAILING')" "yes:yes:yes"
+sleep 1000 & ap=$!
+printf 'state running\nat %s\npid %s\n' "$(date +%s)" "$ap" > "$anh/status"
+check "archive notice: a run in progress is not reported" "$(contains "$(ans startup)" 'ARCHIVE')" "no"
+kill "$ap" 2>/dev/null; wait "$ap" 2>/dev/null
+check "archive notice: a run whose process is gone is reported as interrupted" "$(contains "$(ans startup)" 'ARCHIVE INTERRUPTED')" "yes"
+printf 'state ok\nat %s\npid 1\n' "$(( $(date +%s) - 8 * 86400 ))" > "$anh/status"
+check "archive notice: no success in over a week is reported as stale" "$(contains "$(ans startup)" 'ARCHIVE STALE')" "yes"
+printf 'state ok\nat %s\npid 1\n' "$(date +%s)" > "$anh/status"
+check "archive notice: a healthy archive says nothing" "$(contains "$(ans startup)" 'ARCHIVE')" "no"
+# The worst case for the budget: a resumed first session with no readable
+# start, and the longest failing notice.
+printf 'state fail\nat %s\npid 1\nmessage %s\n' "$(date +%s)" "$(printf 'x%.0s' $(seq 400))" > "$anh/status"
+n=$(printf '%s' "$(ans resume "$an/none/17ab0000-0000-4000-8000-000000000017.jsonl")" | wc -c)
+check "archive notice: a resumed first session with a failing archive fits the budget ($n <= $INJECT_BUDGET)" \
+  "$([ "$n" -le "$INJECT_BUDGET" ] && echo yes || echo no)" "yes"
+rm -rf "$anh"
+# The sweep: archives this repository's sessions in the background, and the
+# session start does not wait for it.
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  age-keygen 2>/dev/null > "$an/rec.key"
+  grep '^AGE-SECRET-KEY' "$an/rec.key" | RELEVIO_HOME="$anh" CLAUDE_CONFIG_DIR="$anc" RELEVIO_TEST_INSECURE_KEYS=1 \
+    RELEVIO_TEST_RECOVERY_IDENTITY="$an/rec.key" bash "$ARC" setup >/dev/null 2>&1
+  sw=18ab0000-0000-4000-8000-000000000018
+  mkdir -p "$anc/projects/-sweep"; printf '{"cwd":"%s"}\n' "$anp" > "$anc/projects/-sweep/$sw.jsonl"
+  touch -d '1 hour ago' "$anc/projects/-sweep/$sw.jsonl"
+  git -C "$anp" init -q
+  t0="$(date +%s%N)"; ans startup "$anc/projects/-sweep/$sw.jsonl" >/dev/null; t1="$(date +%s%N)"
+  check "archive sweep: the session start does not wait for it (under a second)" \
+    "$([ $(( (t1 - t0) / 1000000 )) -lt 1000 ] && echo fast || echo "$(( (t1 - t0) / 1000000 )) ms")" "fast"
+  for _ in $(seq 50); do [ -s "$anh/index.tsv" ] && [ ! -d "$anh/lock" ] && break; sleep 0.2; done
+  check "archive sweep: the repository's session is archived in the background" \
+    "$(awk -F'\t' -v s="$sw" '$2 == s { print $1 }' "$anh/index.tsv" 2>/dev/null)" "active"
+else
+  echo "  SKIP  archive sweep at session start (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+rm -rf "$an" "$anp"
+
 # --- Case 13: the one-time migration of pre-v0.22 headers -------------------
 # Other projects (and other people) are running relevio v0.21 and older, where
 # Branch could carry prose and Commits a "(N commits)" suffix. There is no
