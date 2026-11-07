@@ -2091,9 +2091,13 @@ check "archive: setup refuses without a terminal, and creates nothing" \
 check "archive: the test gate is refused for the real home" \
   "$(contains "$(env -u RELEVIO_HOME RELEVIO_TEST_INSECURE_KEYS=1 bash "$ARC" setup </dev/null 2>&1)" 'tests only')" "yes"
 git -C "$arc_t" init -q 2>/dev/null
-check "archive: a home inside a git work tree is refused" \
-  "$(contains "$(RELEVIO_HOME="$arc_t/inrepo" bash "$ARC" status 2>&1)" 'inside a git work tree')" "yes"
-rm -rf "$arc_t/.git"
+check "archive: a home inside a git work tree is refused for writing" \
+  "$(contains "$(RELEVIO_HOME="$arc_t/inrepo" bash "$ARC" backfill 2>&1)" 'inside a git work tree')" "yes"
+# ... but off still works there, so a dotfiles user can silence the notice.
+RELEVIO_HOME="$arc_t/inrepo" bash "$ARC" off >/dev/null 2>&1
+check "archive: off works in a home inside a git work tree, and silences the notice" \
+  "$(yesno "$([ -e "$arc_t/inrepo/off" ]; echo $?)"):$(RELEVIO_HOME="$arc_t/inrepo" bash "$ARC" notice)" "yes:"
+rm -rf "$arc_t/.git" "$arc_t/inrepo"
 mkdir -p "$arc_t/real"; ln -s "$arc_t/real" "$arc_t/link"
 check "archive: a symlinked home is refused" \
   "$(contains "$(RELEVIO_HOME="$arc_t/link" bash "$ARC" status 2>&1)" 'symbolic link')" "yes"
@@ -2236,6 +2240,17 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
   arcb sync --repo "$rr" >/dev/null 2>&1
   check "archive: --repo takes the repo, its worktrees and a removed worktree's folder, nothing else" \
     "$(ls -d "$abh"/archive/-r-* "$abh"/archive/-other 2>/dev/null | sed 's|.*/||' | tr '\n' ' ')" "-r-gone -r-main -r-wt "
+  arcb sync --repo "$ab/not-a-repo" >/dev/null 2>&1
+  check "archive: --repo on something that is not a repository fails loud" \
+    "$(sed -n 's/^state //p' "$abh/status")" "fail"
+  check "archive: list refuses extra arguments" "$(contains "$(arcb list a b 2>&1)" 'at most one query')" "yes"
+  # A rewritten transcript whose bundle is gone is archived again, with no
+  # index line pointing at a file that does not exist.
+  mv "$abh/archive/-r-main/$s5.tgz.age" "$ab/gone.age"
+  printf '{"cwd":"%s","rewritten":2}\n' "$rr" > "$abp/-r-main/$s5.jsonl"; touch -d '1 hour ago' "$abp/-r-main/$s5.jsonl"
+  arcb sync --folder -r-main >/dev/null 2>&1
+  check "archive: a missing bundle is not recorded as a generation" \
+    "$(awk -F'\t' -v s="$s5" '$2 == s { print $1 }' "$abh/index.tsv" | sort | tr '\n' ' '):$(ls "$abh/archive/-r-main" | grep -c .)" "active :1"
   # A transcript outside projects/ is an early sign Claude Code changed layout.
   arcb sync --session "$s5" --transcript "/tmp/elsewhere/$s5.jsonl" >/dev/null 2>&1
   check "archive: a transcript where relevio does not expect it is reported as a failure" \
@@ -2333,10 +2348,18 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
   check "archive: a bundle that does not match its index is refused, nothing left behind" \
     "$(contains "$(arcr restore "$r1" 2>&1)" 'does not match its index'):$(yesno "$([ -e "$arp/-f1/$r1.jsonl" ]; echo $?)"):$(find "$arp" -name '.relevio-restore.*' | grep -c .)" "yes:no:0"
   cp "$ar/idx" "$arh/index.tsv"
+  cp "$arh/archive/-f1/$r1.tgz.age" "$ar/good-r1.age"
   ev="$ar/evil"; mkdir -p "$ev"; printf 'relevio-archive-manifest 1\n' > "$ev/MANIFEST"; echo x > "$ev/$r1.jsonl"; ln -s /etc/passwd "$ev/link"
   tar -cf - -C "$ev" MANIFEST "$r1.jsonl" link | gzip -c | age -e -R "$arh/keys/recipients.txt" -o "$arh/archive/-f1/$r1.tgz.age"
   check "archive: a bundle with an unexpected entry is refused before extracting" \
     "$(contains "$(arcr restore "$r1" 2>&1)" 'unexpected entry'):$(yesno "$([ -e "$arp/-f1/link" ]; echo $?)")" "yes:no"
+  # Claude Code can delete a transcript and leave its sidecar behind.
+  cp "$ar/good-r1.age" "$arh/archive/-f1/$r1.tgz.age"
+  mkdir -p "$arp/-f1/$r1/subagents"; echo leftover > "$arp/-f1/$r1/subagents/old.txt"
+  [ -e "$arp/-f1/$r1.jsonl" ] && mv "$arp/-f1/$r1.jsonl" "$ar/aside/r1c.jsonl"
+  out="$(arcr restore "$r1" 2>&1)"; rc=$?
+  check "archive: a leftover sidecar with no transcript is moved aside and the session restored" \
+    "$rc:$(yesno "$([ -f "$arp/-f1/$r1.jsonl" ]; echo $?)"):$(ls "$arp/-f1" | grep -c "^$r1.relevio-replaced-")" "0:yes:1"
   # keys: check both, and a reset that keeps every bundle openable.
   check "archive: keys check works with the main key and with the recovery key" \
     "$(arcr keys check 2>&1):$(grep '^AGE-SECRET-KEY' "$ar/rec.key" | arcr keys check --recovery 2>/dev/null)" "passphrase works.:recovery key works."
@@ -2354,8 +2377,9 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
   # forget: confirmation, removal, and never archived again.
   check "archive: forget refuses a wrong confirmation, removing nothing" \
     "$(contains "$(echo nope | arcr forget "$r2" 2>&1)" 'nothing was removed'):$(ls "$arh/archive/-f2" | grep -c .)" "yes:1"
+  cp "$arh/archive/-f2/$r2.tgz.age" "$arh/archive/-f2/$r2.orphan-20260101T000000Z.tgz.age"
   echo "${r2:0:8}" | arcr forget "$r2" >/dev/null 2>&1
-  check "archive: forget removes every bundle and line of the session" \
+  check "archive: forget removes every bundle and line of the session, orphans included" \
     "$(ls "$arh/archive/-f2" | grep -c .):$(grep -c "$r2" "$arh/index.tsv")" "0:0"
   cp "$ar/aside/r2b" "$arp/-f2/$r2.jsonl"; touch -d '1 hour ago' "$arp/-f2/$r2.jsonl"
   arcr sync --all >/dev/null 2>&1

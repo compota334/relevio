@@ -52,6 +52,13 @@ check_home() {
   if [ -e "$RH" ] && { [ ! -d "$RH" ] || [ ! -O "$RH" ]; }; then
     die "$RH exists but is not a directory owned by you. Move it away and rerun."
   fi
+}
+# Where the archive's content is written: never inside a git work tree. Kept
+# apart from check_home so that off, on, list and the notice still work for a
+# user whose home directory is itself a work tree (a dotfiles repository).
+check_writable() {
+  local d
+  check_home
   d="$RH"; while [ ! -d "$d" ]; do d="$(dirname "$d")"; done
   if git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     die "$RH is inside a git work tree ($(git -C "$d" rev-parse --show-toplevel)). An archive of conversations must never be committable: set RELEVIO_HOME to a directory outside every repository."
@@ -132,7 +139,7 @@ is_set_up() { [ -s "$RH/keys/recipients.txt" ]; }
 # --- setup -----------------------------------------------------------------------
 cmd_setup() {
   local main main_pub rec rec_pub rec_secret entered tries=0 n
-  check_home
+  check_writable
   require_tty
   is_set_up && die "the archive is already set up in $RH (status shows it)."
   find_deps
@@ -368,7 +375,8 @@ forgotten_load() {
   while IFS="$TAB" read -r id _rest; do [ -n "$id" ] && FORGOTTEN["$id"]=1; done < "$RH/forgotten.tsv"
 }
 # index_edit <folder> <id> <op> [arg]: op put <line> (replaces the current
-# line), state <new state>, mtime <epoch>, supersede <generation bundle name>.
+# line), state <new state>, mtime <epoch>, supersede <generation bundle name>,
+# drop.
 index_edit() {
   local fo="$1" id="$2" op="$3" arg="${4:-}"
   index_init
@@ -376,7 +384,7 @@ index_edit() {
     BEGIN { fo = ENVIRON["FO"]; id = ENVIRON["ID"]; op = ENVIRON["OP"]; arg = ENVIRON["ARG"] }
     NR == 1 { print; next }
     $3 == fo && $2 == id && ($1 == "active" || $1 == "deleted-in-claude") {
-      if (op == "put") next
+      if (op == "put" || op == "drop") next
       if (op == "state") $1 = arg
       if (op == "mtime") $8 = arg
       if (op == "supersede") { $1 = "superseded"; $10 = arg }
@@ -496,10 +504,16 @@ archive_session() {
 supersede() {
   local fo="$1" id="$2" gen
   gen="$id.$(utc_stamp).tgz.age"
-  [ -f "$RH/archive/$fo/$id.tgz.age" ] && mv "$RH/archive/$fo/$id.tgz.age" "$RH/archive/$fo/$gen"
-  index_edit "$fo" "$id" supersede "$gen"
+  if [ -f "$RH/archive/$fo/$id.tgz.age" ]; then
+    mv "$RH/archive/$fo/$id.tgz.age" "$RH/archive/$fo/$gen"
+    index_edit "$fo" "$id" supersede "$gen"
+    log "$id: rewritten in Claude, previous copy kept as $gen"
+  else
+    # Its bundle is gone: an index line pointing at nothing would be a lie.
+    index_edit "$fo" "$id" drop
+    log "$id: its archived bundle was missing; the index line is dropped and the session archived again"
+  fi
   index_forget_row "$fo/$id"
-  log "$id: rewritten in Claude, previous copy kept as $gen"
 }
 RELEVIO_VERSION=""
 build_bundle() {
@@ -578,6 +592,7 @@ PROGRESS_N=0; PROGRESS_TOTAL=""
 archive_folders() {
   local fo id
   while IFS= read -r fo; do
+    [ -n "$fo" ] || continue
     folder_scan "$fo"
     for id in "${!F_STAT[@]}"; do
       archive_session "$fo" "$id" sweep
@@ -590,7 +605,7 @@ archive_folders() {
 # Shared entry of every archiving run: nothing happens when archiving is off
 # or not set up (the session-start notice says so instead).
 begin_run() {  # $1 scope  $2 quiet|wait
-  check_home
+  check_writable
   [ ! -e "$RH/off" ] && is_set_up || return 1
   RUN_SCOPE="$1"
   load_config
@@ -652,14 +667,17 @@ cmd_sync() {
       # early sign that Claude Code changed its layout.
       fo="$(basename "$(dirname "$transcript")")"
       if [ "$(dirname "$(dirname "$transcript")")" != "$PROJECTS" ] || [ "$(basename "$transcript")" != "$sid.jsonl" ]; then
-        check_home; [ -d "$RH" ] && is_set_up && { RUN_SCOPE=session; N_FAILED=1; status_write fail "transcript not where relevio expects it: $(relevio_safe "$transcript")"; RUN_DONE=1; }
+        check_writable; [ -d "$RH" ] && is_set_up && { RUN_SCOPE=session; N_FAILED=1; status_write fail "transcript not where relevio expects it: $(relevio_safe "$transcript")"; RUN_DONE=1; }
         exit 0
       fi
       begin_run session wait || exit 0
       archive_session "$fo" "$sid" "$stable" ;;
     repo)
       begin_run repo quiet || exit 0
-      archive_folders < <(repo_folders "$target") ;;
+      # Computed here, not in a process substitution, so a failure stops the
+      # run (and the status says so) instead of archiving nothing as "ok".
+      local folders; folders="$(repo_folders "$target")"
+      archive_folders <<<"$folders" ;;
     folder)
       case "$target" in ""|*/*|.|..) die "'$(relevio_safe "$target")' is not a project folder name." ;; esac
       begin_run folder quiet || exit 0
@@ -674,7 +692,7 @@ cmd_sync() {
 # backfill: everything already on the machine, in the foreground, with progress.
 cmd_backfill() {
   local total=0 bytes=0 need free fo id b
-  check_home
+  check_writable
   [ -e "$RH/off" ] && die "archiving is off: run 'on' first."
   is_set_up || die "the archive is not set up: run setup in your own terminal first."
   while IFS= read -r fo; do
@@ -701,6 +719,7 @@ cmd_backfill() {
 # list [query]: what is archived, from the index alone. Nothing is decrypted.
 cmd_list() {
   local q="${1:-}"
+  [ $# -le 1 ] || die "list takes at most one query."
   check_home
   [ -s "$INDEX" ] || { echo "Nothing archived yet."; return 0; }
   printf '%-36s  %-16s  %10s  %-17s  %s\n' SESSION ARCHIVED SIZE STATE CWD
@@ -788,7 +807,9 @@ cmd_restore() {
   stage="$(mktemp -d "$dest/.relevio-restore.XXXXXX")"
   # Global on purpose: the EXIT trap runs after this function's locals are gone.
   RESTORE_STAGE="$stage"
-  trap 'rm -rf "${RESTORE_STAGE:-}"' EXIT
+  trap 'rm -rf "${RESTORE_STAGE:-}"; release_lock' EXIT
+  # A sweep running now could rename this bundle into a generation.
+  take_lock wait || die "an archiving run holds the lock; try again in a minute. Nothing was restored."
   idn="$(identity_for "$use")"
   "$AGE" -d -i <(printf '%s\n' "$idn") "$RH/archive/$fo/$bundle" > "$stage/bundle.tgz" 2>/dev/null \
     || { unset idn; die "that key could not open $bundle. Nothing was restored."; }
@@ -816,11 +837,16 @@ cmd_restore() {
   done < "$stage/x/MANIFEST"
   [ "$(sha_of < "$stage/x/$id.jsonl")" = "$asha" ] || die "$bundle does not match its index entry. Nothing was restored."
   cwd="$(sed -n 's/^cwd //p' "$stage/x/MANIFEST" | head -1)"
+  ts="$(utc_stamp)"
   if [ -e "$dest/$id.jsonl" ]; then
-    ts="$(utc_stamp)"
     mv "$dest/$id.jsonl" "$dest/$id.jsonl.relevio-replaced-$ts"
     [ -e "$dest/$id" ] && mv "$dest/$id" "$dest/$id.relevio-replaced-$ts"
     echo "The copy that was there is kept as $id.jsonl.relevio-replaced-$ts."
+  elif [ -e "$dest/$id" ]; then
+    # Claude Code can delete a transcript and leave its sidecar behind: keep
+    # the leftover aside, never delete it, and put the archived one in place.
+    mv "$dest/$id" "$dest/$id.relevio-replaced-$ts"
+    echo "A leftover $id/ folder (no transcript) is kept as $id.relevio-replaced-$ts."
   fi
   [ ! -e "$dest/$id.jsonl" ] && [ ! -e "$dest/$id" ] || die "something appeared at $dest/$id while restoring. Nothing was restored."
   mv "$stage/x/$id.jsonl" "$dest/$id.jsonl"
@@ -849,7 +875,7 @@ print_resume() {  # $1 cwd  $2 id
 cmd_keys() {
   local sub="${1:-}" use=main
   [ "${2:-}" = --recovery ] && use=recovery
-  check_home; require_tty
+  check_writable; require_tty
   is_set_up || die "the archive is not set up in $RH."
   load_config
   case "$sub" in
@@ -922,10 +948,14 @@ keys_reset() {
 # Removes a session from the archive for good, and keeps it from coming back.
 cmd_forget() {
   local id="${1:-}" files typed f
-  check_home; require_tty
-  printf '%s' "$id" | grep -Eq "$SESSION_RE" || die "'$(relevio_safe "$id")' is not a session id."
+  [ $# -le 1 ] || die "forget takes one session id."
+  check_writable; require_tty
+  [[ $id =~ $SESSION_RE ]] || die "'$(relevio_safe "$id")' is not a session id."
   is_set_up || die "the archive is not set up in $RH."
-  files="$(awk -F'\t' -v id="$id" 'NR > 1 && $2 == id { print $3 "/" $10 }' "$INDEX" 2>/dev/null)"
+  # Every bundle of the session: those in the index, and orphan generations
+  # (bundles kept because they had no index line).
+  files="$( { awk -F'\t' -v id="$id" 'NR > 1 && $2 == id { print $3 "/" $10 }' "$INDEX" 2>/dev/null
+              find "$RH/archive" -mindepth 2 -maxdepth 2 -name "$id.orphan-*.tgz.age" 2>/dev/null | sed "s|^$RH/archive/||"; } | sort -u)"
   [ -n "$files" ] || die "session $id is not archived."
   echo "This removes from the archive, FOR GOOD:"
   while IFS= read -r f; do echo "  $f ($(human_bytes "$(file_stat "$RH/archive/$f" | cut -d' ' -f1)"))"; done <<<"$files"
@@ -948,7 +978,7 @@ cmd_forget() {
 # thresholds and the sanitizing live here alone. Never fails: a hook must not.
 cmd_notice() {
   local err k v st="" at=0 pid=0 msg="" mark
-  if ! err="$( (check_home) 2>&1 )"; then
+  if ! err="$( (check_home; ! is_set_up || check_writable) 2>&1 )"; then
     echo "ARCHIVE FAILING: $(printf '%s' "${err#ERROR: }" | LC_ALL=C tr -c 'A-Za-z0-9 ._/:(),-' '?' | cut -c1-200). Tell the user in one line."
     return 0
   fi
@@ -1023,10 +1053,10 @@ case "${1:-}" in
   session-start) shift; cmd_session_start "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   backfill) cmd_backfill ;;
-  list) cmd_list "${2:-}" ;;
+  list) shift; cmd_list "$@" ;;
   restore) shift; cmd_restore "$@" ;;
   keys) shift; cmd_keys "$@" ;;
-  forget) cmd_forget "${2:-}" ;;
+  forget) shift; cmd_forget "$@" ;;
   off) cmd_off ;;
   on) cmd_on ;;
   -h|--help|help|"") relevio_usage "${BASH_SOURCE[0]}"; [ -n "${1:-}" ] || exit 2 ;;
