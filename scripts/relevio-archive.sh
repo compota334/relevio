@@ -17,6 +17,13 @@
 #   status    is archiving set up, on and healthy; exit 1 when it is not
 #   backfill  archive every conversation already on this machine, now
 #   list [q]  what is archived (filter by id prefix, folder or cwd); decrypts nothing
+#   restore <id> [--recovery] [--generation <file>] [--folder <f>] [--replace]
+#             put an archived session back so claude --resume finds it
+#             (your terminal only)
+#   keys check [--recovery] | passphrase | reset
+#             test a key, change the passphrase, or start over with the
+#             recovery key when the passphrase is lost (your terminal only)
+#   forget <id>  remove a session from the archive for good (your terminal only)
 #   off       stop archiving new sessions (what is archived stays)
 #   on        start again after off
 #   sync      what the hooks run: --session <id> --transcript <path> [--wait-stable],
@@ -633,6 +640,247 @@ cmd_list() {
       printf "%-36s  %-16s  %10s  %-17s  %s\n", $2, substr($12, 1, 10) " " substr($12, 12, 5), $11, $1, $4 }'
 }
 
+# --- Secrets: only in the user's terminal ----------------------------------------------
+# The main identity comes from the passphrase (age asks on the terminal); the
+# recovery identity is typed by the user. Either is kept in a variable, handed
+# to age through a process substitution, and unset right after use.
+read_main_identity() {
+  if test_gate && [ -r "$RH/keys/main.key" ]; then cat "$RH/keys/main.key"; return 0; fi
+  [ -r "$RH/keys/main.age" ] || die "$RH/keys/main.age is missing, so the passphrase cannot open anything. Use --recovery with your recovery key."
+  "$AGE" -d "$RH/keys/main.age" || die "the passphrase did not open the main key. Try again, or use --recovery with your recovery key."
+}
+read_recovery_identity() {
+  local k pub
+  printf 'Recovery key (input hidden): ' >&2
+  if test_gate; then IFS= read -r k || k=""; else IFS= read -rs k < /dev/tty || k=""; echo >&2; fi
+  k="$(printf '%s' "$k" | tr -d ' \t' | tr '[:lower:]' '[:upper:]')"
+  pub="$(printf '%s\n' "$k" | "$AGE_KEYGEN" -y 2>/dev/null)" || die "that is not an age key: a recovery key starts with AGE-SECRET-KEY-1."
+  grep -qxF "$pub" "$RH/keys/recipients.txt" || die "that key is not one of this archive's keys."
+  printf '%s\n' "$k"
+}
+# Prints the identity for the run: --recovery picks the typed key.
+identity_for() { if [ "$1" = recovery ]; then read_recovery_identity; else read_main_identity; fi; }
+shell_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# --- restore -------------------------------------------------------------------------
+cmd_restore() {
+  local id="" use=main gen="" replace=no want_fo="" lines n fo bundle st ab asha dest d stage idn other cur_b cur_sha cwd line ts
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --recovery) use=recovery; shift ;;
+      --generation) gen="${2:-}"; shift 2 ;;
+      --replace) replace=yes; shift ;;
+      --folder) want_fo="${2:-}"; shift 2 ;;
+      -*) die "unknown restore option '$(relevio_safe "$1")'" ;;
+      *) [ -z "$id" ] || die "give one session id"; id="$1"; shift ;;
+    esac
+  done
+  check_home
+  require_tty
+  printf '%s' "$id" | grep -Eq "$SESSION_RE" || die "'$(relevio_safe "$id")' is not a session id (a UUID such as 14a94261-6409-412a-9ef9-dafb55e2cdbd)."
+  is_set_up || die "the archive is not set up in $RH."
+  load_config; SHA="$(sha_tool)"
+  [ -s "$INDEX" ] || die "nothing is archived yet."
+  if [ -n "$gen" ]; then
+    lines="$(awk -F'\t' -v id="$id" -v g="$gen" 'NR > 1 && $2 == id && $10 == g' "$INDEX")"
+    [ -n "$lines" ] || die "no generation '$(relevio_safe "$gen")' of session $id in the index (list shows them)."
+  else
+    lines="$(awk -F'\t' -v id="$id" -v f="$want_fo" 'NR > 1 && $2 == id && ($1 == "active" || $1 == "deleted-in-claude") && (f == "" || $3 == f)' "$INDEX")"
+  fi
+  if [ -z "$lines" ]; then
+    echo "Session $id is not archived." >&2
+    awk -F'\t' -v p="${id:0:8}" 'NR > 1 && index($2, p) == 1 { print "  near match: " $2 " (" $1 ", " $4 ")" }' "$INDEX" >&2
+    exit 1
+  fi
+  n="$(printf '%s\n' "$lines" | grep -c .)"
+  if [ "$n" -gt 1 ]; then
+    echo "Session $id is archived from $n project folders; pick one with --folder:" >&2
+    printf '%s\n' "$lines" | awk -F'\t' '{ print "  --folder " $3 "   (" $4 ")" }' >&2
+    exit 1
+  fi
+  IFS="$TAB" read -r st _ fo _ _ ab asha _ _ bundle _ _ <<<"$lines"
+  dest="$PROJECTS/$fo"
+  # A copy of the same id in another folder makes claude --resume report it
+  # as not found: never create that duplicate.
+  other="$(find "$PROJECTS" -mindepth 2 -maxdepth 2 -name "$id.jsonl" -not -path "$dest/*" -print -quit 2>/dev/null)"
+  [ -z "$other" ] || die "session $id already exists in another folder ($(relevio_safe "$other")); a second copy would make claude --resume fail. Nothing was restored."
+  if [ -e "$dest/$id.jsonl" ]; then
+    read -r cur_b _ <<<"$(file_stat "$dest/$id.jsonl")"
+    cur_sha="$(head -c "$ab" "$dest/$id.jsonl" | sha_of)"
+    if [ "$cur_b" -ge "$ab" ] && [ "$cur_sha" = "$asha" ]; then
+      echo "Session $id is already in place and intact (the archived copy is a prefix of it); nothing to restore."
+      print_resume "$(manifest_cwd_from_index "$id" "$fo")" "$id"; return 0
+    fi
+    [ "$replace" = yes ] || die "a different copy of session $id is in $dest. Nothing was restored. To put the archived copy back anyway, rerun with --replace: the current copy is moved aside, never deleted."
+    if [ -n "$(find "$dest/$id.jsonl" -mmin -10 -print -quit 2>/dev/null)" ]; then
+      die "the current copy of session $id was written less than 10 minutes ago: that conversation may be open right now. Close it, wait, and rerun."
+    fi
+  fi
+  mkdir -p "$dest"; chmod 700 "$dest"
+  stage="$(mktemp -d "$dest/.relevio-restore.XXXXXX")"
+  # Global on purpose: the EXIT trap runs after this function's locals are gone.
+  RESTORE_STAGE="$stage"
+  trap 'rm -rf "${RESTORE_STAGE:-}"' EXIT
+  idn="$(identity_for "$use")"
+  "$AGE" -d -i <(printf '%s\n' "$idn") "$RH/archive/$fo/$bundle" > "$stage/bundle.tgz" 2>/dev/null \
+    || { unset idn; die "that key could not open $bundle. Nothing was restored."; }
+  unset idn
+  gzip -dc < "$stage/bundle.tgz" > "$stage/bundle.tar" || die "$bundle is damaged (it does not decompress). Nothing was restored."
+  # Only what an archive bundle may hold, checked BEFORE anything is extracted.
+  tar -tf "$stage/bundle.tar" > "$stage/entries" || die "$bundle is damaged (not a tar stream). Nothing was restored."
+  while IFS= read -r line; do
+    case "$line" in
+      MANIFEST|"$id.jsonl"|"$id/"|"$id"/*) ;;
+      *) die "$bundle holds an unexpected entry ($(relevio_safe "$line")). Nothing was restored." ;;
+    esac
+    case "/$line/" in */../*) die "$bundle holds a path with '..'. Nothing was restored." ;; esac
+  done < "$stage/entries"
+  mkdir "$stage/x"
+  tar -xf "$stage/bundle.tar" -C "$stage/x" --no-same-owner 2>/dev/null || die "$bundle could not be unpacked. Nothing was restored."
+  [ -z "$(find "$stage/x" ! -type f ! -type d -print -quit)" ] || die "$bundle holds a link or a device file. Nothing was restored."
+  [ "$(head -1 "$stage/x/MANIFEST" 2>/dev/null)" = "relevio-archive-manifest $ARCHIVE_FORMAT" ] \
+    || die "$bundle was made by a newer relevio (or is damaged): its manifest is not format $ARCHIVE_FORMAT. Update relevio."
+  local k h b p
+  while read -r k h b p; do
+    [ "$k" = file ] || continue
+    [ -f "$stage/x/$p" ] && [ "$(sha_of < "$stage/x/$p")" = "$h" ] && [ "$(file_stat "$stage/x/$p" | cut -d' ' -f1)" = "$b" ] \
+      || die "$bundle failed its integrity check ($(relevio_safe "$p")). Nothing was restored."
+  done < "$stage/x/MANIFEST"
+  [ "$(sha_of < "$stage/x/$id.jsonl")" = "$asha" ] || die "$bundle does not match its index entry. Nothing was restored."
+  cwd="$(sed -n 's/^cwd //p' "$stage/x/MANIFEST" | head -1)"
+  if [ -e "$dest/$id.jsonl" ]; then
+    ts="$(date -u +%Y%m%dT%H%M%SZ)"
+    mv "$dest/$id.jsonl" "$dest/$id.jsonl.relevio-replaced-$ts"
+    [ -e "$dest/$id" ] && mv "$dest/$id" "$dest/$id.relevio-replaced-$ts"
+    echo "The copy that was there is kept as $id.jsonl.relevio-replaced-$ts."
+  fi
+  [ ! -e "$dest/$id.jsonl" ] && [ ! -e "$dest/$id" ] || die "something appeared at $dest/$id while restoring. Nothing was restored."
+  mv "$stage/x/$id.jsonl" "$dest/$id.jsonl"
+  [ -d "$stage/x/$id" ] && mv "$stage/x/$id" "$dest/$id"
+  chmod 600 "$dest/$id.jsonl"
+  # Fresh mtime: Claude Code's age-based cleanup must not delete it again at
+  # the next start.
+  touch "$dest/$id.jsonl"
+  echo "Restored session $id into $dest."
+  [ "$st" = deleted-in-claude ] && echo "Note: you had deleted this session in Claude earlier."
+  print_resume "$cwd" "$id"
+}
+manifest_cwd_from_index() { awk -F'\t' -v id="$1" -v f="$2" 'NR > 1 && $2 == id && $3 == f && $1 != "superseded" { print $4; exit }' "$INDEX"; }
+print_resume() {  # $1 cwd  $2 id
+  echo
+  if [ -n "$1" ] && [ "$1" != "$RELEVIO_NONE" ] && [ -d "$1" ]; then
+    echo "Reopen it with:"; echo; echo "  cd $(shell_quote "$1") && claude --resume $2"
+  else
+    echo "Its project folder ($(relevio_safe "${1:-unknown}")) no longer exists. Reopen it with:"; echo; echo "  claude --resume $2"
+  fi
+  echo
+  echo "Reopening sends the whole conversation to the model again, so the first message costs a full context load."
+}
+
+# --- keys ----------------------------------------------------------------------------
+cmd_keys() {
+  local sub="${1:-}" use=main
+  [ "${2:-}" = --recovery ] && use=recovery
+  check_home; require_tty
+  is_set_up || die "the archive is not set up in $RH."
+  load_config
+  case "$sub" in
+    check) keys_check "$use" ;;
+    passphrase) keys_passphrase ;;
+    reset) keys_reset ;;
+    *) die "keys needs check [--recovery], passphrase or reset." ;;
+  esac
+}
+keys_check() {
+  local idn
+  idn="$(identity_for "$1")"
+  if [ "$("$AGE" -d -i <(printf '%s\n' "$idn") "$RH/keys/canary.age" 2>/dev/null)" = "relevio-canary 1" ]; then
+    unset idn; [ "$1" = recovery ] && echo "recovery key works." || echo "passphrase works."
+  else
+    unset idn; echo "that key does NOT open the archive." >&2; exit 1
+  fi
+}
+keys_passphrase() {
+  local idn
+  test_gate && [ -r "$RH/keys/main.key" ] && die "the test keys have no passphrase to change."
+  echo "First the CURRENT passphrase:"
+  idn="$(read_main_identity)"
+  echo "Now the NEW passphrase (age asks twice):"
+  printf '%s\n' "$idn" | "$AGE" -p -o "$RH/keys/main.age.tmp" || { unset idn; rm -f "$RH/keys/main.age.tmp"; die "the new passphrase was not set; the old one still works."; }
+  unset idn
+  mv "$RH/keys/main.age.tmp" "$RH/keys/main.age"
+  echo "Passphrase changed. The recovery key is unchanged."
+}
+# Lost passphrase: the recovery key re-encrypts everything to a new main key.
+# Nothing old is touched until every new bundle has been proven to open.
+keys_reset() {
+  local rec rec_pub main main_pub ts f rel new n=0 total fail_after
+  trap 'rm -rf "$RH/archive.new" "$RH/keys/recipients.txt.new" "$RH/keys/main.age.new" "$RH/keys/main.key.new"; release_lock' EXIT
+  take_lock wait || die "another archiving run holds the lock; try again in a minute."
+  rec="$(read_recovery_identity)"
+  rec_pub="$(printf '%s\n' "$rec" | "$AGE_KEYGEN" -y)"
+  main="$("$AGE_KEYGEN" 2>/dev/null)"; main_pub="$(printf '%s\n' "$main" | "$AGE_KEYGEN" -y)"
+  if test_gate; then
+    printf '%s\n' "$main" > "$RH/keys/main.key.new"
+  else
+    echo "Choose the NEW passphrase (age asks twice):"
+    printf '%s\n' "$main" | "$AGE" -p -o "$RH/keys/main.age.new" || die "the new passphrase was not set; nothing changed."
+  fi
+  { echo "# relevio recipients, format $ARCHIVE_FORMAT. Every archive is encrypted to every key below."
+    echo "# main (passphrase-protected key, reset $(date -u +%Y-%m-%d))"; echo "$main_pub"
+    echo "# recovery (its secret half is NOT stored anywhere by relevio)"; echo "$rec_pub"; } > "$RH/keys/recipients.txt.new"
+  total="$(find "$RH/archive" -name '*.age' -type f | grep -c . || true)"
+  fail_after=""; test_gate && fail_after="${RELEVIO_TEST_FAIL_AFTER:-}"
+  mkdir -p "$RH/archive.new"
+  while IFS= read -r -d '' f; do
+    rel="${f#"$RH/archive/"}"; new="$RH/archive.new/$rel"
+    mkdir -p "$(dirname "$new")"
+    n=$((n + 1))
+    [ -n "$fail_after" ] && [ "$n" -gt "$fail_after" ] && die "test: forced failure after $fail_after bundle(s); nothing changed."
+    "$AGE" -d -i <(printf '%s\n' "$rec") "$f" | "$AGE" -e -R "$RH/keys/recipients.txt.new" -o "$new" \
+      || die "re-encrypting $(relevio_safe "$rel") failed; nothing changed."
+    "$AGE" -d -i <(printf '%s\n' "$main") "$new" > /dev/null 2>&1 || die "the re-encrypted $(relevio_safe "$rel") does not open with the new key; nothing changed."
+    echo "  re-encrypted $n of $total"
+  done < <(find "$RH/archive" -name '*.age' -type f -print0)
+  unset rec main
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$RH/keys/old"
+  [ -e "$RH/keys/main.age" ] && mv "$RH/keys/main.age" "$RH/keys/old/main.$ts.age"
+  [ -e "$RH/keys/main.key" ] && mv "$RH/keys/main.key" "$RH/keys/old/main.$ts.key"
+  mv "$RH/archive" "$RH/archive.old.$ts"
+  mv "$RH/archive.new" "$RH/archive"
+  mv "$RH/keys/recipients.txt.new" "$RH/keys/recipients.txt"
+  if [ -e "$RH/keys/main.key.new" ]; then mv "$RH/keys/main.key.new" "$RH/keys/main.key"; else mv "$RH/keys/main.age.new" "$RH/keys/main.age"; fi
+  printf 'relevio-canary 1\n' | "$AGE" -e -R "$RH/keys/recipients.txt" -o "$RH/keys/canary.age"
+  rm -rf "$RH/archive.old.$ts"
+  log "keys reset: $n bundle(s) re-encrypted to a new main key"
+  echo "Done: $n bundle(s) now open with the new passphrase. The recovery key is the same."
+}
+
+# --- forget ------------------------------------------------------------------------
+# Removes a session from the archive for good, and keeps it from coming back.
+cmd_forget() {
+  local id="${1:-}" files typed f
+  check_home; require_tty
+  printf '%s' "$id" | grep -Eq "$SESSION_RE" || die "'$(relevio_safe "$id")' is not a session id."
+  is_set_up || die "the archive is not set up in $RH."
+  files="$(awk -F'\t' -v id="$id" 'NR > 1 && $2 == id { print $3 "/" $10 }' "$INDEX" 2>/dev/null)"
+  [ -n "$files" ] || die "session $id is not archived."
+  echo "This removes from the archive, FOR GOOD:"
+  while IFS= read -r f; do echo "  $f ($(human_bytes "$(file_stat "$RH/archive/$f" | cut -d' ' -f1)"))"; done <<<"$files"
+  echo "and the session will never be archived again. This cannot be undone."
+  printf 'Type the first 8 characters of the id to confirm: '
+  if test_gate; then IFS= read -r typed || typed=""; else IFS= read -r typed < /dev/tty || typed=""; fi
+  [ "$typed" = "${id:0:8}" ] || die "that does not match; nothing was removed."
+  take_lock wait || die "another archiving run holds the lock; try again in a minute."
+  trap release_lock EXIT
+  while IFS= read -r f; do rm -f "$RH/archive/$f"; done <<<"$files"
+  awk -F'\t' -v id="$id" 'NR == 1 || $2 != id' "$INDEX" > "$INDEX.tmp" && mv "$INDEX.tmp" "$INDEX"
+  printf '%s\t%s\n' "$id" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$RH/forgotten.tsv"
+  log "forgot $id"
+  echo "Removed. Session $id will not be archived again."
+}
+
 # --- off / on ------------------------------------------------------------------------
 cmd_off() {
   check_home; mkdir -p "$RH"; chmod 700 "$RH"; : > "$RH/off"
@@ -649,6 +897,9 @@ case "${1:-}" in
   sync) shift; cmd_sync "$@" ;;
   backfill) cmd_backfill ;;
   list) cmd_list "${2:-}" ;;
+  restore) shift; cmd_restore "$@" ;;
+  keys) shift; cmd_keys "$@" ;;
+  forget) cmd_forget "${2:-}" ;;
   off) cmd_off ;;
   on) cmd_on ;;
   -h|--help|help|"") relevio_usage "${BASH_SOURCE[0]}"; [ -n "${1:-}" ] || exit 2 ;;

@@ -2270,6 +2270,107 @@ else
   echo "  SKIP  archive: sync, backfill and list (age is not installed)"; SKIPS=$((SKIPS + 1))
 fi
 
+# --- Case 16: the session archive, restore / keys / forget ------------------
+# Restore puts a session back where claude --resume finds it, only after every
+# file is proven to match what was archived. It needs a key, so it runs only
+# in the user's terminal; these tests use the gated test keys.
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  ar="$(mktemp -d)"; arh="$ar/home"; arc="$ar/cc"; arp="$arc/projects"
+  age-keygen 2>/dev/null > "$ar/rec.key"
+  arcr() {
+    RELEVIO_HOME="$arh" CLAUDE_CONFIG_DIR="$arc" RELEVIO_TEST_INSECURE_KEYS=1 \
+      RELEVIO_TEST_RECOVERY_IDENTITY="$ar/rec.key" RELEVIO_TEST_STABLE_WAIT=0 \
+      RELEVIO_TEST_LOCK_WAIT=4 bash "$ARC" "$@"
+  }
+  r1=aaaaaaaa-0000-4000-8000-00000000000a; r2=bbbbbbbb-0000-4000-8000-00000000000b
+  rcwd="$ar/my proj (x)"; mkdir -p "$rcwd" "$arp/-f1/$r1/tool-results" "$arp/-f2"
+  printf '{"cwd":"%s"}\n{"m":"hello"}\n' "$rcwd" > "$arp/-f1/$r1.jsonl"
+  echo out > "$arp/-f1/$r1/tool-results/t1.txt"
+  printf '{"cwd":"/gone/away"}\n' > "$arp/-f2/$r2.jsonl"
+  touch -d '1 hour ago' $(find "$arp" -type f)
+  cp -a "$arp/-f1" "$ar/orig"
+  grep '^AGE-SECRET-KEY' "$ar/rec.key" | arcr setup >/dev/null 2>&1
+  arcr backfill >/dev/null 2>&1
+  check "archive: restore refuses without a terminal" \
+    "$(contains "$(RELEVIO_HOME="$arh" CLAUDE_CONFIG_DIR="$arc" bash "$ARC" restore "$r1" </dev/null 2>&1)" 'own terminal')" "yes"
+  check "archive: restore refuses something that is not a session id" \
+    "$(contains "$(arcr restore '../../x' 2>&1)" 'not a session id')" "yes"
+  out="$(arcr restore "$r1" 2>&1)"; rc=$?
+  check "archive: a session already in place and intact is left alone" \
+    "$rc:$(contains "$out" 'already in place and intact')" "0:yes"
+  mkdir -p "$ar/aside"; mv "$arp/-f1/$r1.jsonl" "$arp/-f1/$r1" "$ar/aside/"
+  out="$(arcr restore "$r1" 2>&1)"; rc=$?
+  check "archive: restore puts the transcript and its sidecar back, byte for byte" \
+    "$rc:$(cmp -s "$arp/-f1/$r1.jsonl" "$ar/orig/$r1.jsonl" && diff -r "$arp/-f1/$r1" "$ar/orig/$r1" >/dev/null && echo same)" "0:same"
+  check "archive: ... readable only by you, with a fresh mtime" \
+    "$(stat -c %a "$arp/-f1/$r1.jsonl"):$([ -n "$(find "$arp/-f1/$r1.jsonl" -mmin -1)" ] && echo fresh)" "600:fresh"
+  check "archive: ... no staging directory left behind" \
+    "$(find "$arp" -name '.relevio-restore.*' | grep -c .)" "0"
+  check "archive: ... and prints the quoted resume line for a cwd with spaces" \
+    "$(contains "$out" "cd '$rcwd' && claude --resume $r1")" "yes"
+  mv "$arp/-f2/$r2.jsonl" "$ar/aside/"
+  check "archive: a cwd that is gone gets the bare resume line" \
+    "$(arcr restore "$r2" 2>&1 | grep -c "^  claude --resume $r2$")" "1"
+  # Refusals: nothing written in any of them.
+  cp "$arp/-f2/$r2.jsonl" "$arp/-f1/$r2.jsonl"; mv "$arp/-f2/$r2.jsonl" "$ar/aside/r2b"
+  check "archive: a copy of the id in another folder is refused (it would break --resume)" \
+    "$(contains "$(arcr restore "$r2" 2>&1)" 'another folder'):$(yesno "$([ -e "$arp/-f2/$r2.jsonl" ]; echo $?)")" "yes:no"
+  mv "$arp/-f1/$r2.jsonl" "$arp/-f2/$r2.jsonl"
+  printf '{"different":1}\n' > "$arp/-f2/$r2.jsonl"; touch -d '1 hour ago' "$arp/-f2/$r2.jsonl"
+  check "archive: a different copy in place is refused without --replace" \
+    "$(contains "$(arcr restore "$r2" 2>&1)" 'rerun with --replace')" "yes"
+  arcr restore "$r2" --replace >/dev/null 2>&1
+  check "archive: --replace moves the current copy aside, never deletes it" \
+    "$(ls "$arp/-f2" | grep -c "^$r2.jsonl.relevio-replaced-"):$(head -1 "$arp/-f2/$r2.jsonl")" '1:{"cwd":"/gone/away"}'
+  printf '{"live":1}\n' > "$arp/-f2/$r2.jsonl"
+  check "archive: --replace refuses a copy written in the last 10 minutes" \
+    "$(contains "$(arcr restore "$r2" --replace 2>&1)" 'less than 10 minutes ago')" "yes"
+  mv "$arp/-f2/$r2.jsonl" "$ar/aside/live"
+  # A bundle that does not match its index, or holds something it must not.
+  mv "$arp/-f1/$r1.jsonl" "$ar/aside/r1b.jsonl"; mv "$arp/-f1/$r1" "$ar/aside/r1bside"
+  cp "$arh/index.tsv" "$ar/idx"
+  awk -F'\t' -v OFS='\t' -v s="$r1" '$2 == s { $7 = "0000" } { print }' "$ar/idx" > "$arh/index.tsv"
+  check "archive: a bundle that does not match its index is refused, nothing left behind" \
+    "$(contains "$(arcr restore "$r1" 2>&1)" 'does not match its index'):$(yesno "$([ -e "$arp/-f1/$r1.jsonl" ]; echo $?)"):$(find "$arp" -name '.relevio-restore.*' | grep -c .)" "yes:no:0"
+  cp "$ar/idx" "$arh/index.tsv"
+  ev="$ar/evil"; mkdir -p "$ev"; printf 'relevio-archive-manifest 1\n' > "$ev/MANIFEST"; echo x > "$ev/$r1.jsonl"; ln -s /etc/passwd "$ev/link"
+  tar -cf - -C "$ev" MANIFEST "$r1.jsonl" link | gzip -c | age -e -R "$arh/keys/recipients.txt" -o "$arh/archive/-f1/$r1.tgz.age"
+  check "archive: a bundle with an unexpected entry is refused before extracting" \
+    "$(contains "$(arcr restore "$r1" 2>&1)" 'unexpected entry'):$(yesno "$([ -e "$arp/-f1/link" ]; echo $?)")" "yes:no"
+  # keys: check both, and a reset that keeps every bundle openable.
+  check "archive: keys check works with the main key and with the recovery key" \
+    "$(arcr keys check 2>&1):$(grep '^AGE-SECRET-KEY' "$ar/rec.key" | arcr keys check --recovery 2>/dev/null)" "passphrase works.:recovery key works."
+  check "archive: a key that is not the archive's is refused" \
+    "$(contains "$(age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY' | arcr keys check --recovery 2>&1)" "not one of this archive's keys")" "yes"
+  cp "$arh/keys/main.key" "$ar/old-main.key"
+  grep '^AGE-SECRET-KEY' "$ar/rec.key" | RELEVIO_TEST_FAIL_AFTER=1 arcr keys reset >/dev/null 2>&1
+  check "archive: a reset that fails half way leaves the old keys and bundles in force" \
+    "$(cmp -s "$arh/keys/main.key" "$ar/old-main.key" && echo same):$(yesno "$([ -e "$arh/archive.new" ]; echo $?)"):$(age -d -i "$ar/old-main.key" "$arh/archive/-f2/$r2.tgz.age" >/dev/null 2>&1 && echo opens)" "same:no:opens"
+  grep '^AGE-SECRET-KEY' "$ar/rec.key" | arcr keys reset >/dev/null 2>&1; rc=$?
+  check "archive: a reset re-encrypts every bundle to a new main key" \
+    "$rc:$(age -d -i "$arh/keys/main.key" "$arh/archive/-f2/$r2.tgz.age" >/dev/null 2>&1 && echo new-opens):$(age -d -i "$ar/old-main.key" "$arh/archive/-f2/$r2.tgz.age" >/dev/null 2>&1 && echo old-opens || echo old-refused)" \
+    "0:new-opens:old-refused"
+  check "archive: ... keeping the old main key in keys/old" "$(ls "$arh/keys/old" | grep -c '^main\.')" "1"
+  # forget: confirmation, removal, and never archived again.
+  check "archive: forget refuses a wrong confirmation, removing nothing" \
+    "$(contains "$(echo nope | arcr forget "$r2" 2>&1)" 'nothing was removed'):$(ls "$arh/archive/-f2" | grep -c .)" "yes:1"
+  echo "${r2:0:8}" | arcr forget "$r2" >/dev/null 2>&1
+  check "archive: forget removes every bundle and line of the session" \
+    "$(ls "$arh/archive/-f2" | grep -c .):$(grep -c "$r2" "$arh/index.tsv")" "0:0"
+  cp "$ar/aside/r2b" "$arp/-f2/$r2.jsonl"; touch -d '1 hour ago' "$arp/-f2/$r2.jsonl"
+  arcr sync --all >/dev/null 2>&1
+  check "archive: ... and a later sweep does not archive it again" "$(ls "$arh/archive/-f2" | grep -c .)" "0"
+  rm -rf "$ar"
+else
+  echo "  SKIP  archive: restore, keys and forget (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+for chan in commands templates; do
+  check "$chan/revisit: a session Claude Code no longer has is looked up in the archive" \
+    "$(contains "$(cat "$REPO/$chan/revisit.md")" 'relevio-archive.sh" list')" "yes"
+  check "$chan/revisit: ... and the restore is the user's to run, never the agent's" \
+    "$(contains "$(cat "$REPO/$chan/revisit.md")" 'never run it yourself')" "yes"
+done
+
 # --- Case 13: the one-time migration of pre-v0.22 headers -------------------
 # Other projects (and other people) are running relevio v0.21 and older, where
 # Branch could carry prose and Commits a "(N commits)" suffix. There is no
