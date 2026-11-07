@@ -14,12 +14,12 @@ set -euo pipefail
 
 VERSION="0.24.7"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
-TEMPLATES=(context-warn.sh session-start.sh handoff.md kickoff.md revisit.md INDEX.md)
+TEMPLATES=(context-warn.sh session-start.sh session-end.sh handoff.md kickoff.md revisit.md INDEX.md)
 # Since v0.22 docs/handoff/INDEX.md is generated rather than hand-edited, so
 # the commands need the generator next to them. These live in scripts/, not
 # templates/: both install channels ship the same copy.
 SCRIPTS=(relevio-handoffs-lib.sh relevio-index.sh relevio-trace.sh relevio-areas.sh relevio-header.sh relevio-migrate.sh relevio-archive.sh)
-STAMPED=(context-warn.sh session-start.sh)
+STAMPED=(context-warn.sh session-start.sh session-end.sh)
 # Legacy markers: only ever used to REMOVE the pre-v0.18 block from CLAUDE.md.
 MARK_START="<!-- relevio:start -->"
 MARK_END="<!-- relevio:end -->"
@@ -96,7 +96,11 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "this directory is n
 # wins. Nothing is destroyed in that scenario, yet the agent is left
 # incoherent, which is worse than not installing. Detect it before writing
 # anything, and let the human resolve it.
+# A CLAUDE.md that names relevio, or a project where relevio is already
+# installed, is describing relevio's own cycle, not a second one: blocking it
+# would block every update of a project that writes about relevio.
 if [ "$FORCE" -ne 1 ] && [ -f CLAUDE.md ] && ! grep -qF "$MARK_START" CLAUDE.md \
+   && ! grep -qi 'relevio' CLAUDE.md && ! grep -qs '^# relevio v' .claude/hooks/session-start.sh \
    && grep -qEi 'docs/handoff|/kickoff|/handoff' CLAUDE.md; then
   fail "CLAUDE.md already describes a session/handoff methodology of its own.
        relevio would inject a SECOND one at every session start, leaving your
@@ -204,6 +208,7 @@ install_file() {
 mkdir -p .claude/hooks .claude/commands
 install_file "$TPL/context-warn.sh" .claude/hooks/context-warn.sh 755
 install_file "$TPL/session-start.sh" .claude/hooks/session-start.sh 755
+install_file "$TPL/session-end.sh" .claude/hooks/session-end.sh 755
 install_file "$TPL/handoff.md" .claude/commands/handoff.md 644
 install_file "$TPL/kickoff.md" .claude/commands/kickoff.md 644
 install_file "$TPL/revisit.md" .claude/commands/revisit.md 644
@@ -214,10 +219,11 @@ for f in "${SCRIPTS[@]}"; do
   install_file "$SCR/$f" ".claude/scripts/$f" "$mode"
 done
 
-# --- 2. Register both hooks in .claude/settings.json (merge, don't clobber) --
+# --- 2. Register the hooks in .claude/settings.json (merge, don't clobber) ---
 # PostToolUse/context-warn.sh keeps the agent aware of its context window;
-# SessionStart/session-start.sh delivers the session cycle at session start.
-# Without the second one the agent never learns the cycle exists.
+# SessionStart/session-start.sh delivers the session cycle at session start
+# (without it the agent never learns the cycle exists); SessionEnd/
+# session-end.sh archives each session as it closes, once the archive is set up.
 SETTINGS=".claude/settings.json"
 register_hook() {
   local event="$1" script="$2"
@@ -244,6 +250,7 @@ register_hook() {
 }
 register_hook PostToolUse context-warn.sh
 register_hook SessionStart session-start.sh
+register_hook SessionEnd session-end.sh
 
 # Claude Code compacts a conversation left idle for about an hour, shortly
 # before its prompt cache expires (idleCompaction, on by default from v2.1.290).
@@ -441,8 +448,12 @@ Done. Next steps:
      replaces them whole: put your own project instructions in CLAUDE.md, which relevio
      never touches. The exact messages relevio sends the agent are readable in
      .claude/hooks/*.sh (and documented in the README).
+  5. To keep an encrypted copy of every conversation (outside the repository,
+     so Claude Code's own cleanup cannot lose them), run once, in your own
+     terminal, never through the agent:
+       bash .claude/scripts/relevio-archive.sh setup
 
-Daily cycle: start every session with /kickoff, close it with /handoff (the
-agent will also do it on its own when the context hook warns). The first
-session has no handoff yet: just start working.
+Daily cycle: start every session with /kickoff, close it with /handoff when
+you decide the session ends (the context hook tells the agent when the window
+needs it). The first session has no handoff yet: just start working.
 EOF

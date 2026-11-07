@@ -2083,7 +2083,7 @@ rm -rf "$c2" "$d7"
 # run under RELEVIO_TEST_INSECURE_KEYS, honoured only for a throwaway home.
 ARC="$REPO/scripts/relevio-archive.sh"
 check "install: the archive script is shipped" \
-  "$(grep -c 'relevio-archive.sh' "$REPO/install.sh")" "1"
+  "$(grep -c '^SCRIPTS=.*relevio-archive.sh' "$REPO/install.sh")" "1"
 arc_t="$(mktemp -d)"
 # Setup and status refuse what could leak or be committed, with or without age.
 check "archive: setup refuses without a terminal, and creates nothing" \
@@ -2489,6 +2489,42 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
 else
   echo "  SKIP  session-end archiving (age is not installed)"; SKIPS=$((SKIPS + 1))
 fi
+
+# --- Case 19: the installer and the archive ----------------------------------
+d19="$(fixture '')"
+( cd "$d19" && bash "$INSTALLER" >/dev/null 2>&1 )
+check "install: session-end.sh is installed, executable and stamped" \
+  "$(yesno "$([ -x "$d19/.claude/hooks/session-end.sh" ]; echo $?)"):$(sed -n 2p "$d19/.claude/hooks/session-end.sh")" "yes:# relevio v$(cat "$REPO/VERSION")"
+check "install: SessionEnd is registered once" \
+  "$(jq '[.hooks.SessionEnd[]?.hooks[]?.command | select(contains("session-end.sh"))] | length' "$d19/.claude/settings.json")" "1"
+( cd "$d19" && bash "$INSTALLER" --update >/dev/null 2>&1 )
+check "install: ... and still once after an update" \
+  "$(jq '[.hooks.SessionEnd[]?.hooks[]?.command | select(contains("session-end.sh"))] | length' "$d19/.claude/settings.json")" "1"
+check "install: the next steps say how to set up the archive, in the user's own terminal" \
+  "$(contains "$( (cd "$d19" && bash "$INSTALLER" --update) 2>&1)" 'relevio-archive.sh setup')" "yes"
+mkdir -p "$RELEVIO_HOME"; echo keep > "$RELEVIO_HOME/marker"
+out="$( (cd "$d19" && bash "$UNINSTALLER") 2>&1 )"
+check "uninstall: session-end.sh and its registration are removed" \
+  "$(yesno "$([ -e "$d19/.claude/hooks/session-end.sh" ]; echo $?)"):$(jq -r '.hooks.SessionEnd // "none"' "$d19/.claude/settings.json" 2>/dev/null || echo none)" "no:none"
+check "uninstall: the archive in RELEVIO_HOME is kept, and said so" \
+  "$(cat "$RELEVIO_HOME/marker"):$(contains "$out" 'Kept: ')" "keep:yes"
+rm -rf "$d19" "$RELEVIO_HOME"
+# The methodology detector: a CLAUDE.md that writes about relevio's own cycle
+# is not a second methodology, and neither is a project relevio is already in.
+d19="$(fixture 'Ciclo relevio: /kickoff al abrir, /handoff al cerrar. Handoffs en docs/handoff/.')"
+( cd "$d19" && bash "$INSTALLER" >/dev/null 2>&1 ); rc=$?
+check "install: a CLAUDE.md that names relevio's own cycle does not block it" "$rc" "0"
+rm -rf "$d19"
+d19="$(fixture '')"
+( cd "$d19" && bash "$INSTALLER" >/dev/null 2>&1 )
+printf 'Open with /kickoff, close with /handoff.\n' > "$d19/CLAUDE.md"
+( cd "$d19" && bash "$INSTALLER" --update >/dev/null 2>&1 ); rc=$?
+check "install: an update of a project relevio is already in is not blocked" "$rc" "0"
+rm -rf "$d19"
+d19="$(fixture 'Our cycle: write docs/handoff/NOTES.md at the end of every session.')"
+( cd "$d19" && bash "$INSTALLER" >/dev/null 2>&1 ); rc=$?
+check "install: ... while a methodology of its own still blocks" "$rc" "1"
+rm -rf "$d19"
 
 # --- Case 13: the one-time migration of pre-v0.22 headers -------------------
 # Other projects (and other people) are running relevio v0.21 and older, where

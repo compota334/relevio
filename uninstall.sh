@@ -25,7 +25,7 @@ echo "Target project: $(pwd)"
 echo
 
 # --- 1. Hooks and slash commands ---------------------------------------------
-for f in .claude/hooks/context-warn.sh .claude/hooks/session-start.sh \
+for f in .claude/hooks/context-warn.sh .claude/hooks/session-start.sh .claude/hooks/session-end.sh \
          .claude/commands/handoff.md .claude/commands/kickoff.md .claude/commands/revisit.md \
          .claude/scripts/relevio-*.sh; do
   if [ -f "$f" ]; then rm "$f"; info "removed: $f"; fi
@@ -53,10 +53,11 @@ SETTINGS=".claude/settings.json"
 if [ -f "$SETTINGS" ]; then
   command -v jq >/dev/null 2>&1 || fail "jq is required to clean $SETTINGS. Install it, or edit the file by hand."
   jq -e . "$SETTINGS" >/dev/null 2>&1 || fail "$SETTINGS is not valid JSON. Clean it by hand: remove the
-       PostToolUse entry referencing context-warn.sh and the SessionStart entry
-       referencing session-start.sh."
+       PostToolUse entry referencing context-warn.sh, the SessionStart entry
+       referencing session-start.sh and the SessionEnd entry referencing
+       session-end.sh."
   TMP="$(mktemp)"
-  # Drop relevio's entries from both events, then prune whatever is left empty
+  # Drop relevio's entries from its three events, then prune whatever is left empty
   # so an uninstall does not leave hollow scaffolding behind.
   jq '
     def drop($ev; $needle):
@@ -67,6 +68,7 @@ if [ -f "$SETTINGS" ]; then
       else . end;
     drop("PostToolUse"; "context-warn.sh")
     | drop("SessionStart"; "session-start.sh")
+    | drop("SessionEnd"; "session-end.sh")
     | if .hooks == {} then del(.hooks) else . end
   ' "$SETTINGS" > "$TMP"
   if [ "$(cat "$TMP")" = "{}" ]; then
@@ -117,6 +119,11 @@ fi
 echo
 echo "Done. docs/handoff/ was KEPT on purpose: it is your project's history."
 echo "Delete it yourself only if you are sure you want to lose it."
+# The session archive is the user's, across every project: never removed here.
+if [ -d "${RELEVIO_HOME:-$HOME/.relevio}" ]; then
+  echo "Kept: ${RELEVIO_HOME:-$HOME/.relevio} (your encrypted conversation archive and its keys, shared by"
+  echo "every project). Delete it yourself only if you want it gone."
+fi
 # The idleCompaction key is left where it is, deliberately: it may be the
 # user's as much as relevio's, and removing it would quietly turn Claude
 # Code's idle compaction back on. Saying so beats a silent leftover.
