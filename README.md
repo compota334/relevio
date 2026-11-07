@@ -635,6 +635,8 @@ the value it had before.
 - The same safeguards as idle compaction: an invalid or symlinked settings
   file is never rewritten, every other key is kept, no value is ever printed,
   and it never happens on ZCode.
+- A settings file relevio rewrites ends up readable only by you (mode `600`),
+  the safer mode for a file that can hold keys in `env`.
 - **Managed settings win.** If your organization sets `cleanupPeriodDays` in
   `managed-settings.json`, in `managed-settings.d/`, or from the admin console
   (cached in `~/.claude/remote-settings.json`), that value applies whatever
