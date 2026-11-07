@@ -1551,7 +1551,7 @@ mv "$zc/scripts-gone" "$zc/scripts"
 # The plugin manifest must run the hooks through an interpreter, or ZCode's
 # stripped executable bit makes every hook fail with permission denied.
 check "plugin manifest: hooks are invoked through bash, not executed directly" \
-  "$(grep -c '"command": "bash ' "$REPO/hooks/hooks.json")" "2"
+  "$(grep -c '"command": "bash ' "$REPO/hooks/hooks.json")" "3"
 # The commands' fallback must not test for executability either.
 check "kickoff fallback: it tests readability, not the executable bit" \
   "$(grep -c '\[ -r "\$c/relevio-index.sh" \]' "$REPO/commands/kickoff.md")" "1"
@@ -2448,6 +2448,47 @@ else
   echo "  SKIP  archive sweep at session start (age is not installed)"; SKIPS=$((SKIPS + 1))
 fi
 rm -rf "$an" "$anp"
+
+# --- Case 18: the SessionEnd hook --------------------------------------------
+# Each session is archived as it ends. The hook only launches the archiving,
+# detached, prints nothing, and does nothing where it must not.
+check "plugin manifest: SessionEnd runs session-end.sh" \
+  "$(jq -r '.hooks.SessionEnd[0].hooks[0].command' "$REPO/hooks/hooks.json")" 'bash "${CLAUDE_PLUGIN_ROOT}"/hooks/session-end.sh'
+check "session-end: the hook and its template are identical" \
+  "$(cmp -s "$REPO/hooks/session-end.sh" "$REPO/templates/session-end.sh" && echo same)" "same"
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  se="$(mktemp -d)"; seh="$se/home"; sec="$se/cc"; sid=19ab0000-0000-4000-8000-000000000019
+  mkdir -p "$sec/projects/-p"; printf '{"cwd":"/w"}\n' > "$sec/projects/-p/$sid.jsonl"
+  age-keygen 2>/dev/null > "$se/rec.key"
+  sen() {  # $1 payload -> stdout of the hook
+    printf '%s' "$1" | env RELEVIO_HOME="$seh" CLAUDE_CONFIG_DIR="$sec" RELEVIO_TEST_INSECURE_KEYS=1 \
+      RELEVIO_TEST_STABLE_WAIT=0 bash "$REPO/hooks/session-end.sh"
+  }
+  pay="{\"session_id\":\"$sid\",\"transcript_path\":\"$sec/projects/-p/$sid.jsonl\",\"reason\":\"other\"}"
+  check "session-end: before setup it does nothing" "$(sen "$pay"):$(yesno "$([ -e "$seh" ]; echo $?)")" ":no"
+  grep '^AGE-SECRET-KEY' "$se/rec.key" | RELEVIO_HOME="$seh" CLAUDE_CONFIG_DIR="$sec" RELEVIO_TEST_INSECURE_KEYS=1 \
+    RELEVIO_TEST_RECOVERY_IDENTITY="$se/rec.key" bash "$ARC" setup >/dev/null 2>&1
+  : > "$seh/off"; sen "$pay" >/dev/null; sleep 1
+  check "session-end: off means nothing is archived" "$(yesno "$([ -e "$seh/index.tsv" ]; echo $?)")" "no"
+  rm -f "$seh/off"
+  sen "{\"session_id\":\"$sid\",\"transcript_path\":\"/tmp/zcode-claude-hook-x/$sid.jsonl\"}" >/dev/null
+  sen "{\"session_id\":\"../../x\",\"transcript_path\":\"$sec/projects/-p/$sid.jsonl\"}" >/dev/null; sleep 1
+  check "session-end: ZCode and an id that is not a session id are ignored" \
+    "$(yesno "$([ -e "$seh/index.tsv" ]; echo $?)")" "no"
+  t0="$(date +%s%N)"; out="$(sen "$pay")"; t1="$(date +%s%N)"
+  check "session-end: it prints nothing and returns at once" \
+    "$out:$([ $(( (t1 - t0) / 1000000 )) -lt 1000 ] && echo fast)" ":fast"
+  for _ in $(seq 50); do [ -s "$seh/index.tsv" ] && [ ! -d "$seh/lock" ] && break; sleep 0.2; done
+  check "session-end: the session is archived in the background" \
+    "$(awk -F'\t' -v s="$sid" '$2 == s { print $1 }' "$seh/index.tsv" 2>/dev/null)" "active"
+  sen "{\"session_id\":\"$sid\",\"transcript_path\":\"$se/elsewhere/$sid.jsonl\"}" >/dev/null
+  for _ in $(seq 50); do grep -q '^state fail' "$seh/status" 2>/dev/null && break; sleep 0.2; done
+  check "session-end: a transcript outside projects/ is reported in the status" \
+    "$(contains "$(cat "$seh/status")" 'not where relevio expects it')" "yes"
+  rm -rf "$se"
+else
+  echo "  SKIP  session-end archiving (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
 
 # --- Case 13: the one-time migration of pre-v0.22 headers -------------------
 # Other projects (and other people) are running relevio v0.21 and older, where
