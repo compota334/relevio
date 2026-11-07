@@ -249,7 +249,7 @@ record_session_start() {
 # half-written last line does not hide the others.
 transcript_start() {
   local s
-  [ -n "$TRANSCRIPT" ] && [ -r "$TRANSCRIPT" ] || return 0
+  [ -r "$TRANSCRIPT" ] || return 0
   s="$(jq -nR '[inputs | fromjson? | objects | .timestamp? | strings
                 | sub("\\.[0-9]+"; "") | fromdateiso8601?] | min // empty' "$TRANSCRIPT" 2>/dev/null)"
   case "$s" in ""|*[!0-9]*) return 0 ;; esac
@@ -286,35 +286,46 @@ RESUMED_LINE="RESUMED, NOT ARCHIVED: this conversation was resumed, but no hando
 #     behaviour silently;
 #   - never on ZCode, which is not Claude Code and does not read this file;
 #   - only from a session that will announce it, so it is never a silent edit.
-# user_setting_ensure <ok-filter> <update-filter> <was-filter> sets
-# SETTING_RESULT to ok, created, updated, symlink, invalid or failed, and
-# SETTING_WAS to what <was-filter> printed before an update. SETTINGS_FILE
-# names the file.
+# user_setting_ensure <key> <json-value> <ok-predicate> sets SETTING_RESULT to
+# ok, created, updated, symlink, invalid or failed, and SETTING_WAS to the
+# key's previous value (JSON, made safe to quote) on an update, or empty when
+# the key was absent. The settled path, every session after the first, costs
+# one jq per key.
 SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 user_setting_ensure() {
-  local ok="$1" update="$2" was="$3" tmp
+  local key="$1" value="$2" ok="$3" tmp
   SETTING_WAS=""
-  if [ -L "$SETTINGS_FILE" ]; then
-    jq -e "type == \"object\" and ($ok)" "$SETTINGS_FILE" >/dev/null 2>&1 \
-      && SETTING_RESULT=ok || SETTING_RESULT=symlink
+  if [ -e "$SETTINGS_FILE" ] && jq -e "type == \"object\" and ($ok)" "$SETTINGS_FILE" >/dev/null 2>&1; then
+    SETTING_RESULT=ok
+  elif [ -L "$SETTINGS_FILE" ]; then
+    SETTING_RESULT=symlink
   elif [ ! -e "$SETTINGS_FILE" ]; then
     mkdir -p "$(dirname "$SETTINGS_FILE")" 2>/dev/null \
-      && jq -n "{} | $update" > "$SETTINGS_FILE" 2>/dev/null \
+      && jq -n --arg k "$key" --argjson v "$value" '{} | .[$k] = $v' > "$SETTINGS_FILE" 2>/dev/null \
       && SETTING_RESULT=created || SETTING_RESULT=failed
   elif ! jq -e 'type == "object"' "$SETTINGS_FILE" >/dev/null 2>&1; then
     SETTING_RESULT=invalid
-  elif jq -e "$ok" "$SETTINGS_FILE" >/dev/null 2>&1; then
-    SETTING_RESULT=ok
   else
-    SETTING_WAS="$(jq -r "$was" "$SETTINGS_FILE" 2>/dev/null)"
+    SETTING_WAS="$(safe_value "$(jq -r --arg k "$key" 'if has($k) then (.[$k] | tojson) else empty end' "$SETTINGS_FILE" 2>/dev/null)")"
     if tmp="$(mktemp "$SETTINGS_FILE.relevio.XXXXXX" 2>/dev/null)" \
-       && jq "$update" "$SETTINGS_FILE" > "$tmp" 2>/dev/null \
+       && jq --arg k "$key" --argjson v "$value" '.[$k] = $v' "$SETTINGS_FILE" > "$tmp" 2>/dev/null \
        && mv "$tmp" "$SETTINGS_FILE"; then
       SETTING_RESULT=updated
     else
       rm -f "${tmp:-}"; SETTING_RESULT=failed
     fi
   fi
+}
+# A value from a settings file, quoted to the agent: anything but a short run of
+# plain characters could carry text addressed to it.
+safe_value() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9.-' '?' | cut -c1-20; }
+# Why a key could not be written, for the notice that asks the user to do it.
+setting_problem() {
+  case "$SETTING_RESULT" in
+    symlink) printf '%s' "$SETTINGS_FILE is a symbolic link, usually managed by a dotfiles tool, and writing through it would replace the link with a plain file" ;;
+    invalid) printf '%s' "$SETTINGS_FILE is not a valid JSON object, and rewriting it could destroy settings (once it is valid, relevio does it by itself)" ;;
+    *) printf '%s' "relevio could not write $SETTINGS_FILE" ;;
+  esac
 }
 
 # Idle compaction: Claude Code compacts a long conversation left idle for
@@ -327,19 +338,16 @@ user_setting_ensure() {
 # An explicit true is switched too: installing relevio IS the decision not to
 # have conversations compacted, and the announcement says it was true.
 ensure_idle_compaction_off() {
-  local cfg="$SETTINGS_FILE" switched=""
+  local switched=""
   IDLE_LINE=""
   [ "$HOST" != zcode ] && [ "${CHANNEL_KIND:-}" = plugin ] || return 0
-  user_setting_ensure '.idleCompaction == false' '.idleCompaction = false' \
-    'if has("idleCompaction") then (.idleCompaction | tostring) else "absent" end'
+  user_setting_ensure idleCompaction false '.idleCompaction == false'
   case "$SETTING_RESULT" in
     ok) ;;
-    symlink) IDLE_LINE="IDLE COMPACTION IS STILL ON: Claude Code compacts a conversation left idle for about an hour, which destroys the full conversation relevio exists to keep. relevio did not turn it off because $cfg is a symbolic link, usually managed by a dotfiles tool, and writing through it would replace the link with a plain file. Tell the user in one line to add \"idleCompaction\": false to that settings file themselves." ;;
-    invalid) IDLE_LINE="IDLE COMPACTION IS STILL ON: relevio did not touch $cfg because it is not a valid JSON object, and rewriting it could destroy settings. Tell the user in one line that the file needs fixing, and that once it is valid relevio will add \"idleCompaction\": false by itself." ;;
-    failed) IDLE_LINE="IDLE COMPACTION IS STILL ON: relevio could not update $cfg. Tell the user in one line to add \"idleCompaction\": false to it." ;;
+    symlink|invalid|failed) IDLE_LINE="IDLE COMPACTION IS STILL ON: Claude Code compacts a conversation left idle for about an hour, which destroys the full conversation relevio exists to keep. relevio did not turn it off because $(setting_problem). Tell the user in one line to add \"idleCompaction\": false to that file themselves." ;;
     *)
-      case "$SETTING_WAS" in ""|absent) ;; *) switched=" It was set to $SETTING_WAS; relevio switched it, because installing relevio is the choice to keep conversations whole." ;; esac
-      IDLE_LINE="IDLE COMPACTION OFF: relevio set \"idleCompaction\": false in $cfg, once.$switched Claude Code compacts a conversation left idle for about an hour, destroying the full detail relevio exists to keep. Tell the user in one line." ;;
+      [ -z "$SETTING_WAS" ] || switched=" It was set to $SETTING_WAS; relevio switched it, because installing relevio is the choice to keep conversations whole."
+      IDLE_LINE="IDLE COMPACTION OFF: relevio set \"idleCompaction\": false in $SETTINGS_FILE, once.$switched Claude Code compacts a conversation left idle for about an hour, destroying the full detail relevio exists to keep. Tell the user in one line." ;;
   esac
 }
 
@@ -367,36 +375,28 @@ managed_retention() {
   esac
   dir="${RELEVIO_MANAGED_DIR:-$dir}"
   for f in "$dir/managed-settings.json" "$dir"/managed-settings.d/*.json \
-           "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/remote-settings.json"; do
+           "$(dirname "$SETTINGS_FILE")/remote-settings.json"; do
     [ -r "$f" ] || continue
     v="$(jq -r 'if type == "object" and has("cleanupPeriodDays") then (.cleanupPeriodDays | tojson) else empty end' "$f" 2>/dev/null)"
     [ -n "$v" ] || continue
-    MANAGED_FILE="$f"
-    MANAGED_VALUE="$(printf '%s' "$v" | LC_ALL=C tr -c 'A-Za-z0-9.-' '?' | cut -c1-20)"
+    MANAGED_FILE="$f"; MANAGED_VALUE="$(safe_value "$v")"
     return 0
   done
 }
 ensure_retention() {
-  local cfg="$SETTINGS_FILE" was="" managed=""
+  local was=" It was unset (default 30 days)." managed=""
   RETENTION_LINE=""
   [ "$HOST" != zcode ] || return 0
-  user_setting_ensure \
-    "(.cleanupPeriodDays | type) == \"number\" and .cleanupPeriodDays == (.cleanupPeriodDays | floor) and .cleanupPeriodDays >= $RETENTION_DAYS" \
-    ".cleanupPeriodDays = $RETENTION_DAYS" \
-    'if has("cleanupPeriodDays") then (.cleanupPeriodDays | tojson) else "absent" end'
+  user_setting_ensure cleanupPeriodDays "$RETENTION_DAYS" \
+    "(.cleanupPeriodDays | type) == \"number\" and .cleanupPeriodDays == (.cleanupPeriodDays | floor) and .cleanupPeriodDays >= $RETENTION_DAYS"
   case "$SETTING_RESULT" in
-    ok) return 0 ;;
-    symlink) RETENTION_LINE="CONVERSATIONS STILL EXPIRE: Claude Code silently deletes conversations older than \"cleanupPeriodDays\" (30 days by default). relevio did not raise it because $cfg is a symbolic link, usually managed by a dotfiles tool, and writing through it would replace the link with a plain file. Tell the user in one line to set \"cleanupPeriodDays\": $RETENTION_DAYS in that file themselves." ;;
-    invalid) RETENTION_LINE="CONVERSATIONS STILL EXPIRE: Claude Code silently deletes conversations older than \"cleanupPeriodDays\" (30 days by default). relevio did not touch $cfg because it is not a valid JSON object, and rewriting it could destroy settings. Tell the user in one line that the file needs fixing, and that once it is valid relevio will raise the setting by itself." ;;
-    failed) RETENTION_LINE="CONVERSATIONS STILL EXPIRE: Claude Code silently deletes conversations older than \"cleanupPeriodDays\" (30 days by default), and relevio could not update $cfg. Tell the user in one line to set \"cleanupPeriodDays\": $RETENTION_DAYS in it." ;;
+    ok) ;;
+    symlink|invalid|failed) RETENTION_LINE="CONVERSATIONS STILL EXPIRE: Claude Code silently deletes conversations older than \"cleanupPeriodDays\" (30 days by default). relevio did not raise it because $(setting_problem). Tell the user in one line to set \"cleanupPeriodDays\": $RETENTION_DAYS in that file themselves." ;;
     *)
-      case "$SETTING_WAS" in
-        ""|absent) was=" It was unset (default 30 days)." ;;
-        *) was=" It was $(printf '%s' "$SETTING_WAS" | LC_ALL=C tr -c 'A-Za-z0-9.-' '?' | cut -c1-20)." ;;
-      esac
+      [ -z "$SETTING_WAS" ] || was=" It was $SETTING_WAS."
       managed_retention
       [ -z "$MANAGED_FILE" ] || managed=" But managed settings in $MANAGED_FILE set it to $MANAGED_VALUE and win; relevio cannot change that, so say it too."
-      RETENTION_LINE="RETENTION RAISED: relevio set \"cleanupPeriodDays\": $RETENTION_DAYS (100 years) in $cfg, once.$was Claude Code silently deletes older conversations, and a deleted one cannot be reopened.$managed Tell the user in one line." ;;
+      RETENTION_LINE="RETENTION RAISED: relevio set \"cleanupPeriodDays\": $RETENTION_DAYS (100 years) in $SETTINGS_FILE, once.$was Claude Code silently deletes older conversations, and a deleted one cannot be reopened.$managed Tell the user in one line." ;;
   esac
 }
 
