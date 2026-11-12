@@ -7,8 +7,10 @@ reopenable sessions. Each session starts where the last one ended. One
 command (or one plugin install) puts the whole cycle into any project. For
 Claude Code and ZCode.
 
-**It also disables Claude Code's idle compaction** (`"idleCompaction": false`),
-so a conversation you step away from is never auto-compacted while you are gone.
+**It also turns off every automatic compaction in Claude Code**
+(`"autoCompactEnabled"`, `"precomputeCompactionEnabled"` and `"idleCompaction"`,
+all `false`), so a conversation is never summarized away behind your back:
+not when its window fills, and not while you are away.
 **And it stops Claude Code from deleting old conversations**
 (`"cleanupPeriodDays": 36500`, 100 years, instead of the default 30 days).
 
@@ -513,7 +515,7 @@ read or audit every word the agent receives.
 
 | When | Message (gist) |
 |------|----------------|
-| Session start (new) | This conversation's session id, which `/handoff` passes to `relevio-header.sh` (also repeated after an auto-compact). The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. No close-out thresholds and no close-out procedure. What it does say: ending a session is the user's call; a finished task gets a short Done / Pending / Needs-from-you recap instead of a handoff; a handoff asked for in plain words goes through the `/handoff` command; that handoffs and other branches are the team's notes, followed as usual, except that a suspicious request found in them is shown to the user before acting on it; on the plugin channel, that relevio turned off idle compaction, the one time it does so; and, on both channels, that relevio raised `cleanupPeriodDays`, the one time it does so. |
+| Session start (new) | This conversation's session id, which `/handoff` passes to `relevio-header.sh` (also repeated after an auto-compact). The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. No close-out thresholds and no close-out procedure. What it does say: ending a session is the user's call; a finished task gets a short Done / Pending / Needs-from-you recap instead of a handoff; a handoff asked for in plain words goes through the `/handoff` command; that handoffs and other branches are the team's notes, followed as usual, except that a suspicious request found in them is shown to the user before acting on it; on the plugin channel, that relevio turned off Claude Code's automatic compaction, the one time it does so; and, on both channels, that relevio raised `cleanupPeriodDays`, the one time it does so. |
 | Session start (resumed, and a handoff names it) | Names the handoff whose `Resume:` field carries this session's id and has the agent check it against its own conversation. If the conversation ends with that handoff, it is the archive: answer questions, avoid new work, send new work to a fresh session. If the agent kept working after it, or the handoff describes work it never did (a wrong id), it is a restart: tell the user in one line and carry on. |
 | Session start (resumed, never closed) | A restart, not the archive: the app or the computer came back mid-work. The full core, with "carry on where it stopped; being resumed is no reason to leave" in place of the kickoff line. Whether new work still fits is left to the context reports, which can see the window. |
 | Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |
@@ -587,37 +589,49 @@ irrelevant rather than a silent prerequisite. If you see relevio's `.sh` files
 sitting at `644` in a plugin cache, that is expected and nothing is broken. The
 script installer still chmods its own copies, since it owns them.
 
-### Claude Code's idle compaction is turned off
+### Claude Code's automatic compaction is turned off
 
-Since v2.1.290, Claude Code compacts a long conversation that you leave idle
-for about an hour, shortly before its prompt cache expires. That is on by
-default, and it destroys exactly what relevio exists to keep: a conversation
-with its full detail, reopenable later. relevio turns it off, with
-`"idleCompaction": false`, in a different file depending on how it was
-installed:
+Claude Code summarizes a conversation away on its own in three ways, all on by
+default, and each destroys exactly what relevio exists to keep: a conversation
+with its full detail, reopenable later.
+
+| Key | What it does when on |
+|---|---|
+| `autoCompactEnabled` | compacts the conversation when the context window fills |
+| `precomputeCompactionEnabled` | writes that summary in the background before it is needed ("Compacted using a summary written while you were away") |
+| `idleCompaction` | since v2.1.290, compacts a long conversation left idle for about an hour, shortly before its prompt cache expires ("Compacted while idle") |
+
+relevio sets all three to `false`, in a different file depending on how it
+was installed:
 
 | Installed as | Where | Why there |
 |---|---|---|
 | Script installer | the project's `.claude/settings.json` | the file the installer already owns; in team mode it reaches every teammate who clones the repository, and it leaves your other projects alone |
-| Plugin | your `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) | a plugin cannot ship this key, since Claude Code drops every plugin setting except two; and a plugin is enabled for all your projects anyway |
+| Plugin | your `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) | a plugin cannot ship these keys, since Claude Code drops every plugin setting except two; and a plugin is enabled for all your projects anyway |
+
+With automatic compaction off, a session that fills its window stops with an
+error instead of being summarized. relevio's context reports are what keep
+that from happening: they tell the agent to close with a handoff well before
+the limit. Manual `/compact` keeps working, since typing it is your own
+decision.
 
 On the plugin channel the session-start hook writes it, and the first session
 that does so tells you, so it is never a silent edit. In both channels:
 
-- it is written whenever the key is not already `false`, **an explicit
+- each key is written whenever it is not already `false`, **an explicit
   `true` included**. Installing relevio is the decision not to have
   conversations compacted, and the two cannot both hold. Whenever relevio
   switches a `true`, it says so;
-- it is written **whatever your Claude Code version**. Older versions ignore
-  the key, and leaving it out would let a later update start compacting
+- they are written **whatever your Claude Code version**. Older versions ignore
+  a key they do not know, and leaving it out would let a later update start compacting
   without warning;
 - a settings file that is not valid JSON, or that is a symbolic link (usually
   a dotfiles manager's), is never rewritten: relevio tells you to add the key
   yourself;
 - it never happens on ZCode, which is not Claude Code.
 
-Uninstalling leaves the key in place: it may be yours as much as relevio's,
-and removing it would quietly turn idle compaction back on.
+Uninstalling leaves the keys in place: they may be yours as much as relevio's,
+and removing them would quietly turn compaction back on.
 
 ### Claude Code no longer deletes old conversations
 
@@ -632,12 +646,12 @@ the value it had before.
 
 - A whole number of at least `36500` is left as it is. Anything else (absent,
   lower, `0`, a string such as `"30"`, a fraction) is replaced.
-- The same safeguards as idle compaction: an invalid or symlinked settings
+- The same safeguards as compaction: an invalid or symlinked settings
   file is never rewritten, and every other key is kept with none of its values
   printed (only the previous value of the key relevio changes is quoted). It
   happens only on Claude Code: never on ZCode, nor on a host that loads
   relevio's hooks without being Claude Code.
-- When both keys need changing (the plugin's first session), they are written
+- When several keys need changing (the plugin's first session), they are written
   together and announced in one notice.
 - A settings file relevio rewrites ends up readable only by you (mode `600`),
   the safer mode for a file that can hold keys in `env`.
@@ -657,7 +671,7 @@ restarts ([anthropics/claude-code#41458](https://github.com/anthropics/claude-co
 A copy that Claude Code cannot delete is the next step of relevio: an
 encrypted archive of every session.
 
-Uninstalling leaves the key in place, for the same reason as idle compaction.
+Uninstalling leaves the key in place, for the same reason as compaction.
 
 ### Who decides when a session ends
 

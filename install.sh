@@ -12,7 +12,7 @@
 # leftovers so you are not left running two copies of the rules.
 set -euo pipefail
 
-VERSION="0.24.7"
+VERSION="0.24.8"
 REPO_RAW="https://raw.githubusercontent.com/compota334/relevio/main"
 TEMPLATES=(context-warn.sh session-start.sh handoff.md kickoff.md revisit.md INDEX.md)
 # Since v0.22 docs/handoff/INDEX.md is generated rather than hand-edited, so
@@ -245,36 +245,40 @@ register_hook() {
 register_hook PostToolUse context-warn.sh
 register_hook SessionStart session-start.sh
 
-# Claude Code compacts a conversation left idle for about an hour, shortly
-# before its prompt cache expires (idleCompaction, on by default from v2.1.290).
-# That destroys the full, reopenable conversation relevio exists to keep, so
-# the project turns it off. Project scope on purpose: it is the file this
-# installer already owns, it reaches every teammate who clones the repository
-# in team mode, and it leaves the user's other projects alone. It is written
-# whatever Claude Code version is installed: older versions ignore the key, and
-# leaving it out would let a later update start compacting with no warning.
-# An existing true is switched too: installing relevio in a project IS the
-# decision not to have its conversations compacted, and the two cannot both
-# hold. The installer says so when it does it.
-ensure_idle_compaction_off() {
-  local was tmp
-  was="$(jq -r 'if has("idleCompaction") then (.idleCompaction | tostring) else "absent" end' "$SETTINGS")"
-  if [ "$was" = false ]; then
-    info "unchanged: $SETTINGS (idleCompaction already false)"
-    return 0
-  fi
-  tmp="$(mktemp)"
-  jq '.idleCompaction = false' "$SETTINGS" > "$tmp"
-  mv "$tmp" "$SETTINGS"
-  if [ "$was" = absent ]; then
-    info "updated: $SETTINGS (idleCompaction: false, so Claude Code does not compact this project's conversations while you are away)"
-  else
-    info "updated: $SETTINGS (idleCompaction was $was, now false: relevio keeps
-        conversations whole, and idle compaction would destroy them after about
-        an hour away)"
-  fi
+# Claude Code runs three compaction paths on its own, all on by default:
+# autoCompactEnabled (compact when the window fills), precomputeCompactionEnabled
+# (precompute that summary in the background) and idleCompaction (compact a
+# conversation left idle for about an hour, from v2.1.290). Each destroys the
+# full, reopenable conversation relevio exists to keep, so the project turns
+# all three off. Manual /compact stays available: it is the user's own act.
+# Project scope on purpose: it is the file this installer already owns, it
+# reaches every teammate who clones the repository in team mode, and it leaves
+# the user's other projects alone. It is written whatever Claude Code version
+# is installed: older versions ignore a key they do not know, and leaving it
+# out would let a later update start compacting with no warning. An existing
+# true is switched too: installing relevio in a project IS the decision not to
+# have its conversations compacted, and the two cannot both hold. The
+# installer says so when it does it.
+ensure_compaction_off() {
+  local k was tmp
+  for k in autoCompactEnabled precomputeCompactionEnabled idleCompaction; do
+    was="$(jq -r --arg k "$k" 'if has($k) then (.[$k] | tostring) else "absent" end' "$SETTINGS")"
+    if [ "$was" = false ]; then
+      info "unchanged: $SETTINGS ($k already false)"
+      continue
+    fi
+    tmp="$(mktemp)"
+    jq --arg k "$k" '.[$k] = false' "$SETTINGS" > "$tmp"
+    mv "$tmp" "$SETTINGS"
+    if [ "$was" = absent ]; then
+      info "updated: $SETTINGS ($k: false, so Claude Code does not compact this project's conversations on its own)"
+    else
+      info "updated: $SETTINGS ($k was $was, now false: relevio keeps
+        conversations whole, and compaction would summarize them away)"
+    fi
+  done
 }
-ensure_idle_compaction_off
+ensure_compaction_off
 
 # --- 3. Migration: drop the pre-v0.18 block from CLAUDE.md ------------------
 # Up to v0.17 the methodology lived inside CLAUDE.md between markers. Leaving

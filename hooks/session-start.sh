@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.24.7
+# relevio v0.24.8
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -283,15 +283,20 @@ RESUMED_LINE="RESUMED, NOT ARCHIVED: this conversation was resumed, but no hando
 #     number at or above that is kept; anything else (absent, lower, a string,
 #     a fraction) is replaced. The type test matters: jq orders strings above
 #     numbers, so "30" >= 36500 is true.
-#   - idleCompaction: Claude Code compacts a long conversation left idle for
-#     about an hour (on by default from v2.1.290). The script installer turns
-#     it off in the project's .claude/settings.json, the file it already owns.
-#     A plugin cannot carry the key (Claude Code drops every plugin settings
-#     key except agent and subagentStatusLine), so on the plugin channel it is
-#     turned off here, in the user's settings. An explicit true is switched
-#     too: installing relevio IS the decision not to have conversations
-#     compacted.
-# Both keys live in one file, so they are checked with one jq, written with
+#   - autoCompactEnabled, precomputeCompactionEnabled, idleCompaction: the
+#     three compaction paths Claude Code runs on its own, all on by default
+#     (compact when the window fills; precompute that summary in the
+#     background; compact a long conversation left idle for about an hour,
+#     from v2.1.290). Each summarizes the conversation away. The script
+#     installer turns them off in the project's .claude/settings.json, the
+#     file it already owns. A plugin cannot carry the keys (Claude Code drops
+#     every plugin settings key except agent and subagentStatusLine), so on
+#     the plugin channel they are turned off here, in the user's settings. An
+#     explicit true is switched too: installing relevio IS the decision not to
+#     have conversations compacted. Manual /compact stays available: it is the
+#     user's own act, and relevio's context reports stop a session before the
+#     window is full.
+# The keys live in one file, so they are checked with one jq, written with
 # one rename and announced in one notice (two notices on a resumed first
 # session overran the injection budget). Rules, each for a reason:
 #   - only on Claude Code: never on ZCode, and never on a host that sends no
@@ -312,6 +317,8 @@ RESUMED_LINE="RESUMED, NOT ARCHIVED: this conversation was resumed, but no hando
 # remote-settings.json layout is assumed to be the settings object itself.
 SETTINGS_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
 RETENTION_DAYS=36500
+# Claude Code's own compaction paths, all on by default (see above).
+NO_COMPACTION='"autoCompactEnabled": false, "precomputeCompactionEnabled": false, "idleCompaction": false'
 # A value from a settings file, quoted to the agent: anything but a short run of
 # plain characters could carry text addressed to it.
 safe_value() { printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9.-' '?' | cut -c1-20; }
@@ -339,7 +346,7 @@ ensure_user_settings() {
   SETTINGS_LINE=""
   [ "$HOST" != zcode ] && [ -n "$TRANSCRIPT" ] || return 0
   want="{\"cleanupPeriodDays\": $RETENTION_DAYS}"
-  [ "${CHANNEL_KIND:-}" = plugin ] && want="{\"cleanupPeriodDays\": $RETENTION_DAYS, \"idleCompaction\": false}"
+  [ "${CHANNEL_KIND:-}" = plugin ] && want="{\"cleanupPeriodDays\": $RETENTION_DAYS, $NO_COMPACTION}"
   # One "key<TAB>previous value" line per key that needs changing; the previous
   # value is JSON, or empty when the key is absent.
   local needed='. as $doc | $want | to_entries[] | .key as $k | .value as $v
@@ -378,10 +385,11 @@ ensure_user_settings() {
         pairs="${pairs:+$pairs and} \"cleanupPeriodDays\": $RETENTION_DAYS"
         parts="${parts:+$parts and} \"cleanupPeriodDays\": $RETENTION_DAYS (it was ${was:-unset: 30 days})"
         why="$why By default Claude Code deletes conversations after 30 days." ;;
-      idleCompaction)
-        pairs="${pairs:+$pairs and} \"idleCompaction\": false"
-        parts="${parts:+$parts and} \"idleCompaction\": false${was:+ (it was $was)}"
-        why="$why Idle compaction summarizes a conversation away." ;;
+      autoCompactEnabled|precomputeCompactionEnabled|idleCompaction)
+        pairs="${pairs:+$pairs and} \"$k\": false"
+        parts="${parts:+$parts and} \"$k\": false${was:+ (it was $was)}"
+        case "$why" in *"Compaction summarizes"*) ;; *)
+          why="$why Compaction summarizes a conversation away, so relevio turns off every automatic compaction; manual /compact still works." ;; esac ;;
     esac
   done <<EOF
 $todo
@@ -408,7 +416,7 @@ core() {
   ensure_user_settings
   record_session_start
   prune_markers
-  emit "relevio v0.24.7: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+  emit "relevio v0.24.8: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 $1
 
