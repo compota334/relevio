@@ -30,11 +30,15 @@ disappears from this index along with the branch.
 
 ## Active lanes
 
-_No active lanes: every branch with a handoff is merged into `origin/main`, or its branch is gone._
+Branches with handoffs that still exist and are not yet merged into `origin/main`.
+
+| Branch | Dev(s) | Last handoff | Areas | Ahead of main | Note |
+|--------|--------|--------------|-------|---------------|------|
+| `disable-all-compaction` | NICO | 2026-11-12_relevio-v0248-sin-compactacion.md | .claude-plugin/marketplace.json, .claude-plugin/plugin.json, README.md, VERSION, hooks/context-warn.sh, hooks/session-start.sh, +5 more | 3 |  |
 
 ## Catalog
 
-Every session, oldest first (5 in total).
+Every session, oldest first (6 in total).
 
 | Date | Session (conversation name) | Handoff file | Dev | Branch | Areas | Commits | Topics | Summary |
 |------|-----------------------------|--------------|-----|--------|-------|---------|--------|---------|
@@ -43,3 +47,4 @@ Every session, oldest first (5 in total).
 | 2026-08-17 | 17-08-26 relevio v0.20 anti-anticipacion | 2026-08-17_relevio-v020-anti-anticipacion.md | NICO | `main` | .claude-plugin, .gitignore, README.md, VERSION, commands, hooks, install.sh, templates, tests, uninstall.sh | bd9f40c..5bd4bb0 | relevio, anti-anticipacion, prompts, hooks, cadencia, tokens-libres, handoff, arrotrack, code-review, security-review | Rediseno completo de los mensajes que relevio le inyecta al agente (v0.20.0 y v0.20.1), a partir de dos fallas opuestas observadas en sesiones reales: agentes que cerraban al 40-60% porque conocian los umbrales, y agentes que se creian sin ventana porque el silencio entre reportes era ambiguo. Se elimino relevio.md como archivo de runtime, se agrego la cadencia de checkpoints y los tokens libres, y se porto todo a ARROTRACK (PRs #368 y #377, ambos mergeados) donde ademas quedo un gate de reviews previo a cada PR. |
 | 2026-10-15 | 15-10-26 relevio v0.22 a v0.24 equipos zcode compactacion | 2026-10-15_relevio-v022-v024-equipos-zcode-compactacion.md | NICO | `claude/relevio-multi-branch-teams-be28b6` | .claude-plugin, README.md, VERSION, commands, docs, hooks, install.sh, scripts, templates, tests, uninstall.sh | fde285a..0ddc6ec | relevio, carriles, indice-generado, trace, migracion, zcode, idle-compaction, reinicio, cierre, release, seguridad | De v0.21.5 a v0.24.0 en una sesion larga: handoffs por carril para equipos, indice generado con tablero, rastreo de superficies, ZCode funcionando como plugin, el agente ya no cierra por su cuenta, reinicio distinto de archivo, idleCompaction apagado y primera release en GitHub |
 | 2026-11-03 | 03-11-26 relevio v0.24.6 y blueprint del archivo de sesiones | 2026-11-03_relevio-v0246-y-blueprint-archivo-sesiones.md | NICO | `main` | .claude-plugin, README.md, VERSION, commands, hooks, install.sh, scripts, templates, tests, uninstall.sh | 7a29b5b..3aa3562 | relevio, seguridad, inyeccion-de-prompt, cabecera-calculada, needs-fixing, reinicio-vs-archivo, worktrees, release, investigacion, archivo-de-sesiones, blueprint | De v0.24.0 a v0.24.6 publicadas (seguridad contra texto de otras ramas, cabecera de handoff calculada, Opcion B, reinicio que no se confunde con archivo) y blueprint aprobado del archivo encriptado de sesiones para v0.25.0, que la proxima sesion empieza a codear |
+| 2026-11-12 | 12-11-26 relevio v0.24.8 sin compactacion | 2026-11-12_relevio-v0248-sin-compactacion.md | NICO | `disable-all-compaction` | .claude-plugin/marketplace.json, .claude-plugin/plugin.json, README.md, VERSION, hooks/context-warn.sh, hooks/session-start.sh, install.sh, templates/context-warn.sh, templates/session-start.sh, tests/install.sh, uninstall.sh | 73160b5..a6ffbaa | compactacion, settings, autocompact, idlecompaction, release, v0.24.8 | v0.24.8 apaga las tres compactaciones automaticas de Claude Code (autoCompactEnabled, precomputeCompactionEnabled, idleCompaction) en los dos canales, verificado contra el binario 2.1.321 |
