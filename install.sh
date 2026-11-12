@@ -260,23 +260,30 @@ register_hook SessionStart session-start.sh
 # have its conversations compacted, and the two cannot both hold. The
 # installer says so when it does it.
 ensure_compaction_off() {
-  local k was tmp
-  for k in autoCompactEnabled precomputeCompactionEnabled idleCompaction; do
-    was="$(jq -r --arg k "$k" 'if has($k) then (.[$k] | tostring) else "absent" end' "$SETTINGS")"
-    if [ "$was" = false ]; then
-      info "unchanged: $SETTINGS ($k already false)"
-      continue
-    fi
-    tmp="$(mktemp)"
-    jq --arg k "$k" '.[$k] = false' "$SETTINGS" > "$tmp"
-    mv "$tmp" "$SETTINGS"
+  local todo k was tmp
+  # One "key<TAB>previous value" line per key not already false: one read, then
+  # at most one write for all of them.
+  todo="$(jq -r '["autoCompactEnabled", "precomputeCompactionEnabled", "idleCompaction"][] as $k
+    | select(.[$k] != false)
+    | "\($k)\t\(if has($k) then (.[$k] | tostring) else "absent" end)"' "$SETTINGS")"
+  if [ -z "$todo" ]; then
+    info "unchanged: $SETTINGS (automatic compaction already off)"
+    return 0
+  fi
+  tmp="$(mktemp)"
+  printf '%s\n' "$todo" | cut -f1 \
+    | jq -Rn --slurpfile doc "$SETTINGS" 'reduce inputs as $k ($doc[0]; .[$k] = false)' > "$tmp"
+  mv "$tmp" "$SETTINGS"
+  while IFS="$(printf '\t')" read -r k was; do
     if [ "$was" = absent ]; then
       info "updated: $SETTINGS ($k: false, so Claude Code does not compact this project's conversations on its own)"
     else
       info "updated: $SETTINGS ($k was $was, now false: relevio keeps
         conversations whole, and compaction would summarize them away)"
     fi
-  done
+  done <<EOF
+$todo
+EOF
 }
 ensure_compaction_off
 

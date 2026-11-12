@@ -1714,6 +1714,16 @@ check "install: ... saying what it was" \
   "$(contains "$out" 'autoCompactEnabled was true, now false')" "yes"
 rm -rf "$d13"
 
+# The compaction keys are listed in three standalone scripts that share no
+# library (install.sh and uninstall.sh run on their own), so they are kept in
+# step here: a key added to one and missed in another would be a silent gap.
+keys_of() { grep -o '"[A-Za-z]*Compact[A-Za-z]*"' | sort -u | tr '\n' ' '; }
+hook_keys="$(grep '^NO_COMPACTION=' "$REPO/hooks/session-start.sh" | keys_of)"
+check "compaction keys: the installer turns off the same keys as the hook" \
+  "$(grep -F '][] as $k' "$REPO/install.sh" | keys_of)" "$hook_keys"
+check "compaction keys: the uninstaller reports the same keys as the hook" \
+  "$(grep -F 'has("' "$REPO/uninstall.sh" | keys_of)" "$hook_keys"
+
 # --- Case 12n: Claude Code's retention sweep --------------------------------
 # Claude Code silently deletes every transcript older than cleanupPeriodDays
 # (30 by default), and a deleted conversation cannot be resumed. The sweep is
