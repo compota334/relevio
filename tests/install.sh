@@ -1613,19 +1613,31 @@ check "idle: a plugin install with no settings file gets one with the key off" \
   "$(jq -c '.idleCompaction' "$cfg/settings.json" 2>/dev/null)" "false"
 check "idle: ... and the agent is told to say so, so it is never a silent edit" \
   "$(contains "$out" '"idleCompaction": false in')" "yes"
+check "idle: ... together with the other two automatic compaction paths" \
+  "$(jq -c '[.autoCompactEnabled, .precomputeCompactionEnabled]' "$cfg/settings.json" 2>/dev/null)" "[false,false]"
+check "idle: ... all three named in the announcement" \
+  "$(contains "$out" '"autoCompactEnabled": false and "precomputeCompactionEnabled": false and "idleCompaction": false')" "yes"
 check "idle: ... once: the next session says nothing about it" \
   "$(contains "$(idle "$cfg" startup)" 'SETTINGS')" "no"
+rm -rf "$cfg"
+# An explicit autoCompactEnabled true (a /config toggle) is switched too.
+cfg="$(mktemp -d)"; printf '{"autoCompactEnabled": true}\n' > "$cfg/settings.json"
+out="$(idle "$cfg" startup)"
+check "idle: an explicit autoCompactEnabled true is switched to false" \
+  "$(jq -c '.autoCompactEnabled' "$cfg/settings.json")" "false"
+check "idle: ... and the announcement says it was true" \
+  "$(contains "$out" '"autoCompactEnabled": false (it was true)')" "yes"
 rm -rf "$cfg"
 # An existing file keeps everything else, and its values are never printed:
 # a settings file can hold secrets in env.
 cfg="$(mktemp -d)"
 printf '{\n  "permissions": {"allow": ["Bash(ls)"]},\n  "env": {"SOME_TOKEN": "secret-value-xyz"}\n}\n' > "$cfg/settings.json"
-before="$(jq -S 'del(.idleCompaction, .cleanupPeriodDays)' "$cfg/settings.json")"
+before="$(jq -S 'del(.idleCompaction, .autoCompactEnabled, .precomputeCompactionEnabled, .cleanupPeriodDays)' "$cfg/settings.json")"
 out="$(idle "$cfg" startup)"
 check "idle: an existing settings file gets the key added" \
   "$(jq -c '.idleCompaction' "$cfg/settings.json")" "false"
 check "idle: ... with every other setting preserved" \
-  "$(yesno "$([ "$before" = "$(jq -S 'del(.idleCompaction, .cleanupPeriodDays)' "$cfg/settings.json")" ]; echo $?)")" "yes"
+  "$(yesno "$([ "$before" = "$(jq -S 'del(.idleCompaction, .autoCompactEnabled, .precomputeCompactionEnabled, .cleanupPeriodDays)' "$cfg/settings.json")" ]; echo $?)")" "yes"
 check "idle: ... and none of its values printed" \
   "$(contains "$out" 'secret-value-xyz')" "no"
 rm -rf "$cfg"
@@ -1682,6 +1694,8 @@ d13="$(fixture '')"
 ( cd "$d13" && bash "$INSTALLER" >/dev/null 2>&1 )
 check "install: the project's settings turn idle compaction off" \
   "$(jq -c '.idleCompaction' "$d13/.claude/settings.json")" "false"
+check "install: ... and every other automatic compaction path" \
+  "$(jq -c '[.autoCompactEnabled, .precomputeCompactionEnabled]' "$d13/.claude/settings.json")" "[false,false]"
 cp "$d13/.claude/settings.json" "$d13/s1"
 ( cd "$d13" && bash "$INSTALLER" --update >/dev/null 2>&1 )
 check "install: ... and a second run changes nothing" \
@@ -1692,6 +1706,12 @@ check "install: a true in the project is switched to false" \
   "$(jq -c '.idleCompaction' "$d13/.claude/settings.json")" "false"
 check "install: ... saying what it was and why it changed" \
   "$(contains "$out" 'idleCompaction was true, now false')" "yes"
+jq '.autoCompactEnabled = true' "$d13/.claude/settings.json" > "$d13/t" && mv "$d13/t" "$d13/.claude/settings.json"
+out="$( (cd "$d13" && bash "$INSTALLER" --update) 2>&1 )"
+check "install: an autoCompactEnabled true in the project is switched to false" \
+  "$(jq -c '.autoCompactEnabled' "$d13/.claude/settings.json")" "false"
+check "install: ... saying what it was" \
+  "$(contains "$out" 'autoCompactEnabled was true, now false')" "yes"
 rm -rf "$d13"
 
 # --- Case 12n: Claude Code's retention sweep --------------------------------
