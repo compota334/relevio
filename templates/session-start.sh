@@ -342,7 +342,7 @@ managed_retention() {
   done
 }
 ensure_user_settings() {
-  local want todo keys tmp k was parts="" why="" managed="" pairs="" problem=""
+  local want todo keys tmp k was parts="" why="" why_compact="" managed="" pairs="" problem=""
   SETTINGS_LINE=""
   [ "$HOST" != zcode ] && [ -n "$TRANSCRIPT" ] || return 0
   want="{\"cleanupPeriodDays\": $RETENTION_DAYS}"
@@ -385,15 +385,15 @@ ensure_user_settings() {
         pairs="${pairs:+$pairs and} \"cleanupPeriodDays\": $RETENTION_DAYS"
         parts="${parts:+$parts and} \"cleanupPeriodDays\": $RETENTION_DAYS (it was ${was:-unset: 30 days})"
         why="$why By default Claude Code deletes conversations after 30 days." ;;
-      autoCompactEnabled|precomputeCompactionEnabled|idleCompaction)
+      *)  # every compaction key in NO_COMPACTION
         pairs="${pairs:+$pairs and} \"$k\": false"
         parts="${parts:+$parts and} \"$k\": false${was:+ (it was $was)}"
-        case "$why" in *"Compaction summarizes"*) ;; *)
-          why="$why Compaction summarizes a conversation away, so relevio turns off every automatic compaction; manual /compact still works." ;; esac ;;
+        why_compact=" Compaction summarizes a conversation away, so relevio turns off every automatic compaction; manual /compact still works." ;;
     esac
   done <<EOF
 $todo
 EOF
+  why="$why$why_compact"
   if [ -n "$problem" ]; then
     SETTINGS_LINE="SETTINGS NOT CHANGED:$why relevio did not set$pairs because $problem. Tell the user in one line to set it in that file themselves."
     return 0
