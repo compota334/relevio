@@ -943,7 +943,9 @@ d="$(fixture '# My project
 # Simulate a legacy v0.18-0.19 leftover: the uninstaller must clean it up too,
 # but only because the title line proves it is relevio's.
 printf '# Session methodology (relevio v0.19.0)\n\nOld.\n' > "$d/relevio.md"
-(cd "$d" && bash "$UNINSTALLER" >/dev/null 2>&1)
+out="$(cd "$d" && bash "$UNINSTALLER" 2>&1)"
+check "uninstall: the compaction keys are kept, and the user is told" \
+  "$(jq -c '[.autoCompactEnabled, .precomputeCompactionEnabled, .idleCompaction]' "$d/.claude/settings.json"):$(contains "$out" 'compaction settings')" "[false,false,false]:yes"
 check "uninstall: legacy relevio.md gone" "$(yesno "$([ -f "$d/relevio.md" ]; echo $?)")" "no"
 check "uninstall: hooks gone" "$(yesno "$([ -d "$d/.claude/hooks" ]; echo $?)")" "no"
 check "uninstall: the user's CLAUDE.md survived" \

@@ -265,7 +265,7 @@ ensure_compaction_off() {
   # at most one write for all of them.
   todo="$(jq -r '["autoCompactEnabled", "precomputeCompactionEnabled", "idleCompaction"][] as $k
     | select(.[$k] != false)
-    | "\($k)\t\(if has($k) then (.[$k] | tostring) else "absent" end)"' "$SETTINGS")"
+    | "\($k)\t\(if has($k) then (.[$k] | tojson) else "absent" end)"' "$SETTINGS")"
   if [ -z "$todo" ]; then
     info "unchanged: $SETTINGS (automatic compaction already off)"
     return 0
