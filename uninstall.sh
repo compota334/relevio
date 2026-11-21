@@ -124,10 +124,11 @@ if [ -d "${RELEVIO_HOME:-$HOME/.relevio}" ]; then
   echo "Kept: ${RELEVIO_HOME:-$HOME/.relevio} (your encrypted conversation archive and its keys, shared by"
   echo "every project). Delete it yourself only if you want it gone."
 fi
-# The idleCompaction key is left where it is, deliberately: it may be the
-# user's as much as relevio's, and removing it would quietly turn Claude
-# Code's idle compaction back on. Saying so beats a silent leftover.
-if [ -f .claude/settings.json ] && jq -e 'has("idleCompaction")' .claude/settings.json >/dev/null 2>&1; then
-  echo "The \"idleCompaction\" setting in .claude/settings.json was also KEPT: remove it"
-  echo "yourself if you want Claude Code to compact idle conversations again."
+# The compaction keys are left where they are, deliberately: they may be the
+# user's as much as relevio's, and removing them would quietly turn Claude
+# Code's automatic compaction back on. Saying so beats a silent leftover.
+if [ -f .claude/settings.json ] && jq -e 'has("autoCompactEnabled") or has("precomputeCompactionEnabled") or has("idleCompaction")' .claude/settings.json >/dev/null 2>&1; then
+  echo "The compaction settings (autoCompactEnabled, precomputeCompactionEnabled,"
+  echo "idleCompaction) in .claude/settings.json were also KEPT: remove them yourself"
+  echo "if you want Claude Code to compact conversations on its own again."
 fi
