@@ -55,6 +55,9 @@ stamps_load_rows() {
     [ -n "$b" ] && S_ROW["$fo/$b"]="$st$TAB$id$TAB$fo$TAB$b$TAB$salt$TAB$leaf$TAB$q$TAB$s$TAB$h"
   done < <(tail -n +2 "$STAMPS_TSV")
 }
+# Rows are saved only when something changed (a flag set by every writer).
+S_DIRTY=0
+stamps_save_dirty() { [ "$S_DIRTY" = 0 ] || stamps_save_rows; S_DIRTY=0; }
 stamps_save_rows() {
   local k
   { printf '%s\n' "$STAMPS_HEADER"
@@ -73,7 +76,7 @@ leaf_write() {  # <salted hash>
   leaf_text "$1" > "$STAMP_DIR/$name.leaf"
   printf '%s' "$name"
 }
-new_salt() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+new_salt() { rand_hex 32; }
 
 # --- queue: one leaf per archived generation ------------------------------------------
 # The transcript is read from ~/.claude/projects when its first <archived
@@ -92,21 +95,27 @@ stamps_queue() {
     else
       S_ROW["$fo/$b"]="needs-key$TAB$id$TAB$fo$TAB$b$TAB$RELEVIO_NONE$TAB$RELEVIO_NONE$TAB$(date +%s)$TAB$RELEVIO_NONE$TAB$RELEVIO_NONE"
     fi
-    added=$((added + 1))
+    added=$((added + 1)); S_DIRTY=1
   done < <(tail -n +2 "$INDEX" 2>/dev/null)
   [ "$added" -eq 0 ] || stamps_save_rows
 }
 
 # --- batch and upgrade ---------------------------------------------------------------
-stamps_status_write() {  # <ok|fail> <message>
-  { echo "state $1"; echo "at $(date +%s)"; echo "message $(printf '%s' "${2:-}" | tr '\n\t' '  ' | cut -c1-200)"; } > "$RH/stamps.status.tmp"
-  mv "$RH/stamps.status.tmp" "$RH/stamps.status"
+stamps_status_write() { kv_status_write "$RH/stamps.status" "$@"; }
+stamps_status_field() { kv_status_field "$RH/stamps.status" "$1"; }
+# earliest_bitcoin <attest output file> <name>: "<height> <merkle>" of the
+# earliest Bitcoin block that proof <name> is anchored in, or nothing.
+earliest_bitcoin() { awk -v n="$2" '$1 == n && $2 == "bitcoin" { print $3, $4 }' "$1" | sort -k1,1n | head -1; }
+# throttled <config key> <seconds>: true (and the key set to now) when the last
+# try was at least that long ago; force skips the wait.
+throttled() {
+  local last now; now="$(date +%s)"; last="$(config_get "$1")"
+  [ "${3:-auto}" = force ] || [ -z "$last" ] || [ $((now - last)) -ge "$2" ] || return 1
+  config_set "$1" "$now"
 }
-stamps_status_field() { [ -r "$RH/stamps.status" ] || return 0; sed -n "s/^$1 //p" "$RH/stamps.status" | head -1; }
-STAMP_ERR=""
 # stamps_batch <force|auto>: sends every pending leaf in one client call.
 stamps_batch() {
-  local k st q now oldest="" n=0 last err
+  local k st q now oldest="" n=0 err id fo b salt leaf h
   local -a files=()
   now="$(date +%s)"
   for k in "${!S_ROW[@]}"; do
@@ -118,27 +127,26 @@ stamps_batch() {
   [ "$n" -gt 0 ] || return 0
   if [ "$1" = auto ]; then
     [ $((now - oldest)) -ge "$STAMP_MAX_WAIT" ] || [ "$n" -ge "$STAMP_MAX_BATCH" ] || return 0
-    last="$(config_get stamp_last_try)"
-    [ -z "$last" ] || [ $((now - last)) -ge "$STAMP_RETRY" ] || return 0
   fi
-  config_set stamp_last_try "$now"
+  throttled stamp_last_try "$STAMP_RETRY" "$1" || return 0
   # At least 2 calendars must answer (measured: with one down the proof is
   # still made from the others; with none, the client fails and writes nothing).
   if ! err="$("$OTS_BIN" -q stamp -m 2 "${files[@]}" 2>&1)"; then
-    STAMP_ERR="no timestamp calendar answered ($(printf '%s' "$err" | tail -1 | tr -c 'A-Za-z0-9 ._:-' ' ' | cut -c1-120)); the $n leaf(s) stay queued"
+    R_ERR="no timestamp calendar answered ($(printf '%s' "$err" | tail -1 | safe_msg | cut -c1-120)); the $n leaf(s) stay queued"
     return 1
   fi
   for k in "${!S_ROW[@]}"; do
     IFS="$TAB" read -r st id fo b salt leaf q _ h <<<"${S_ROW[$k]}"
     [ "$st" = pending ] && [ -s "$STAMP_DIR/$leaf.leaf.ots" ] || continue
-    S_ROW["$k"]="stamped$TAB$id$TAB$fo$TAB$b$TAB$salt$TAB$leaf$TAB$q$TAB$now$TAB$h"
+    S_ROW["$k"]="stamped$TAB$id$TAB$fo$TAB$b$TAB$salt$TAB$leaf$TAB$q$TAB$now$TAB$h"; S_DIRTY=1
   done
   log "stamps: $n leaf(s) sent to the calendars"
 }
-# stamps_upgrade <force|auto>: asks the calendars for the Bitcoin part of
-# every proof sent at least an hour ago. A proof still pending stays stamped.
+# stamps_upgrade <force|auto>: asks the calendars, at most once an hour, for
+# the Bitcoin part of every proof sent at least an hour ago, then reads all of
+# them in ONE helper call. A proof still pending stays stamped.
 stamps_upgrade() {
-  local k st id fo b salt leaf q s h now line n=0 done_n=0
+  local k st id fo b salt leaf q s h now line n=0 done_n=0 out="$RH/.attest"
   local -a files=()
   now="$(date +%s)"
   for k in "${!S_ROW[@]}"; do
@@ -148,41 +156,48 @@ stamps_upgrade() {
     files+=("$STAMP_DIR/$leaf.leaf.ots"); n=$((n + 1))
   done
   [ "$n" -gt 0 ] || return 0
+  throttled stamp_last_upgrade "$STAMP_RETRY" "$1" || return 0
   # Exit status is not success while any proof is still waiting: read each.
   "$OTS_BIN" -q upgrade "${files[@]}" >/dev/null 2>&1 || true
+  "${OTS_HELPER[@]}" attest "${files[@]}" > "$out" 2>/dev/null || true
   for k in "${!S_ROW[@]}"; do
     IFS="$TAB" read -r st id fo b salt leaf q s h <<<"${S_ROW[$k]}"
     [ "$st" = stamped ] || continue
-    line="$("${OTS_HELPER[@]}" attest "$STAMP_DIR/$leaf.leaf.ots" 2>/dev/null | grep '^bitcoin ' | sort -k2,2n | head -1 || true)"
+    line="$(earliest_bitcoin "$out" "$leaf.leaf.ots")"
     [ -n "$line" ] || continue
-    read -r _ h _ <<<"$line"
-    S_ROW["$k"]="complete$TAB$id$TAB$fo$TAB$b$TAB$salt$TAB$leaf$TAB$q$TAB$s$TAB$h"
+    read -r h _ <<<"$line"
+    S_ROW["$k"]="complete$TAB$id$TAB$fo$TAB$b$TAB$salt$TAB$leaf$TAB$q$TAB$s$TAB$h"; S_DIRTY=1
     done_n=$((done_n + 1))
   done
+  rm -f "${out:?}"
   [ "$done_n" -eq 0 ] || log "stamps: $done_n proof(s) confirmed in Bitcoin"
 }
 # After every archiving run (lock held). Never fails the run: the stamp
 # status says what went wrong.
 stamp_after_run() {
   stamping_on || return 0
-  ( stamps_load; stamps_queue
-    if stamps_batch auto; then stamps_upgrade auto; stamps_save_rows; stamps_status_write ok ""
-    else stamps_save_rows; stamps_status_write fail "$STAMP_ERR"; log "stamps: $STAMP_ERR"; fi ) 2>"$RH/.stamp.err" \
-    || { stamps_status_write fail "stamping did not run: $(sed 's/^ERROR: //' "$RH/.stamp.err" | tail -1 | cut -c1-150)"; log "stamps: did not run"; }
-  rm -f "$RH/.stamp.err"
-  return 0
+  run_isolated stamps_status_write stamp stamps_auto
+}
+stamps_auto() {
+  R_ERR=""
+  stamps_load; stamps_queue
+  if stamps_batch auto; then
+    stamps_upgrade auto; stamps_save_dirty; stamps_status_write ok ""
+  else
+    stamps_save_dirty; stamps_status_write fail "$R_ERR"; log "stamps: $R_ERR"
+  fi
 }
 
 # --- commands ------------------------------------------------------------------------------
 cmd_stamp() {
   local sub="${1:-}"; shift || true
   check_writable; is_set_up || die "the archive is not set up in $RH: run setup first."
-  load_config; SHA="$(sha_tool)" || die "no sha256 tool found."
+  tools_load
   case "$sub" in
     setup) stamp_setup ;;
     status) stamp_show ;;
     now) stamp_now ;;
-    backfill) stamp_backfill ;;
+    backfill) stamp_backfill "$@" ;;
     off) config_unset stamping; echo "Timestamping is off. Proofs already made stay valid and stay in $STAMP_DIR." ;;
     *) die "stamp needs: setup | status | now | backfill | off" ;;
   esac
@@ -211,15 +226,14 @@ stamp_setup() {
 }
 stamp_now() {
   stamping_on || die "timestamping is off: run stamp setup first."
-  trap release_lock EXIT
-  take_lock wait || die "an archiving run holds the lock; try again in a minute."
+  lock_or_die
   stamps_load; stamps_queue
-  if ! stamps_batch force; then stamps_save_rows; stamps_status_write fail "$STAMP_ERR"; die "$STAMP_ERR. Nothing is lost: they are sent next time."; fi
-  stamps_upgrade force; stamps_save_rows; stamps_status_write ok ""
+  if ! stamps_batch force; then stamps_save_dirty; stamps_status_write fail "$R_ERR"; die "$R_ERR. Nothing is lost: they are sent next time."; fi
+  stamps_upgrade force; stamps_save_dirty; stamps_status_write ok ""
   stamp_show
 }
 stamp_show() {
-  local st c n p s k nk
+  local st k
   if ! stamping_on; then echo "stamps: off. Turn on with: stamp setup"; return 0; fi
   stamps_load_rows
   declare -A C=([pending]=0 [stamped]=0 [complete]=0 [needs-key]=0)
@@ -232,11 +246,10 @@ stamp_show() {
 # Rows whose transcript is gone: open each bundle (user's terminal, a key)
 # and compute the leaf from what was archived.
 stamp_backfill() {
-  local use=main idn k st id fo b tmp n=0 salt salted leaf
+  local use=main idn k st id fo b n=0 salt salted leaf tmp
   [ "${1:-}" = --recovery ] && use=recovery
   require_tty; stamping_on || die "timestamping is off: run stamp setup first."
-  trap 'rm -rf "${STAMP_TMP:-}"; release_lock' EXIT
-  take_lock wait || die "an archiving run holds the lock; try again in a minute."
+  STAMP_TMP=""; lock_or_die STAMP_TMP
   stamps_queue
   for k in "${!S_ROW[@]}"; do [ "${S_ROW[$k]%%$TAB*}" = needs-key ] && n=$((n + 1)); done
   [ "$n" -gt 0 ] || { echo "Nothing needs a key: every archived conversation has its leaf."; return 0; }
@@ -268,7 +281,7 @@ cmd_proof() {
     case "$1" in --out) out="${2:-}"; shift 2 ;; --recovery) use=recovery; shift ;; *) die "unknown proof option '$(relevio_safe "$1")'" ;; esac
   done
   check_home; is_set_up || die "the archive is not set up in $RH."
-  load_config; SHA="$(sha_tool)" || die "no sha256 tool found."
+  tools_load
   [[ $id =~ $SESSION_RE ]] || die "'$(relevio_safe "$id")' is not a session id."
   stamps_load_rows
   # The current generation of the session (its bundle is <id>.tgz.age).
@@ -339,17 +352,17 @@ cmd_proof_check() {
   local d="${1:-}" salted want line height merkle api hash got t ok=0 bad=0
   [ -d "$d" ] || die "give the proof folder: proof-check <folder>"
   for f in conversation.jsonl salt.txt leaf.txt leaf.txt.ots; do [ -f "$d/$f" ] || die "$(relevio_safe "$d") has no $f: not a relevio proof folder."; done
-  SHA="$(sha_tool)" || die "no sha256 tool found."
-  load_config
+  tools_load
   salted="$(salted_of "$(head -1 "$d/salt.txt")" < "$d/conversation.jsonl")"
   want="$(sed -n 's/^salted-sha256 //p' "$d/leaf.txt")"
   [ "$salted" = "$want" ] || die "the conversation does NOT match the stamped leaf: it was changed after it was stamped (or the salt is wrong)."
   echo "1. conversation.jsonl matches the stamped leaf (salted sha256)."
   stamps_load
   [ "$("${OTS_HELPER[@]}" digest "$d/leaf.txt.ots")" = "$(sha_of < "$d/leaf.txt")" ] || die "leaf.txt.ots is the proof of another file, not of leaf.txt."
-  line="$("${OTS_HELPER[@]}" attest "$d/leaf.txt.ots" | grep '^bitcoin ' | sort -k2,2n | head -1 || true)"
+  "${OTS_HELPER[@]}" attest "$d/leaf.txt.ots" > "$d/.attest" || { rm -f "$d/.attest"; die "leaf.txt.ots is not a readable proof."; }
+  line="$(earliest_bitcoin "$d/.attest" leaf.txt.ots)"; rm -f "$d/.attest"
   [ -n "$line" ] || { echo "2. NOT confirmed in Bitcoin yet: the calendars still hold it. Try again in a few hours."; exit 1; }
-  read -r _ height merkle <<<"$line"
+  read -r height merkle <<<"$line"
   for api in "${EXPLORERS[@]}"; do
     hash="$(curl -fsS --max-time 20 "$api/block-height/$height" 2>/dev/null | grep -E '^[0-9a-f]{64}$' || true)"
     [ -n "$hash" ] || { echo "   $api: no answer"; continue; }

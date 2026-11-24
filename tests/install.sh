@@ -2705,7 +2705,16 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     check "copy ($kind): ... and the next push writes the current catalog back" \
       "$(cpa verify >/dev/null 2>&1; echo $?)" "0"
     if [ "$kind" = folder ]; then
+      # An archiving run with nothing new trusts the upload records: no call
+      # to the copy at all, until the daily audit is due.
       mv "$cp_t/cloud" "$cp_t/cloud.away"
+      cpa sync --all >/dev/null 2>&1
+      check "copy (folder): a run with nothing new does not touch the copy" \
+        "$(grep -c '^state ok' "$cp_t/h/remote.status")" "1"
+      sed -i 's/^remote_audit_at=.*/remote_audit_at=1/' "$cp_t/h/config"
+      cpa sync --all >/dev/null 2>&1
+      check "copy (folder): ... and the daily audit does, and says when the copy is gone" \
+        "$(grep -c '^state fail' "$cp_t/h/remote.status")" "1"
       out="$(cpa push 2>&1)"; rc=$?
       check "copy (folder): a missing folder fails loud, with what to check" \
         "$rc:$(contains "$out" 'is the drive or the sync client mounted')" "2:yes"
@@ -2802,11 +2811,14 @@ else
 fi
 FAKE
   cat > "$sp_t/helper" <<'FAKE'
-read -r st dg < "$2"
-case "$1" in
-  digest) echo "$dg" ;;
-  attest) if [ "$st" = COMPLETE ]; then echo "bitcoin 900000 $(printf 'root' | sha256sum | cut -c1-64)"; else echo "pending https://fake"; fi ;;
-esac
+cmd="$1"; shift
+for f in "$@"; do
+  read -r st dg < "$f"
+  case "$cmd" in
+    digest) echo "$dg" ;;
+    attest) if [ "$st" = COMPLETE ]; then echo "${f##*/} bitcoin 900000 $(printf 'root' | sha256sum | cut -c1-64)"; else echo "${f##*/} pending https://fake"; fi ;;
+  esac
+done
 FAKE
   h="$(printf 'block' | sha256sum | cut -c1-64)"
   echo "$h" > "$sp_t/api/block-height/900000"
@@ -2842,6 +2854,8 @@ FAKE
     "$(contains "$(spa stamp status 2>&1)" '1 need a key')" "yes"
   check "stamp: a leaf holds only a salted hash: no transcript text, no session id" \
     "$(grep -rl -e 'transcript-text' -e '0000000' "$sp_t/h/stamps" | grep -c .):$(head -1 "$(ls "$sp_t/h/stamps/"*.leaf | head -1)")" "0:relevio timestamp leaf 1"
+  check "stamp: backfill --recovery really asks for the recovery key (a wrong one is refused)" \
+    "$(age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY' | spa stamp backfill --recovery >/dev/null 2>&1; echo $?):$(contains "$(spa stamp status 2>&1)" '1 need a key')" "2:yes"
   out="$(grep '^AGE-SECRET-KEY' "$sp_t/rec.key" | spa stamp backfill --recovery 2>&1)"
   check "stamp: backfill opens the archived copy and queues its leaf" \
     "$(contains "$out" '1 leaf(s) computed'):$(contains "$(spa stamp status 2>&1)" '1 queued')" "yes:yes"

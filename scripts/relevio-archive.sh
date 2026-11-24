@@ -167,6 +167,19 @@ find_deps() {
   [ -z "$missing" ] || die "missing:$missing. On Ubuntu: sudo apt install age jq (tar, gzip and sha256sum come with the system)."
 }
 config_get() { [ -r "$RH/config" ] || return 0; sed -n "s/^$1=//p" "$RH/config" | head -1; }
+config_set() {  # <key> <value>: one line per key, rewritten through a temp file
+  KEY="$1" VAL="$2" awk -F= -v OFS== '
+    BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VAL"] }
+    $1 == k { if (!done) print k, v; done = 1; next }
+    { print }
+    END { if (!done) print k, v }' "$RH/config" > "$RH/config.tmp"
+  mv "$RH/config.tmp" "$RH/config"
+}
+config_unset() { KEY="$1" awk -F= '$1 != ENVIRON["KEY"]' "$RH/config" > "$RH/config.tmp"; mv "$RH/config.tmp" "$RH/config"; }
+rand_hex() { head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+# The one alphabet for any outside text (an error, a path, a provider's
+# message) that reaches the user or the agent.
+safe_msg() { LC_ALL=C tr -c 'A-Za-z0-9 ._/:(),-' '?'; }
 load_config() {
   [ -r "$RH/config" ] || die "$RH/config is missing: run setup first."
   [ "$(config_get format)" = "$ARCHIVE_FORMAT" ] || die "$RH/config is format '$(relevio_safe "$(config_get format)")', and this relevio reads format $ARCHIVE_FORMAT. Update relevio."
@@ -178,6 +191,10 @@ load_config() {
 }
 
 is_set_up() { [ -s "$RH/keys/recipients.txt" ]; }
+# Every command that reads the archive loads its config and its hash tool
+# here, so no code path can run with an empty AGE or SHA (an empty SHA makes
+# every hash, and every opaque name, silently empty).
+tools_load() { load_config; SHA="$(sha_tool)" || die "no sha256 tool (sha256sum or shasum) found."; }
 
 # new_recovery_key <show label> <confirm label>: makes a recovery key, shows it
 # once, and has the user paste it back (3 tries). Sets REC_PUB; returns 1 when
@@ -404,6 +421,44 @@ status_write() {  # $1 state  $2 message
   { echo "state $1"; echo "at $(date +%s)"; echo "pid $$"; echo "scope ${RUN_SCOPE:-$RELEVIO_NONE}"
     echo "counts $(counts)"; echo "message $(printf '%s' "${2:-}" | tr '\n\t' '  ' | cut -c1-200)"; } > "$RH/status.tmp"
   mv "$RH/status.tmp" "$RH/status"
+}
+# kv_status_write <file> <state> <message>: the small status files of the copy
+# and of the stamps (the archive's own status carries more lines).
+kv_status_write() {
+  { echo "state $2"; echo "at $(date +%s)"; echo "message $(printf '%s' "${3:-}" | tr '\n\t' '  ' | cut -c1-200)"; } > "$1.tmp"
+  mv "$1.tmp" "$1"
+}
+kv_status_field() { [ -r "$1" ] || return 0; sed -n "s/^$2 //p" "$1" | head -1; }
+# run_isolated <status writer> <label> <function>: a step after an archiving
+# run (the copy, the stamps). A subshell, so a die inside ends only that step
+# and leaves the run's own result alone; its reason goes to the step's status.
+run_isolated() {
+  local err="$RH/.$2.err"
+  ( "$3" ) 2>"$err" || { "$1" fail "the $2 step did not run: $(sed 's/^ERROR: //' "$err" | tail -1 | cut -c1-150)"; log "$2: did not run"; }
+  rm -f "${err:?}"
+  return 0
+}
+# lock_or_die [<variable naming a temp dir>]: takes the lock for a command
+# the user runs, and releases it (and removes that dir) on exit.
+lock_or_die() {
+  LOCK_TMP_VAR="${1:-}"
+  trap 'release_lock; [ -z "$LOCK_TMP_VAR" ] || [ -z "${!LOCK_TMP_VAR:-}" ] || rm -rf "${!LOCK_TMP_VAR:?}"' EXIT
+  take_lock wait || die "an archiving run holds the lock; try again in a minute."
+}
+# archive_stats: A_STAT["<folder>/<bundle>"]="<bytes> <mtime>" for every
+# bundle, in one find call (GNU), or one stat per file elsewhere.
+declare -A A_STAT
+archive_stats() {
+  local p by mt f
+  A_STAT=()
+  [ -d "$RH/archive" ] || return 0
+  if find "$RH/archive" -maxdepth 0 -printf '' 2>/dev/null; then
+    while IFS="$TAB" read -r p by mt; do A_STAT["$p"]="$by ${mt%%.*}"; done \
+      < <(find "$RH/archive" -mindepth 2 -maxdepth 2 -type f -name '*.age' -printf '%P\t%s\t%T@\n')
+  else
+    while IFS= read -r -d '' f; do A_STAT["${f#"$RH/archive/"}"]="$(file_stat "$f")"; done \
+      < <(find "$RH/archive" -mindepth 2 -maxdepth 2 -type f -name '*.age' -print0)
+  fi
 }
 # A run that stops before its end (an error, a signal) leaves the status
 # saying so, so the next session start can speak for it.
@@ -709,8 +764,7 @@ begin_run() {  # $1 scope  $2 quiet|wait
   check_writable
   [ ! -e "$RH/off" ] && is_set_up || return 1
   RUN_SCOPE="$1"
-  load_config
-  SHA="$(sha_tool)" || die "no sha256 tool (sha256sum or shasum) found."
+  tools_load
   # Without the lock the status belongs to the run that holds it: only log.
   take_lock "$2" || { log "run $1: another run holds the lock, nothing done"; RUN_DONE=1; return 1; }
   status_write running ""
@@ -879,7 +933,7 @@ cmd_restore() {
   require_tty
   printf '%s' "$id" | grep -Eq "$SESSION_RE" || die "'$(relevio_safe "$id")' is not a session id (a UUID such as 14a94261-6409-412a-9ef9-dafb55e2cdbd)."
   is_set_up || die "the archive is not set up in $RH."
-  load_config; SHA="$(sha_tool)"
+  tools_load
   [ -s "$INDEX" ] || die "nothing is archived yet."
   if [ -n "$gen" ]; then
     lines="$(awk -F'\t' -v id="$id" -v g="$gen" 'NR > 1 && $2 == id && $10 == g' "$INDEX")"
@@ -991,7 +1045,7 @@ cmd_keys() {
   [ "${2:-}" = --recovery ] && use=recovery
   check_writable; require_tty
   is_set_up || die "the archive is not set up in $RH."
-  load_config
+  tools_load
   case "$sub" in
     check) keys_check "$use" ;;
     passphrase) keys_passphrase ;;
@@ -1115,6 +1169,7 @@ cmd_forget() {
   check_writable; require_tty
   [[ $id =~ $SESSION_RE ]] || die "'$(relevio_safe "$id")' is not a session id."
   is_set_up || die "the archive is not set up in $RH."
+  tools_load
   # Every bundle of the session: those in the index, and orphan generations
   # (bundles kept because they had no index line).
   files="$( { awk -F'\t' -v id="$id" 'NR > 1 && $2 == id { print $3 "/" $10 }' "$INDEX" 2>/dev/null
@@ -1238,7 +1293,7 @@ EOF
 cmd_notice() {
   local err k v st="" at=0 pid=0 msg="" mark
   if ! err="$( (check_home; ! is_set_up || check_writable) 2>&1 )"; then
-    echo "ARCHIVE FAILING: $(printf '%s' "${err#ERROR: }" | LC_ALL=C tr -c 'A-Za-z0-9 ._/:(),-' '?' | cut -c1-200). Tell the user in one line."
+    echo "ARCHIVE FAILING: $(printf '%s' "${err#ERROR: }" | safe_msg | cut -c1-200). Tell the user in one line."
     return 0
   fi
   [ ! -e "$RH/off" ] || return 0
@@ -1267,12 +1322,12 @@ cmd_notice() {
   case "$pid" in ""|*[!0-9]*) pid=0 ;; esac
   # The copy off this machine, only when the archive itself has nothing to say.
   if [ "$st" = ok ] && [ "$(remote_status_field state)" = fail ]; then
-    echo "ARCHIVE COPY FAILING: $(printf '%s' "$(remote_status_field message)" | LC_ALL=C tr -c 'A-Za-z0-9 ._/:(),-' '?' | cut -c1-150). Tell the user in one line; details: bash \"$SELF\" remote status"
+    echo "ARCHIVE COPY FAILING: $(printf '%s' "$(remote_status_field message)" | safe_msg | cut -c1-150). Tell the user in one line; details: bash \"$SELF\" remote status"
     return 0
   fi
   case "$st" in
     fail)
-      echo "ARCHIVE FAILING since $(fmt_time "$at"): $(printf '%s' "$msg" | LC_ALL=C tr -c 'A-Za-z0-9 ._/:(),-' '?' | cut -c1-150). Tell the user in one line; the details are in: bash \"$SELF\" status" ;;
+      echo "ARCHIVE FAILING since $(fmt_time "$at"): $(printf '%s' "$msg" | safe_msg | cut -c1-150). Tell the user in one line; the details are in: bash \"$SELF\" status" ;;
     running)
       kill -0 "$pid" 2>/dev/null || echo "ARCHIVE INTERRUPTED: the last archiving run stopped before finishing; the next one resumes it. Tell the user in one line only if they ask about the archive." ;;
     ok)

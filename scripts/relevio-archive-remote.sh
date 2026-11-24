@@ -21,18 +21,13 @@
 REMOTE_TSV="$RH/remote.tsv"
 REMOTE_HEADER="#relevio-remote	1"
 CATALOG_FORMAT=1
+# What the encrypted catalog carries besides its META (stamps/ is a folder).
+CATALOG_FILES=(index.tsv folders.tsv forgotten.tsv remote.tsv stamps.tsv)
+# The config keys that describe the copy; `remote set` and `remote off` reset them.
+REMOTE_STATE_KEYS=(catalog_seq catalog_md5 catalog_stamps sent_main.age sent_recipients.txt readme_sent remote_audit_at)
+REMOTE_AUDIT_EVERY=86400
 RCLONE_OPTS=(--retries 2 --low-level-retries 3 --contimeout 15s --timeout 60s)
 
-# --- config ------------------------------------------------------------------------
-config_set() {  # <key> <value>: one line per key, rewritten through a temp file
-  KEY="$1" VAL="$2" awk -F= -v OFS== '
-    BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VAL"] }
-    $1 == k { if (!done) print k, v; done = 1; next }
-    { print }
-    END { if (!done) print k, v }' "$RH/config" > "$RH/config.tmp"
-  mv "$RH/config.tmp" "$RH/config"
-}
-config_unset() { KEY="$1" awk -F= '$1 != ENVIRON["KEY"]' "$RH/config" > "$RH/config.tmp"; mv "$RH/config.tmp" "$RH/config"; }
 remote_is_set() { [ -n "$(config_get remote_kind)" ]; }
 # Sets R_KIND, R_TARGET, R_BASE (this machine's folder in the copy), RCLONE.
 remote_load() {
@@ -46,12 +41,14 @@ remote_load() {
     [ -n "$RCLONE" ] && [ -x "$RCLONE" ] || die "rclone is missing at '$(relevio_safe "$RCLONE")': install it (sudo apt install rclone) and run remote set again."
   fi
 }
+target_safe() { printf '%s' "$1" | safe_msg; }
 
 # --- transports ----------------------------------------------------------------------
 # Every t_* call either succeeds or returns 1 with R_ERR set to a one-line
-# reason the user can act on. rclone's exit codes do not tell a lost login from
-# a lost network (measured: both exit 1), so the reason comes from its message.
-R_ERR=""
+# reason the user can act on. Those that return data write it into a file
+# given as their first argument: never call them inside $( ), where R_ERR
+# would be lost. rclone's exit codes do not tell a lost login from a lost
+# network (measured: both exit 1), so the reason comes from its message.
 rclone_reason() {  # stdin: rclone's stderr
   local e; e="$(cat)"
   case "$e" in
@@ -61,37 +58,37 @@ rclone_reason() {  # stdin: rclone's stderr
     *"dial tcp"*|*"no such host"*|*"connection refused"*|*"i/o timeout"*|*"network is unreachable"*|*"TLS handshake timeout"*)
       R_ERR="no connection to the cloud: offline, or the provider is down" ;;
     *"directory not found"*|*"object not found"*|*"file not found"*) R_ERR="not found in the copy" ;;
-    *) R_ERR="rclone failed: $(printf '%s' "$e" | tail -1 | relevio_safe_stdin | cut -c1-160)" ;;
+    *) R_ERR="rclone failed: $(printf '%s' "$e" | tail -1 | safe_msg | cut -c1-160)" ;;
   esac
 }
-relevio_safe_stdin() { tr -c 'A-Za-z0-9._/:() -' '?'; }
-target_safe() { printf '%s' "$1" | relevio_safe_stdin; }
 rc() {  # run rclone, R_ERR on failure
   local err
   if err="$("$RCLONE" "${RCLONE_OPTS[@]}" "$@" 2>&1 >/dev/null)"; then return 0; fi
   rclone_reason <<<"$err"; return 1
 }
-rc_to() {  # <out file> <rclone args>: stdout into the file, R_ERR on failure.
-  # Never called inside $( ): R_ERR set in a subshell would be lost.
+# rc_list <out file> <rclone args>: a listing into the file; a folder that
+# does not exist yet is an empty listing, not an error.
+rc_list() {
   local o="$1"; shift
-  if "$RCLONE" "${RCLONE_OPTS[@]}" "$@" > "$o" 2>"$RH/.rclone.err"; then rm -f "$RH/.rclone.err"; return 0; fi
-  rclone_reason < "$RH/.rclone.err"; rm -f "$RH/.rclone.err"; return 1
+  if "$RCLONE" "${RCLONE_OPTS[@]}" "$@" > "$o" 2>"$RH/.rclone.err"; then rm -f "${RH:?}/.rclone.err"; return 0; fi
+  rclone_reason < "$RH/.rclone.err"; rm -f "${RH:?}/.rclone.err"
+  [ "$R_ERR" = "not found in the copy" ] && { : > "$o"; return 0; }
+  return 1
 }
 folder_ok() {
   [ -d "$R_TARGET" ] || { R_ERR="the folder $(target_safe "$R_TARGET") is gone: is the drive or the sync client mounted"; return 1; }
 }
+folder_write_err() { R_ERR="could not write into $(target_safe "$R_TARGET"): disk full or no permission"; return 1; }
 # t_put <local file> <relative path>: atomic, through <path>.part.
 t_put() {
   case "$R_KIND" in
     folder)
       folder_ok || return 1
-      mkdir -p "$(dirname "$R_BASE/$2")" && cp "$1" "$R_BASE/$2.part" && mv "$R_BASE/$2.part" "$R_BASE/$2" \
-        || { R_ERR="could not write into $(target_safe "$R_TARGET"): disk full or no permission"; return 1; } ;;
-    rclone)
-      rc copyto "$1" "$R_BASE/$2.part" && rc moveto "$R_BASE/$2.part" "$R_BASE/$2" ;;
+      mkdir -p "$(dirname "$R_BASE/$2")" && cp "$1" "$R_BASE/$2.part" && mv "$R_BASE/$2.part" "$R_BASE/$2" || folder_write_err ;;
+    rclone) rc copyto "$1" "$R_BASE/$2.part" && rc moveto "$R_BASE/$2.part" "$R_BASE/$2" ;;
   esac
 }
-# t_put_dir <local dir of files or symlinks> <relative dir>: many files at once.
+# t_put_dir <local dir of symlinks> <relative dir>: many files at once.
 # rclone runs them in parallel; a cut upload leaves nothing behind on Drive
 # (measured), and a partial file elsewhere fails the md5 check that follows.
 t_put_dir() {
@@ -99,11 +96,10 @@ t_put_dir() {
   case "$R_KIND" in
     folder)
       folder_ok || return 1
-      mkdir -p "$R_BASE/$2" || { R_ERR="could not write into $(target_safe "$R_TARGET")"; return 1; }
+      mkdir -p "$R_BASE/$2" || folder_write_err || return 1
       for f in "$1"/*; do
         [ -e "$f" ] || continue
-        cp -L "$f" "$R_BASE/$2/${f##*/}.part" && mv "$R_BASE/$2/${f##*/}.part" "$R_BASE/$2/${f##*/}" \
-          || { R_ERR="could not write into $(target_safe "$R_TARGET"): disk full or no permission"; return 1; }
+        cp -L "$f" "$R_BASE/$2/${f##*/}.part" && mv "$R_BASE/$2/${f##*/}.part" "$R_BASE/$2/${f##*/}" || folder_write_err || return 1
       done ;;
     rclone) rc copy --copy-links --transfers 8 "$1" "$R_BASE/$2" ;;
   esac
@@ -114,59 +110,57 @@ t_get() {  # <relative path> <local file>
     rclone) rc copyto "$R_BASE/$1" "$2" ;;
   esac
 }
-# t_md5 <relative dir>: "<md5> <name>" per file. Drive answers it from its own
-# records, so every bundle is checked without downloading one.
+# t_md5 <out file> [<relative path> ...]: "<md5> <relative path>" for the
+# given files, or for every file of this machine's copy (bundles, keys,
+# catalog) when none is given. Drive answers from its own records, so every
+# bundle is checked without downloading one; a folder copy is read back.
 t_md5() {
-  local f
+  local out="$1" f; shift
   case "$R_KIND" in
     folder)
       folder_ok || return 1
-      [ -d "$R_BASE/$1" ] || return 0
-      for f in "$R_BASE/$1"/*; do
-        [ -f "$f" ] || continue
-        case "$f" in *.part) continue ;; esac
-        printf '%s %s\n' "$(md5_of < "$f")" "${f##*/}"
-      done ;;
-    rclone)
-      if ! rc_to "$RH/.rclone.out" hashsum md5 "$R_BASE/$1"; then
-        rm -f "$RH/.rclone.out"; [ "$R_ERR" = "not found in the copy" ] && return 0; return 1
+      : > "$out"
+      if [ $# -gt 0 ]; then
+        for f in "$@"; do [ -f "$R_BASE/$f" ] && printf '%s %s\n' "$(md5_of < "$R_BASE/$f")" "$f" >> "$out"; done
+      elif [ -d "$R_BASE" ]; then
+        while IFS= read -r -d '' f; do
+          case "$f" in *.part) continue ;; esac
+          printf '%s %s\n' "$(md5_of < "$f")" "${f#"$R_BASE/"}" >> "$out"
+        done < <(find "$R_BASE" -type f -print0)
       fi
-      awk '$2 !~ /\.part$/ { print $1, $2 }' "$RH/.rclone.out"; rm -f "$RH/.rclone.out" ;;
+      return 0 ;;
+    rclone)
+      if [ $# -gt 0 ]; then
+        printf '%s\n' "$@" > "$out.files"
+        rc_list "$out.raw" hashsum md5 --files-from "$out.files" "$R_BASE" || return 1
+      else
+        rc_list "$out.raw" hashsum md5 "$R_BASE" || return 1
+      fi
+      awk '$2 !~ /\.part$/ { print $1, $2 }' "$out.raw" > "$out" ;;
   esac
 }
-# t_md5_all: "<md5> <relative path>" for every file of this machine's copy
-# (bundles, keys, catalog), in one listing call.
-t_md5_all() {
-  case "$R_KIND" in
-    folder)
-      folder_ok || return 1
-      [ -d "$R_BASE" ] || return 0
-      local f
-      while IFS= read -r -d '' f; do
-        case "$f" in *.part) continue ;; esac
-        printf '%s %s\n' "$(md5_of < "$f")" "${f#"$R_BASE/"}"
-      done < <(find "$R_BASE" -type f -print0) ;;
-    rclone)
-      if ! rc_to "$RH/.rclone.out" hashsum md5 "$R_BASE"; then
-        rm -f "$RH/.rclone.out"; [ "$R_ERR" = "not found in the copy" ] && return 0; return 1
-      fi
-      awk '$2 !~ /\.part$/ { print $1, $2 }' "$RH/.rclone.out"; rm -f "$RH/.rclone.out" ;;
-  esac
+# md5_map <listing file>: fills GOT (bundle opaque name -> md5) and ALL
+# (relative path -> md5), both declared by the caller.
+md5_map() {
+  local gm gn
+  while read -r gm gn; do
+    [ -n "$gn" ] || continue
+    ALL["$gn"]="$gm"
+    case "$gn" in b/*.age) gn="${gn#b/}"; GOT["${gn%.age}"]="$gm" ;; esac
+  done < "$1"
 }
 t_delete() {  # <relative path>; a file already gone is fine
   case "$R_KIND" in
-    folder) folder_ok || return 1; rm -f "$R_BASE/$1" ;;
+    folder) folder_ok || return 1; rm -f "${R_BASE:?}/${1:?}" ;;
     rclone) rc deletefile "$R_BASE/$1" || [ "$R_ERR" = "not found in the copy" ] ;;
   esac
 }
-t_list_machines() {
+t_list_machines() {  # <out file>
   case "$R_KIND" in
-    folder) folder_ok || return 1; [ -d "$R_TARGET/machines" ] || return 0; find "$R_TARGET/machines" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||' ;;
-    rclone)
-      if ! rc_to "$RH/.rclone.out" lsf --dirs-only "$R_TARGET/machines"; then
-        rm -f "$RH/.rclone.out"; [ "$R_ERR" = "not found in the copy" ] && return 0; return 1
-      fi
-      sed 's|/$||' "$RH/.rclone.out"; rm -f "$RH/.rclone.out" ;;
+    folder)
+      folder_ok || return 1; : > "$1"
+      [ ! -d "$R_TARGET/machines" ] || find "$R_TARGET/machines" -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||' > "$1" ;;
+    rclone) rc_list "$1.raw" lsf --dirs-only "$R_TARGET/machines" || return 1; sed 's|/$||' "$1.raw" > "$1" ;;
   esac
 }
 md5_of() { if command -v md5sum >/dev/null 2>&1; then md5sum | awk '{ print $1 }'; else md5 -q; fi; }
@@ -196,66 +190,68 @@ remote_records_save() {
     for o in "${!U_ROW[@]}"; do printf '%s\t%s\n' "$o" "${U_ROW[$o]}"; done | sort -t"$TAB" -k2,3; } > "$REMOTE_TSV.tmp"
   mv "$REMOTE_TSV.tmp" "$REMOTE_TSV"
 }
-
-# --- status of the copy --------------------------------------------------------------------
-remote_status_write() {  # <ok|behind|fail> <message>
-  { echo "state $1"; echo "at $(date +%s)"; echo "message $(printf '%s' "${2:-}" | tr '\n\t' '  ' | cut -c1-200)"; } > "$RH/remote.status.tmp"
-  mv "$RH/remote.status.tmp" "$RH/remote.status"
+remote_status_write() { kv_status_write "$RH/remote.status" "$@"; }
+remote_status_field() { kv_status_field "$RH/remote.status" "$1"; }
+remote_reset_state() {
+  local k
+  for k in "${REMOTE_STATE_KEYS[@]}"; do config_unset "$k"; done
+  rm -f "${RH:?}/remote.tsv" "${RH:?}/remote.status"
 }
-remote_status_field() { [ -r "$RH/remote.status" ] || return 0; sed -n "s/^$1 //p" "$RH/remote.status" | head -1; }
 
 # --- push --------------------------------------------------------------------------------
 # Every bundle the index names (current, older generations, deleted in
 # Claude), then the keys, then the catalog LAST: a catalog in the copy never
-# names a bundle that is not there. Called with the lock held.
-PUSH_SENT=0; PUSH_PENDING=0
-push_core() {  # [limit]
-  local limit="${1:-0}" st fo b f by mt o row stage sh m n=0 changed=0 rby rmt rm5
-  # Every caller (sync, forget, keys) must not have to remember these: an
-  # empty SHA makes every hash, and every opaque name, silently empty, and an
-  # empty AGE cannot encrypt the catalog.
-  [ -n "${SHA:-}" ] || SHA="$(sha_tool)" || { R_ERR="no sha256 tool (sha256sum or shasum) found"; return 1; }
-  [ -n "${AGE:-}" ] || load_config
+# names a bundle that is not there. Called with the lock held; it works in
+# PUSH_STAGE, which the caller removes.
+#
+# push_core <limit> <audit|records>: "audit" first lists what the copy really
+# holds (one call; on a folder copy it reads every file back), and sends again
+# whatever is missing or altered there. "records" trusts the upload records,
+# so an archiving run with nothing new costs no network at all. The runs
+# after a session audit once a day; `push` always does.
+PUSH_SENT=0; PUSH_PENDING=0; PUSH_STAGE=""
+push_core() {
+  local limit="${1:-0}" mode="${2:-audit}" fo b f by mt o row sh m n=0 changed=0 rby rmt rm5 st_md5
   remote_load; remote_records_load
-  stage="$(mktemp -d "$RH/.push.XXXXXX")"; PUSH_STAGE="$stage"
-  declare -A WANT=() NEW_ROW=() GOT=()
-  # What the copy really holds (one listing call): a bundle, a key or a
-  # catalog missing or altered there is sent again, whatever the records say.
-  local gm gn
-  declare -A ALL=()
-  # (into a file, not a pipe: R_ERR must survive, and a pipe is a subshell)
-  t_md5_all > "$RH/.push.md5" || { rm -rf "$stage"; return 1; }
-  while read -r gm gn; do
-    [ -n "$gn" ] || continue
-    ALL["$gn"]="$gm"
-    case "$gn" in b/*.age) gn="${gn#b/}"; GOT["${gn%.age}"]="$gm" ;; esac
-  done < "$RH/.push.md5"
-  while IFS="$TAB" read -r st _ fo _ _ _ _ _ _ b _; do
+  # PUSH_STAGE/b holds only the symlinks to send (it is uploaded as is); the
+  # listings and the catalog are written beside it.
+  PUSH_STAGE="$(mktemp -d "$RH/.push.XXXXXX")"; mkdir "$PUSH_STAGE/b"
+  declare -A WANT=() NEW_ROW=() GOT=() ALL=()
+  if [ "$mode" = audit ]; then
+    t_md5 "$PUSH_STAGE/.md5" || return 1
+    md5_map "$PUSH_STAGE/.md5"
+    config_set remote_audit_at "$(date +%s)"
+  fi
+  archive_stats
+  while IFS="$TAB" read -r _ _ fo _ _ _ _ _ _ b _; do
     f="$RH/archive/$fo/$b"
-    [ -f "$f" ] || { log "push: $fo/$b is in the index but missing on disk; not sent"; continue; }
-    read -r by mt <<<"$(file_stat "$f")"
+    [ -n "${A_STAT[$fo/$b]:-}" ] || { log "push: $fo/$b is in the index but missing on disk; not sent"; continue; }
+    read -r by mt <<<"${A_STAT[$fo/$b]}"
     o="$(opaque_for "$fo" "$b")"; WANT["$o"]=1
     row="${U_ROW[$o]:-}"
     if [ -n "$row" ]; then
       IFS="$TAB" read -r _ _ rby rmt _ rm5 _ <<<"$row"
-      [ "$rby" = "$by" ] && [ "$rmt" = "$mt" ] && [ "${GOT[$o]:-}" = "$rm5" ] && continue
+      [ "$rby" = "$by" ] && [ "$rmt" = "$mt" ] && { [ "$mode" != audit ] || [ "${GOT[$o]:-}" = "$rm5" ]; } && continue
     fi
     if [ "$limit" -gt 0 ] && [ "$n" -ge "$limit" ]; then PUSH_PENDING=$((PUSH_PENDING + 1)); continue; fi
     sh="$(sha_of < "$f")"; m="$(md5_of < "$f")"
-    [ ${#sh} -eq 64 ] && [ ${#m} -eq 32 ] && [ ${#o} -eq 32 ] || { R_ERR="could not hash $fo/$b"; rm -rf "$stage"; return 1; }
-    ln -s "$f" "$stage/$o.age"
+    [ ${#sh} -eq 64 ] && [ ${#m} -eq 32 ] && [ ${#o} -eq 32 ] || { R_ERR="could not hash $fo/$b"; return 1; }
+    ln -s "$f" "$PUSH_STAGE/b/$o.age"
     NEW_ROW["$o"]="$fo$TAB$b$TAB$by$TAB$mt$TAB$sh$TAB$m$TAB$(utc_iso)"
     n=$((n + 1))
   done < <(tail -n +2 "$INDEX" 2>/dev/null)
   if [ "$n" -gt 0 ]; then
-    t_put_dir "$stage" b || { rm -rf "$stage"; return 1; }
-    # Proof the copy holds what was sent: the provider's md5 of each file.
-    GOT=()
-    t_md5 b > "$RH/.push.md5" || { rm -rf "$stage"; return 1; }
-    while read -r gm gn; do [ -n "$gn" ] && GOT["${gn%.age}"]="$gm"; done < "$RH/.push.md5"
+    t_put_dir "$PUSH_STAGE/b" b || return 1
+    # Proof the copy holds what was sent: the provider's md5 of each file
+    # just sent (only those).
+    GOT=(); ALL=()
+    local -a sent=()
+    for o in "${!NEW_ROW[@]}"; do sent+=("b/$o.age"); done
+    t_md5 "$PUSH_STAGE/.md5" "${sent[@]}" || return 1
+    md5_map "$PUSH_STAGE/.md5"
     for o in "${!NEW_ROW[@]}"; do
       IFS="$TAB" read -r _ _ _ _ _ m _ <<<"${NEW_ROW[$o]}"
-      if [ "${GOT[$o]:-}" != "$m" ]; then R_ERR="the copy of a bundle does not match what was sent by md5; it is sent again next time"; rm -rf "$stage"; return 1; fi
+      [ "${GOT[$o]:-}" = "$m" ] || { R_ERR="the copy of a bundle does not match what was sent by md5; it is sent again next time"; return 1; }
       U_ROW["$o"]="${NEW_ROW[$o]}"
     done
     PUSH_SENT=$n; changed=1
@@ -269,56 +265,56 @@ push_core() {  # [limit]
     [ -n "${WANT[$o]:-}" ] && continue
     IFS="$TAB" read -r _ b _ <<<"${U_ROW[$o]}"
     if [ -n "${FORGOTTEN[${b:0:36}]:-}" ]; then
-      t_delete "b/$o.age" || { rm -rf "$stage"; return 1; }
+      t_delete "b/$o.age" || return 1
       unset "U_ROW[$o]"; changed=1
     else
       log "push: $b is in the copy but not in the index; kept (only forget removes from the copy)"
     fi
   done
   [ "$changed" = 1 ] && remote_records_save
-  # Keys: sent when they change (a passphrase change rewrites main.age).
+  # Keys: sent when they change (a passphrase change rewrites main.age), or
+  # when an audit finds them missing or altered in the copy.
   for f in main.age recipients.txt; do
     [ -f "$RH/keys/$f" ] || continue
-    sh="$(sha_of < "$RH/keys/$f")"
-    [ "$(config_get "sent_$f")" = "$sh" ] && [ "${ALL[keys/$f]:-}" = "$(md5_of < "$RH/keys/$f")" ] && continue
-    t_put "$RH/keys/$f" "keys/$f" || { rm -rf "$stage"; return 1; }
-    config_set "sent_$f" "$sh"; changed=1
+    m="$(md5_of < "$RH/keys/$f")"
+    [ "$(config_get "sent_$f")" = "$m" ] && { [ "$mode" != audit ] || [ "${ALL[keys/$f]:-}" = "$m" ]; } && continue
+    t_put "$RH/keys/$f" "keys/$f" || return 1
+    config_set "sent_$f" "$m"; changed=1
   done
-  # The catalog is rewritten when anything changed, and also when the one in
-  # the copy is not the last one this machine wrote (replaced, rolled back,
-  # deleted).
-  local stamps_sha=""; [ -f "$RH/stamps.tsv" ] && stamps_sha="$(sha_of < "$RH/stamps.tsv")"
-  if [ "$changed" = 1 ] || [ -z "$(config_get catalog_seq)" ] || [ "${ALL[catalog.age]:-}" != "$(config_get catalog_md5)" ] \
-     || [ "$stamps_sha" != "$(config_get catalog_stamps)" ]; then
-    catalog_build "$stage/catalog.age" || { rm -rf "$stage"; return 1; }
-    t_put "$stage/catalog.age" catalog.age || { rm -rf "$stage"; return 1; }
-    config_set catalog_sha "$(sha_of < "$stage/catalog.age")"; config_set catalog_md5 "$(md5_of < "$stage/catalog.age")"
+  # The catalog is rewritten when anything changed (stamps included), and
+  # when an audit finds the one in the copy is not the last this machine
+  # wrote (replaced, rolled back, deleted).
+  st_md5=""; [ -f "$RH/stamps.tsv" ] && st_md5="$(md5_of < "$RH/stamps.tsv")"
+  if [ "$changed" = 1 ] || [ -z "$(config_get catalog_seq)" ] || [ "$st_md5" != "$(config_get catalog_stamps)" ] \
+     || { [ "$mode" = audit ] && [ "${ALL[catalog.age]:-}" != "$(config_get catalog_md5)" ]; }; then
+    catalog_build "$PUSH_STAGE/catalog.age" || return 1
+    t_put "$PUSH_STAGE/catalog.age" catalog.age || return 1
+    config_set catalog_md5 "$(md5_of < "$PUSH_STAGE/catalog.age")"; config_set catalog_stamps "$st_md5"
   fi
-  [ "$(config_get readme_sent)" = 1 ] || { readme_write "$stage/README.txt"; readme_put "$stage/README.txt" && config_set readme_sent 1; }
-  rm -rf "$stage" "$RH/.push.md5"; PUSH_STAGE=""
+  [ "$(config_get readme_sent)" = 1 ] || { readme_write "$PUSH_STAGE/README.txt"; readme_put "$PUSH_STAGE/README.txt" && config_set readme_sent 1; }
   return 0
 }
 # The catalog: everything a new machine needs to know what the copy holds,
-# encrypted to the same keys as the bundles. Its sequence number lets a new
-# machine see how recent it is; this machine keeps the sha of the last one it
-# wrote, so a swapped catalog in the copy is caught by verify.
+# encrypted to the same keys as the bundles, stamp leaves and proofs
+# included (without them a new machine could not hand anyone a proof). Its
+# sequence number tells a new machine how recent it is; this machine keeps
+# the md5 of the last one it wrote, so a swapped catalog is caught.
 catalog_build() {  # <out file>
-  local d seq
+  local d seq f
+  local -a have=()
   seq="$(config_get catalog_seq)"; seq=$(( ${seq:-0} + 1 ))
   d="$(mktemp -d "$RH/.catalog.XXXXXX")"
   { echo "relevio-catalog $CATALOG_FORMAT"; echo "seq $seq"; echo "machine $(config_get machine)"
     echo "copy_salt $(config_get copy_salt)"; echo "written $(utc_iso)"; echo "relevio_version $(relevio_version)"; } > "$d/META"
-  for f in index.tsv folders.tsv forgotten.tsv remote.tsv stamps.tsv; do [ -f "$RH/$f" ] && cp "$RH/$f" "$d/$f"; done
-  # The stamp leaves and proofs travel too: without them a new machine could
-  # not hand anyone a proof.
-  [ -d "$RH/stamps" ] && cp -R "$RH/stamps" "$d/stamps"
-  [ -f "$RH/stamps.tsv" ] && config_set catalog_stamps "$(sha_of < "$RH/stamps.tsv")"
-  tar -cf - -C "$d" . | gzip -c | "$AGE" -e -R "$RH/keys/recipients.txt" -o "$1" || { rm -rf "$d"; R_ERR="could not encrypt the catalog"; return 1; }
-  rm -rf "$d"
+  for f in "${CATALOG_FILES[@]}" stamps; do [ -e "$RH/$f" ] && have+=("./$f"); done
+  # Straight from the archive home: nothing is copied first.
+  tar -cf - -C "$d" ./META -C "$RH" "${have[@]}" | gzip -c | "$AGE" -e -R "$RH/keys/recipients.txt" -o "$1" \
+    || { rm -rf "${d:?}"; R_ERR="could not encrypt the catalog"; return 1; }
+  rm -rf "${d:?}"
   config_set catalog_seq "$seq"
 }
 readme_write() {
-  cat > "$1" <<'EOF'
+  cat > "$1" <<'TXT'
 This folder is an encrypted copy of Claude Code conversations, made by relevio
 (https://github.com/compota334/relevio).
 
@@ -330,7 +326,7 @@ on a new computer, install relevio and run, in your own terminal:
     (or: ... pull rclone <remote:path>)
 
 Do not rename or edit the files here.
-EOF
+TXT
 }
 readme_put() {
   case "$R_KIND" in
@@ -338,17 +334,20 @@ readme_put() {
     rclone) rc copyto "$1" "$R_TARGET/README.txt" ;;
   esac
 }
-# After every archiving run (lock held): send what is new. A failure never
-# fails the archiving run; the copy's status says it, loudly.
+# After every archiving run (lock held): send what is new, auditing the copy
+# once a day. Never fails the archiving run; the copy's status says it.
 push_after_run() {
   remote_is_set || return 0
-  # A subshell, so a die inside (rclone gone, a bad config) ends only the
-  # copy and leaves the archiving run's own result alone.
-  ( PUSH_SENT=0; PUSH_PENDING=0; R_ERR=""
-    if push_core 0; then remote_status_write ok "sent $PUSH_SENT"
-    else remote_status_write fail "$R_ERR"; log "push: $R_ERR"; fi ) 2>"$RH/.push.err" \
-    || { remote_status_write fail "the copy did not run: $(sed 's/^ERROR: //' "$RH/.push.err" | tail -1 | cut -c1-150)"; log "push: did not run"; }
-  rm -f "$RH/.push.err"
+  run_isolated remote_status_write copy push_auto
+}
+push_auto() {
+  local mode=records last
+  last="$(config_get remote_audit_at)"
+  [ -n "$last" ] && [ $(( $(date +%s) - last )) -lt "$REMOTE_AUDIT_EVERY" ] || mode=audit
+  PUSH_SENT=0; PUSH_PENDING=0; R_ERR=""
+  if push_core 0 "$mode"; then remote_status_write ok "sent $PUSH_SENT"
+  else remote_status_write fail "$R_ERR"; log "push: $R_ERR"; fi
+  [ -z "$PUSH_STAGE" ] || rm -rf "${PUSH_STAGE:?}"
   return 0
 }
 
@@ -356,14 +355,14 @@ push_after_run() {
 cmd_remote() {
   local sub="${1:-}"; shift || true
   check_writable; is_set_up || die "the archive is not set up in $RH: run setup first."
-  load_config; SHA="$(sha_tool)" || die "no sha256 tool found."
+  tools_load
   case "$sub" in
     set) remote_set "$@" ;;
     status) remote_show ;;
     off)
       remote_is_set || { echo "No off-machine copy is set."; return 0; }
-      for k in remote_kind remote_target rclone catalog_seq catalog_sha catalog_md5 sent_main.age sent_recipients.txt readme_sent; do config_unset "$k"; done
-      rm -f "$REMOTE_TSV" "$RH/remote.status"
+      local k; for k in remote_kind remote_target rclone; do config_unset "$k"; done
+      remote_reset_state
       echo "The off-machine copy is no longer updated. What is already there stays; delete it from the provider yourself if you want it gone." ;;
     *) die "remote needs: set folder <path> | set rclone <remote:path> | status | off" ;;
   esac
@@ -387,11 +386,10 @@ remote_set() {
       config_set rclone "$r" ;;
     *) die "remote set needs: folder <path>, or rclone <remote:path>." ;;
   esac
-  [ -n "$(config_get machine)" ] || config_set machine "$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-  [ -n "$(config_get copy_salt)" ] || config_set copy_salt "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  [ -n "$(config_get machine)" ] || config_set machine "$(rand_hex 6)"
+  [ -n "$(config_get copy_salt)" ] || config_set copy_salt "$(rand_hex 32)"
   config_set remote_kind "$kind"; config_set remote_target "$target"
-  for k in catalog_seq catalog_sha catalog_md5 sent_main.age sent_recipients.txt readme_sent; do config_unset "$k"; done
-  rm -f "$REMOTE_TSV" "$RH/remote.status"
+  remote_reset_state
   echo "Off-machine copy set: $kind $(target_safe "$target")."
   echo "Every bundle, the keys and an encrypted catalog go there; names are opaque."
   echo "Send everything now with: bash \"$SELF\" push   (later runs send only what is new)"
@@ -414,11 +412,11 @@ remote_show() {
   [ "$b" -eq 0 ] || echo "  behind: $b bundle(s) not in the copy yet"
 }
 remote_behind() {
-  local n=0 st fo b by mt o row rby rmt
-  remote_records_load
-  while IFS="$TAB" read -r st _ fo _ _ _ _ _ _ b _; do
-    [ -f "$RH/archive/$fo/$b" ] || continue
-    read -r by mt <<<"$(file_stat "$RH/archive/$fo/$b")"
+  local n=0 fo b by mt o row rby rmt
+  remote_records_load; archive_stats
+  while IFS="$TAB" read -r _ _ fo _ _ _ _ _ _ b _; do
+    [ -n "${A_STAT[$fo/$b]:-}" ] || continue
+    read -r by mt <<<"${A_STAT[$fo/$b]}"
     o="$(opaque_for "$fo" "$b")"; row="${U_ROW[$o]:-}"
     if [ -z "$row" ]; then n=$((n + 1)); continue; fi
     IFS="$TAB" read -r _ _ rby rmt _ <<<"$row"
@@ -430,12 +428,11 @@ cmd_push() {
   local limit=0
   case "${1:-}" in --limit) limit="${2:-}"; [[ $limit =~ ^[1-9][0-9]*$ ]] || die "--limit needs a positive number." ;; "") ;; *) die "push takes only --limit <n>." ;; esac
   check_writable; is_set_up || die "the archive is not set up in $RH."
-  load_config; SHA="$(sha_tool)" || die "no sha256 tool found."
+  tools_load
   remote_is_set || die "no off-machine copy is set: remote set folder <path> | remote set rclone <remote:path>"
-  trap 'rm -rf "${PUSH_STAGE:-}"; release_lock' EXIT
-  take_lock wait || die "an archiving run holds the lock; try again in a minute."
+  lock_or_die PUSH_STAGE
   echo "Sending to the copy ($(target_safe "$(config_get remote_target)"))..."
-  if push_core "$limit"; then
+  if push_core "$limit" audit; then
     remote_status_write ok "sent $PUSH_SENT"
     echo "Done: $PUSH_SENT bundle(s) sent, catalog #$(config_get catalog_seq)."
     [ "$PUSH_PENDING" -eq 0 ] || echo "$PUSH_PENDING more left (--limit); run push again."
@@ -448,17 +445,16 @@ cmd_push() {
 # (nothing downloaded); path 2, a random sample downloaded and checked by
 # sha256; plus the catalog this machine wrote last. No secret needed.
 cmd_verify() {
-  local sample=3 o row m sh fo b bad=0 miss=0 n=0 tmp got
+  local sample=3 o m sh fo b bad=0 miss=0 n=0 tmp got
   case "${1:-}" in --sample) sample="${2:-}"; [[ $sample =~ ^[0-9]+$ ]] || die "--sample needs a number." ;; "") ;; *) die "verify takes only --sample <n>." ;; esac
   check_home; is_set_up || die "the archive is not set up in $RH."
-  load_config; SHA="$(sha_tool)" || die "no sha256 tool found."
+  tools_load
   remote_load; remote_records_load
   [ "${#U_ROW[@]}" -gt 0 ] || die "nothing has been sent yet: run push first."
-  declare -A GOT=()
-  local gm gn
-  tmp="$(mktemp -d "$RH/.verify.XXXXXX")"; PUSH_STAGE="$tmp"; trap 'rm -rf "${PUSH_STAGE:-}"' EXIT
-  t_md5 b > "$tmp/.md5" || die "$R_ERR"
-  while read -r gm gn; do [ -n "$gn" ] && GOT["${gn%.age}"]="$gm"; done < "$tmp/.md5"
+  declare -A GOT=() ALL=()
+  tmp="$(mktemp -d "$RH/.verify.XXXXXX")"; PUSH_STAGE="$tmp"; trap 'rm -rf "${PUSH_STAGE:?}"' EXIT
+  t_md5 "$tmp/.md5" || die "$R_ERR"
+  md5_map "$tmp/.md5"
   for o in "${!U_ROW[@]}"; do
     n=$((n + 1))
     IFS="$TAB" read -r fo b _ _ _ m _ <<<"${U_ROW[$o]}"
@@ -473,8 +469,8 @@ cmd_verify() {
     rm -f "$tmp/x"
   done
   if t_get catalog.age "$tmp/c"; then
-    got="$(sha_of < "$tmp/c")"
-    if [ "$got" = "$(config_get catalog_sha)" ]; then echo "  catalog #$(config_get catalog_seq): the one this machine wrote."
+    got="$(md5_of < "$tmp/c")"
+    if [ "$got" = "$(config_get catalog_md5)" ]; then echo "  catalog #$(config_get catalog_seq): the one this machine wrote."
     else bad=$((bad + 1)); echo "  CATALOG in the copy is NOT the one this machine wrote last (replaced or rolled back)."; fi
   else bad=$((bad + 1)); echo "  CATALOG missing in the copy (${R_ERR:-?})."; fi
   if [ $((bad + miss)) -eq 0 ]; then echo "The copy is complete and intact."; remote_status_write ok "verified $n"
@@ -511,8 +507,8 @@ cmd_pull() {
     rclone) RCLONE="$(command -v rclone)" || die "rclone is not installed: sudo apt install rclone (Linux) or see https://rclone.org/install/" ;;
     *) die "pull needs: folder <path>, or rclone <remote:path>." ;;
   esac
-  tmp="$(mktemp -d "$RH/.pull.XXXXXX")"; PUSH_STAGE="$tmp"; trap 'rm -rf "${PUSH_STAGE:-}"' EXIT
-  t_list_machines > "$tmp/machines" || die "$R_ERR"
+  tmp="$(mktemp -d "$RH/.pull.XXXXXX")"; PUSH_STAGE="$tmp"; trap 'rm -rf "${PUSH_STAGE:?}"' EXIT
+  t_list_machines "$tmp/machines" || die "$R_ERR"
   machines="$(grep -E '^[0-9a-f]{12}$' "$tmp/machines" || true)"
   [ -n "$machines" ] || die "no relevio copy found at $(target_safe "$target") (no machines/ folder in it)."
   if [ -z "$mid" ]; then
@@ -546,13 +542,13 @@ cmd_pull() {
   [ "$(sed -n 's/^machine //p' "$tmp/c/META")" = "$mid" ] || die "the catalog names another machine than its folder: the copy is inconsistent. Nothing was brought back."
   [ ! -f "$tmp/c/index.tsv" ] || [ "$(head -1 "$tmp/c/index.tsv")" = "$INDEX_HEADER" ] || die "the catalog's index is not a format $ARCHIVE_FORMAT index."
   [ -f "$tmp/c/remote.tsv" ] && [ "$(head -1 "$tmp/c/remote.tsv")" = "$REMOTE_HEADER" ] || die "the catalog has no upload records."
-  for kf in index.tsv folders.tsv forgotten.tsv remote.tsv stamps.tsv; do [ -f "$tmp/c/$kf" ] && cp "$tmp/c/$kf" "$RH/$kf"; done
+  for kf in "${CATALOG_FILES[@]}"; do [ -f "$tmp/c/$kf" ] && cp "$tmp/c/$kf" "$RH/$kf"; done
   [ -d "$tmp/c/stamps" ] && { mkdir -p "$RH/stamps"; chmod 700 "$RH/stamps"; cp "$tmp/c/stamps/"* "$RH/stamps/" 2>/dev/null || true; }
-  [ -f "$RH/stamps.tsv" ] && config_set catalog_stamps "$(sha_of < "$RH/stamps.tsv")"
+  [ -f "$RH/stamps.tsv" ] && config_set catalog_stamps "$(md5_of < "$RH/stamps.tsv")"
   config_set machine "$mid"; config_set copy_salt "$(sed -n 's/^copy_salt //p' "$tmp/c/META")"
   config_set remote_kind "$kind"; config_set remote_target "$target"
-  config_set catalog_seq "$(sed -n 's/^seq //p' "$tmp/c/META")"; config_set catalog_sha "$(sha_of < "$tmp/catalog.age")"; config_set catalog_md5 "$(md5_of < "$tmp/catalog.age")"
-  for kf in main.age recipients.txt; do [ -f "$RH/keys/$kf" ] && config_set "sent_$kf" "$(sha_of < "$RH/keys/$kf")"; done
+  config_set catalog_seq "$(sed -n 's/^seq //p' "$tmp/c/META")"; config_set catalog_md5 "$(md5_of < "$tmp/catalog.age")"
+  for kf in main.age recipients.txt; do [ -f "$RH/keys/$kf" ] && config_set "sent_$kf" "$(md5_of < "$RH/keys/$kf")"; done
   write_canary
   echo "Catalog #$(config_get catalog_seq), written $(sed -n 's/^written //p' "$tmp/c/META"). Fetching the bundles..."
   remote_records_load
