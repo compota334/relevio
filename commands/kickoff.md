@@ -196,6 +196,11 @@ previous session.
    set up. If it is not set up, tell the user they can run that same script
    with `setup` in their own terminal. Never run `setup`, `restore`, `keys` or
    `forget` yourself: they ask for the user's secrets or confirmation.
+   Whenever the user needs anything from the archive later (setting it up,
+   putting a conversation back, testing a key), read its guide first, with
+   the same `$S`: `bash "$S/relevio-archive.sh" guide`. It says which of the
+   two keys each step asks for, how the user pastes it, and how to keep the
+   user's part to one paste and one Enter.
 HOST NOTE (ZCode): if this session runs inside ZCode rather than Claude Code,
 every relevio command is unprefixed there: `/kickoff`, `/handoff`, `/revisit`
 (never `/relevio:...`). ZCode has no `/rename` and no `claude --resume`:

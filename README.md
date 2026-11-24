@@ -559,9 +559,18 @@ lost one back so `claude --resume` opens it again.
   [age](https://age-encryption.org) to two keys. Measured on real
   conversations: 164 MB became 47 MB.
 - **Two keys, no server:**
-  1. a **main key**, protected by your **passphrase**: what `restore` asks for;
-  2. a **recovery key**, shown once at setup, that only you keep (a password
-     manager or paper): for when the passphrase is lost.
+  1. a **main key**, protected by your **passphrase** (your everyday key):
+     what `restore` asks for. You choose it at setup; if you leave it empty,
+     age invents one made of words joined by dashes, and those words are the
+     passphrase;
+  2. a **recovery key** (your emergency key), one long code that starts with
+     `AGE-SECRET-KEY-1` (age's marker for a secret key), shown once at setup,
+     that only you keep (a password manager or paper): for when the
+     passphrase is lost.
+
+  Every screen that asks for a key says which of the two it wants, what that
+  key looks like, and how to paste it (Linux Ctrl+Shift+V, macOS Cmd+V,
+  Windows Terminal Ctrl+V).
 
   Archiving uses only their public halves, so the hooks never hold a secret.
   **If you lose both the passphrase and the recovery key, the archive is
@@ -575,9 +584,11 @@ lost one back so `claude --resume` opens it again.
 ### Commands
 
 All in `.claude/scripts/relevio-archive.sh` (in a plugin install, the plugin's
-`scripts/`). The ones that ask for a secret run **only in your own terminal**,
-never through the agent: a secret typed in a chat would be stored in a
-plaintext transcript.
+`scripts/`). The ones that ask for a secret run **only in a real terminal**,
+and the secret is always typed by you, there: a secret typed in a chat would
+be stored in a plaintext transcript. The agent may open your terminal with
+the command ready, so your part is one paste and one Enter; it never reads
+that terminal during `setup`, whose screen shows the keys.
 
 | Command | What it does |
 |---|---|
@@ -591,9 +602,10 @@ plaintext transcript.
 | `keys reset` | Lost the passphrase: with the recovery key, re-encrypts everything to a new main key, touching nothing old until every new copy is proven to open. |
 | `forget <id>` | Removes a session from the archive for good, and keeps it from being archived again. |
 | `off` / `on` | Stops and resumes archiving. What is archived stays. |
+| `guide` | The instructions for the agent: what it may run itself, what only you type, which key each step asks for, and how to walk you through it one step at a time. `/kickoff` and `/revisit` point the agent to it. |
 
 `/revisit` uses it too: when `claude --resume` no longer finds a session, the
-agent looks it up with `list` and gives you the `restore` command to run.
+agent looks it up with `list`, reads `guide`, and has you run `restore`.
 
 ### What the agent is told
 

@@ -34,7 +34,7 @@ Branches with handoffs that still exist and are not yet merged into `origin/main
 
 | Branch | Dev(s) | Last handoff | Areas | Ahead of main | Note |
 |--------|--------|--------------|-------|---------------|------|
-| `session-archive` | NICO | 2026-11-21_relevio-v0247-y-archivo-encriptado-v0250.md | .claude-plugin, README.md, VERSION, commands, hooks, install.sh, +4 more | 12 |  |
+| `session-archive` | NICO | 2026-11-21_relevio-v0247-y-archivo-encriptado-v0250.md | .claude-plugin, README.md, VERSION, commands, hooks, install.sh, +4 more | 13 |  |
 | `disable-all-compaction` | NICO | 2026-11-12_relevio-v0248-sin-compactacion.md | .claude-plugin/marketplace.json, .claude-plugin/plugin.json, README.md, VERSION, hooks/context-warn.sh, hooks/session-start.sh, +5 more | 4 |  |
 
 ## Catalog

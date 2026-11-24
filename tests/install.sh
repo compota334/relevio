@@ -2157,6 +2157,17 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
   check "archive: ... and the recovery secret is not stored anywhere" \
     "$(grep -rl "$(grep '^AGE-SECRET-KEY' "$arc_t/rec.key")" "$arc_t/h2" | grep -c .)" "0"
   check "archive: setup tells you how to backfill" "$(contains "$out" 'backfill')" "yes"
+  check "archive: setup names both keys, says what each looks like and how to save it" \
+    "$(contains "$out" 'PASSPHRASE (your everyday key)'):$(contains "$out" 'RECOVERY KEY (your emergency key)'):$(contains "$out" 'THOSE WORDS ARE YOUR PASSPHRASE'):$(contains "$out" 'relevio archive recovery key')" "yes:yes:yes:yes"
+  check "archive: setup says how to paste on Linux, macOS and Windows" \
+    "$(contains "$out" 'Ctrl+Shift+V'):$(contains "$out" 'Cmd+V'):$(contains "$out" 'Windows Terminal Ctrl+V'):$(contains "$out" 'Nothing appears while you paste')" "yes:yes:yes:yes"
+  check "archive: setup ends with when each key is used and how to test them" \
+    "$(contains "$out" 'emergency only, with --recovery'):$(contains "$out" 'keys check --recovery')" "yes:yes"
+  out="$(arcg "$arc_t/h2" guide 2>&1)"; rc=$?
+  check "archive: guide runs and separates what the assistant may run from what only the user types" \
+    "$rc:$(contains "$out" 'YOU MAY RUN THESE YOURSELF'):$(contains "$out" 'ONLY THE USER TYPES THESE'):$(contains "$out" 'NEVER read that terminal while setup runs')" "0:yes:yes:yes"
+  check "archive: guide names where the archive and the keys live" \
+    "$(contains "$out" "$arc_t/h2/archive/<project folder>"):$(contains "$out" 'stored NOWHERE')" "yes:yes"
   check "archive: a second setup is refused" \
     "$(contains "$(grep '^AGE-SECRET-KEY' "$arc_t/rec.key" | arcg "$arc_t/h2" setup 2>&1)" 'already set up')" "yes"
   out="$(arcg "$arc_t/h2" status 2>&1)"; rc=$?
@@ -2395,6 +2406,9 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
   # keys: check both, and a reset that keeps every bundle openable.
   check "archive: keys check works with the main key and with the recovery key" \
     "$(arcr keys check 2>&1):$(grep '^AGE-SECRET-KEY' "$ar/rec.key" | arcr keys check --recovery 2>/dev/null)" "passphrase works.:recovery key works."
+  out="$(echo 'apple-river-stone-cloud-tiger-lemon-piano-ocean-fox-maple' | arcr keys check --recovery 2>&1)"; rc=$?
+  check "archive: a passphrase typed where the recovery key goes says to drop --recovery" \
+    "$rc:$(contains "$out" 'rerun the same command WITHOUT --recovery'):$(contains "$out" 'RECOVERY KEY (your emergency key)')" "2:yes:yes"
   check "archive: a key that is not the archive's is refused" \
     "$(contains "$(age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY' | arcr keys check --recovery 2>&1)" "not one of this archive's keys")" "yes"
   cp "$arh/keys/main.key" "$ar/old-main.key"
@@ -2432,8 +2446,12 @@ fi
 for chan in commands templates; do
   check "$chan/revisit: a session Claude Code no longer has is looked up in the archive" \
     "$(contains "$(cat "$REPO/$chan/revisit.md")" 'relevio-archive.sh" list')" "yes"
-  check "$chan/revisit: ... and the restore is the user's to run, never the agent's" \
-    "$(contains "$(cat "$REPO/$chan/revisit.md")" 'never run it yourself')" "yes"
+  check "$chan/revisit: ... the key is typed by the user in their terminal, never by the agent" \
+    "$(contains "$(cat "$REPO/$chan/revisit.md")" 'never type the key for them')" "yes"
+  check "$chan/revisit: ... after reading the archive guide" \
+    "$(contains "$(cat "$REPO/$chan/revisit.md")" 'relevio-archive.sh" guide')" "yes"
+  check "$chan/kickoff: points to the archive guide for anything the user needs from it" \
+    "$(contains "$(cat "$REPO/$chan/kickoff.md")" 'relevio-archive.sh" guide')" "yes"
 done
 
 # --- Case 17: the session archive at session start --------------------------

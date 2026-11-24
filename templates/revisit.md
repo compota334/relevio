@@ -27,8 +27,10 @@ session title; if empty, ask what the user is looking for).
 
        bash "$S/relevio-archive.sh" list <session-id>
 
-   If it is listed, give the user this command, in its own code block, to run
-   in THEIR terminal (it asks for their passphrase); never run it yourself:
+   If it is listed, read the archive's guide first
+   (`bash "$S/relevio-archive.sh" guide`): it says how to tell the user which
+   key to use and how to paste it. Then have the user run this in THEIR
+   terminal (it asks for their passphrase); never type the key for them:
 
        bash "$S/relevio-archive.sh" restore <session-id>
 
