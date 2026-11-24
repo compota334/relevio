@@ -18,7 +18,7 @@ TEMPLATES=(context-warn.sh session-start.sh session-end.sh handoff.md kickoff.md
 # Since v0.22 docs/handoff/INDEX.md is generated rather than hand-edited, so
 # the commands need the generator next to them. These live in scripts/, not
 # templates/: both install channels ship the same copy.
-SCRIPTS=(relevio-handoffs-lib.sh relevio-index.sh relevio-trace.sh relevio-areas.sh relevio-header.sh relevio-migrate.sh relevio-archive.sh)
+SCRIPTS=(relevio-handoffs-lib.sh relevio-index.sh relevio-trace.sh relevio-areas.sh relevio-header.sh relevio-migrate.sh relevio-archive.sh relevio-archive-remote.sh)
 STAMPED=(context-warn.sh session-start.sh session-end.sh)
 # Legacy markers: only ever used to REMOVE the pre-v0.18 block from CLAUDE.md.
 MARK_START="<!-- relevio:start -->"
@@ -215,7 +215,7 @@ install_file "$TPL/revisit.md" .claude/commands/revisit.md 644
 mkdir -p .claude/scripts
 for f in "${SCRIPTS[@]}"; do
   # The library is sourced, never executed; the rest are entry points.
-  mode=755; [ "$f" = relevio-handoffs-lib.sh ] && mode=644
+  mode=755; case "$f" in relevio-handoffs-lib.sh|relevio-archive-remote.sh) mode=644 ;; esac
   install_file "$SCR/$f" ".claude/scripts/$f" "$mode"
 done
 

@@ -24,6 +24,13 @@
 #             test a key, change the passphrase, or start over with the
 #             recovery key when the passphrase is lost (your terminal only)
 #   forget <id>  remove a session from the archive for good (your terminal only)
+#   remote set folder <path> | set rclone <remote:path> | status | off
+#             an encrypted copy off this machine: a folder a sync client
+#             mirrors (Drive, Dropbox, OneDrive...), or any rclone remote
+#   push [--limit n]   send what is new to the copy (runs by itself after
+#             every archiving run once a copy is set)
+#   verify [--sample n]  check the copy: every bundle by the provider's md5,
+#             a random sample downloaded, and the catalog
 #   off       stop archiving new sessions (what is archived stays)
 #   on        start again after off
 #   sync      what the hooks run: --session <id> --transcript <path> [--wait-stable],
@@ -43,6 +50,8 @@ umask 077
 ARCHIVE_FORMAT=1
 RH="${RELEVIO_HOME:-$HOME/.relevio}"
 CC_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+# The off-machine copy (remote, push, verify, pull) lives in its own file.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/relevio-archive-remote.sh"
 
 # --- The archive's home -------------------------------------------------------
 # Refused when it could leak or be swapped: a symlink can point the archive
@@ -277,7 +286,7 @@ human_bytes() { awk -v b="${1:-0}" 'BEGIN { split("B KB MB GB TB", u); i = 1; wh
 fmt_time() { date -d "@$1" '+%Y-%m-%d %H:%M' 2>/dev/null || date -r "$1" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$1"; }
 status_field() { [ -r "$RH/status" ] || return 0; sed -n "s/^$1 //p" "$RH/status" | head -1; }
 cmd_status() {
-  local healthy=yes state at pid age_s keys k
+  local healthy=yes state at pid age_s keys k=""
   check_home
   if ! is_set_up; then
     echo "archive: NOT SET UP. Conversations are not being archived."
@@ -320,6 +329,12 @@ cmd_status() {
   case "$k" in "") k="unset (30 days)" ;; "?unreadable") k="unreadable" ;; *) k="$(relevio_safe "$k")" ;; esac
   echo "  Claude Code keeps conversations: cleanupPeriodDays $k in $CC_DIR/settings.json"
   echo "  Claude Code's own conversations: $(human_bytes "$(du -sk "$CC_DIR/projects" 2>/dev/null | awk '{ print $1 * 1024 }')") in $CC_DIR/projects"
+  if remote_is_set; then
+    remote_show || healthy=no
+    [ "$(remote_status_field state)" = fail ] && healthy=no
+  else
+    echo "  copy off this machine: none (same disk, same failure). Set one with: remote set folder <path> | remote set rclone <remote:path>"
+  fi
   [ "$healthy" = yes ] || exit 1
 }
 
@@ -746,6 +761,7 @@ cmd_sync() {
       archive_folders < <(all_folders) ;;
   esac
   end_run
+  push_after_run
 }
 
 # backfill: everything already on the machine, in the foreground, with progress.
@@ -771,6 +787,11 @@ cmd_backfill() {
   archive_folders < <(all_folders)
   end_run
   echo "Done: $(counts)."
+  if remote_is_set; then
+    echo "Sending to the off-machine copy..."
+    push_after_run
+    echo "  copy: $(remote_status_field state) $(relevio_safe "$(remote_status_field message)")"
+  fi
   [ "$N_DEFERRED" -eq 0 ] || echo "Deferred sessions were still being written; the next session start archives them."
   [ "$N_FAILED" -eq 0 ] || { echo "Some sessions failed: details in $RH/log."; exit 1; }
 }
@@ -1036,6 +1057,11 @@ cmd_forget() {
   printf '%s\t%s\n' "$id" "$(utc_iso)" >> "$RH/forgotten.tsv"
   log "forgot $id"
   echo "Removed. Session $id will not be archived again."
+  if remote_is_set; then
+    push_after_run
+    if [ "$(remote_status_field state)" = ok ]; then echo "Removed from the off-machine copy too."
+    else echo "NOT yet removed from the off-machine copy: $(relevio_safe "$(remote_status_field message)"). The next push removes it."; fi
+  fi
 }
 
 # --- guide ----------------------------------------------------------------------------
@@ -1138,6 +1164,11 @@ cmd_notice() {
   done < "$RH/status"
   case "$at" in ""|*[!0-9]*) at=0 ;; esac
   case "$pid" in ""|*[!0-9]*) pid=0 ;; esac
+  # The copy off this machine, only when the archive itself has nothing to say.
+  if [ "$st" = ok ] && [ "$(remote_status_field state)" = fail ]; then
+    echo "ARCHIVE COPY FAILING: $(printf '%s' "$(remote_status_field message)" | LC_ALL=C tr -c 'A-Za-z0-9 ._/:(),-' '?' | cut -c1-150). Tell the user in one line; details: bash \"$SELF\" remote status"
+    return 0
+  fi
   case "$st" in
     fail)
       echo "ARCHIVE FAILING since $(fmt_time "$at"): $(printf '%s' "$msg" | LC_ALL=C tr -c 'A-Za-z0-9 ._/:(),-' '?' | cut -c1-150). Tell the user in one line; the details are in: bash \"$SELF\" status" ;;
@@ -1186,6 +1217,9 @@ case "${1:-}" in
   session-start) shift; cmd_session_start "$@" ;;
   sync) shift; cmd_sync "$@" ;;
   backfill) cmd_backfill ;;
+  remote) shift; cmd_remote "$@" ;;
+  push) shift; cmd_push "$@" ;;
+  verify) shift; cmd_verify "$@" ;;
   list) shift; cmd_list "$@" ;;
   restore) shift; cmd_restore "$@" ;;
   keys) shift; cmd_keys "$@" ;;

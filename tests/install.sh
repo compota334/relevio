@@ -2634,6 +2634,98 @@ for chan in commands templates; do
   check "$chan/kickoff: ... and never runs setup or restore itself" "$(contains "$kd" 'Never run `setup`, `restore`, `keys` or')" "yes"
 done
 
+# --- Case 21: the copy off this machine (remote, push, verify) --------------
+# What leaves the machine is encrypted, names included, and the copy is
+# proven by the provider's own md5. Same code for both transports: a synced
+# folder, and rclone (here on a local path, when rclone is installed).
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  for kind in folder rclone; do
+    if [ "$kind" = rclone ] && ! command -v rclone >/dev/null 2>&1; then
+      echo "  SKIP  copy (rclone): rclone is not installed"; SKIPS=$((SKIPS + 1)); continue
+    fi
+    cp_t="$(mktemp -d)"; mkdir -p "$cp_t/cc/projects/-p1" "$cp_t/cloud" "$cp_t/p1"
+    age-keygen 2>/dev/null > "$cp_t/rec.key"
+    for i in 1 2 3; do
+      printf '{"cwd":"%s","type":"user","timestamp":"2026-01-0%dT00:00:00Z","secret":"plain-text-%d"}\n' "$cp_t/p1" "$i" "$i" \
+        > "$cp_t/cc/projects/-p1/0000000$i-aaaa-4bbb-8ccc-dddddddddddd.jsonl"
+      touch -d '1 hour ago' "$cp_t/cc/projects/-p1/0000000$i-aaaa-4bbb-8ccc-dddddddddddd.jsonl" 2>/dev/null
+    done
+    cpa() {
+      RELEVIO_HOME="$cp_t/h" CLAUDE_CONFIG_DIR="$cp_t/cc" RELEVIO_TEST_INSECURE_KEYS=1 \
+        RELEVIO_TEST_RECOVERY_IDENTITY="$cp_t/rec.key" RELEVIO_TEST_QUIET_MIN=0 bash "$ARC" "$@"
+    }
+    grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpa setup >/dev/null 2>&1
+    cpa backfill >/dev/null 2>&1
+    if [ "$kind" = folder ]; then tgt="$cp_t/cloud"; else tgt=":local:$cp_t/cloud"; fi
+    check "copy ($kind): push before a copy is set fails loud" \
+      "$(contains "$(cpa push 2>&1)" 'no off-machine copy is set')" "yes"
+    cpa remote set "$kind" "$tgt" >/dev/null 2>&1
+    out="$(cpa push 2>&1)"; rc=$?
+    check "copy ($kind): the first push sends every bundle and a catalog" \
+      "$rc:$(contains "$out" '3 bundle(s) sent, catalog #1')" "0:yes"
+    check "copy ($kind): ... under opaque names only: no session id, no project folder" \
+      "$(find "$cp_t/cloud" | grep -c -e '0000000' -e '-p1'):$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | grep -cE '/[0-9a-f]{32}\.age$')" "0:3"
+    check "copy ($kind): ... and nothing in it is readable: no transcript text, no index" \
+      "$(grep -rl -e 'plain-text' -e 'relevio-archive-index' "$cp_t/cloud" | grep -c .)" "0"
+    check "copy ($kind): ... no internal file leaks into it" \
+      "$(find "$cp_t/cloud" -name '.*' -o -name '*.part' | grep -c .)" "0"
+    out="$(cpa verify 2>&1)"; rc=$?
+    check "copy ($kind): verify passes on an intact copy" "$rc:$(contains "$out" 'complete and intact')" "0:yes"
+    out="$(cpa push 2>&1)"
+    check "copy ($kind): a second push sends nothing" "$(contains "$out" '0 bundle(s) sent')" "yes"
+    f="$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | head -1)"; echo tamper >> "$f"
+    out="$(cpa verify 2>&1)"; rc=$?
+    check "copy ($kind): verify catches a bundle altered in the copy" "$rc:$(contains "$out" 'ALTERED in the copy')" "1:yes"
+    out="$(cpa push 2>&1)"
+    check "copy ($kind): ... and the next push sends it again" \
+      "$(contains "$out" '1 bundle(s) sent'):$(cpa verify >/dev/null 2>&1; echo $?)" "yes:0"
+    rm -f "$f"
+    check "copy ($kind): a bundle deleted from the copy is sent again" \
+      "$(contains "$(cpa push 2>&1)" '1 bundle(s) sent')" "yes"
+    c="$(find "$cp_t/cloud/machines" -name catalog.age)"; cp "$c" "$cp_t/old-catalog"
+    cpa push >/dev/null 2>&1; echo "$(date)" >> "$cp_t/cc/projects/-p1/00000001-aaaa-4bbb-8ccc-dddddddddddd.jsonl"
+    touch -d '1 hour ago' "$cp_t/cc/projects/-p1/00000001-aaaa-4bbb-8ccc-dddddddddddd.jsonl" 2>/dev/null
+    cpa sync --all >/dev/null 2>&1
+    check "copy ($kind): an archiving run sends what is new by itself" \
+      "$(cpa remote status 2>&1 | grep -c 'last push: ok')" "1"
+    cp "$cp_t/old-catalog" "$c"
+    out="$(cpa verify 2>&1)"; rc=$?
+    check "copy ($kind): verify catches an older catalog put back in the copy" \
+      "$rc:$(contains "$out" 'NOT the one this machine wrote')" "1:yes"
+    cpa push >/dev/null 2>&1
+    if [ "$kind" = folder ]; then
+      mv "$cp_t/cloud" "$cp_t/cloud.away"
+      out="$(cpa push 2>&1)"; rc=$?
+      check "copy (folder): a missing folder fails loud, with what to check" \
+        "$rc:$(contains "$out" 'is the drive or the sync client mounted')" "2:yes"
+      check "copy (folder): ... status says the copy is failing, and exits 1" \
+        "$(contains "$(cpa status 2>&1)" 'last push: FAILING'):$(cpa status >/dev/null 2>&1; echo $?)" "yes:1"
+      cpa sync --all >/dev/null 2>&1; rc=$?
+      check "copy (folder): ... while archiving itself keeps working" \
+        "$rc:$(grep -c '^state ok' "$cp_t/h/status")" "0:1"
+      mv "$cp_t/cloud.away" "$cp_t/cloud"
+      mkdir -p "$cp_t/repo"; git -C "$cp_t/repo" init -q
+      check "copy (folder): a copy inside a git repository is refused" \
+        "$(contains "$(cpa remote set folder "$cp_t/repo" 2>&1)" 'inside a git repository')" "yes"
+      check "copy (folder): a copy inside the archive is refused" \
+        "$(contains "$(cpa remote set folder "$cp_t/h/archive" 2>&1)" 'inside the archive itself')" "yes"
+      cpa remote set folder "$cp_t/cloud" >/dev/null 2>&1; cpa push >/dev/null 2>&1
+      # An emptied index is never a reason to delete the copy.
+      cp "$cp_t/h/index.tsv" "$cp_t/index.bak"; head -1 "$cp_t/index.bak" > "$cp_t/h/index.tsv"
+      cpa push >/dev/null 2>&1
+      check "copy (folder): an emptied index deletes nothing from the copy" \
+        "$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | grep -c .)" "3"
+      cp "$cp_t/index.bak" "$cp_t/h/index.tsv"
+      printf '00000002\n' | cpa forget 00000002-aaaa-4bbb-8ccc-dddddddddddd >/dev/null 2>&1
+      check "copy (folder): forget removes the session from the copy too" \
+        "$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | grep -c .)" "2"
+    fi
+    rm -rf "$cp_t"
+  done
+else
+  echo "  SKIP  copy: remote, push and verify (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+
 # --- Case 13: the one-time migration of pre-v0.22 headers -------------------
 # Other projects (and other people) are running relevio v0.21 and older, where
 # Branch could carry prose and Commits a "(N commits)" suffix. There is no
