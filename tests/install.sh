@@ -2628,6 +2628,15 @@ check "README: ... says plainly that losing both keys loses the archive" \
   "$(contains "$rd" 'If you lose both the passphrase and the recovery key, the archive is')" "yes"
 check "README: ... and lists both new files" \
   "$(contains "$rd" '`.claude/hooks/session-end.sh`'):$(contains "$rd" '`.claude/scripts/relevio-archive.sh`')" "yes:yes"
+check "README: ... lists the copy and timestamp files" \
+  "$(contains "$rd" '`.claude/scripts/relevio-archive-remote.sh`'):$(contains "$rd" '`.claude/scripts/relevio-archive-stamps.sh`'):$(contains "$rd" '`.claude/scripts/relevio-ots-helper.py`')" "yes:yes:yes"
+check "README: ... documents the copy off this machine, with Drive's least privilege" \
+  "$(contains "$rd" '### A copy off this machine'):$(contains "$rd" 'scope=drive.file'):$(contains "$rd" 'how many bundles there are and how big')" "yes:yes:yes"
+check "README: ... and timestamps, with what a proof does NOT prove" \
+  "$(contains "$rd" '### Timestamps'):$(contains "$rd" 'prove who wrote it, nor that what it says is true')" "yes:yes"
+for f in relevio-archive-remote.sh relevio-archive-stamps.sh relevio-ots-helper.py; do
+  check "install.sh: ships $f" "$(grep -c "^SCRIPTS=.*$f" "$REPO/install.sh")" "1"
+done
 for chan in commands templates; do
   kd="$(cat "$REPO/$chan/kickoff.md")"
   check "$chan/kickoff: it reports the archive's status in one line" "$(contains "$kd" 'relevio-archive.sh" status')" "yes"

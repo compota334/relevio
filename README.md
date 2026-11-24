@@ -75,6 +75,9 @@ Nothing is ever lost to compaction again.
 | `.claude/scripts/relevio-header.sh` | Prints a session's handoff header with the mechanical fields (date, dev, branch, commits, areas, resume) computed, so the agent writes only the title, topics and summary. |
 | `.claude/scripts/relevio-migrate.sh` | One-time conversion of pre-v0.22 handoff headers. Run once per repo when upgrading. |
 | `.claude/scripts/relevio-archive.sh` | The encrypted conversation archive: setup, backfill, status, list, restore, keys, forget. See [Archiving every conversation](#archiving-every-conversation). |
+| `.claude/scripts/relevio-archive-remote.sh` | Part of the archive: the encrypted copy off this machine (remote, push, verify, pull). Sourced, never run on its own. |
+| `.claude/scripts/relevio-archive-stamps.sh` | Part of the archive: timestamps (stamp, proof, proof-check). Sourced, never run on its own. |
+| `.claude/scripts/relevio-ots-helper.py` | Reads an OpenTimestamps proof without a Bitcoin node; run only with the archive's own Python. |
 | `.claude/scripts/relevio-handoffs-lib.sh` | Shared library for the scripts above (sourced, not run). |
 | `docs/handoff/INDEX.md` | The library index, **generated** by `relevio-index.sh`: an **Active lanes** board (branches with open work) plus the full **Catalog** (date, conversation name, handoff file, dev, branch, areas, commit range, topics, summary). Never edited by hand, never overwritten by the installer. |
 
@@ -600,20 +603,105 @@ that terminal during `setup`, whose screen shows the keys.
 | `keys check [--recovery]` | Proves a key opens the archive. |
 | `keys passphrase` | Changes the passphrase. |
 | `keys reset` | Lost the passphrase: with the recovery key, re-encrypts everything to a new main key, touching nothing old until every new copy is proven to open. |
+| `keys rotate-recovery` | The recovery key leaked: shows a new one once, re-encrypts everything to the passphrase's key plus the new one (same safety as `reset`), and replaces the off-machine copy. The old recovery key then opens nothing. |
 | `forget <id>` | Removes a session from the archive for good, and keeps it from being archived again. |
+| `remote set folder <path>` / `remote set rclone <remote:path>` | Sets the copy off this machine (see below). `remote status` shows it; `remote off` stops updating it. |
+| `push` | Sends what is new to the copy. Runs by itself after every archiving run once a copy is set. |
+| `verify` | Checks the copy: every bundle by the provider's own md5 (nothing downloaded), a random sample downloaded and checked by sha256, and the catalog. |
+| `pull folder <path>` / `pull rclone <remote:path>` | On a new computer: brings the whole archive back from the copy into an empty `~/.relevio` (your terminal: asks for a key). Interrupted, it resumes. |
+| `stamp setup` / `status` / `now` / `backfill` / `off` | Timestamps (see below). |
+| `proof <id>` | Builds the folder you hand someone to prove a conversation existed at a date. |
+| `proof-check <folder>` | Checks a proof folder here, against two Bitcoin explorers. |
 | `off` / `on` | Stops and resumes archiving. What is archived stays. |
 | `guide` | The instructions for the agent: what it may run itself, what only you type, which key each step asks for, and how to walk you through it one step at a time. `/kickoff` and `/revisit` point the agent to it. |
 
 `/revisit` uses it too: when `claude --resume` no longer finds a session, the
 agent looks it up with `list`, reads `guide`, and has you run `restore`.
 
+### A copy off this machine
+
+Same disk, same failure: the archive alone does not survive a broken disk or
+a stolen laptop. A copy elsewhere does, and **everything in it is encrypted,
+names included**:
+
+- bundles travel under opaque names (a hash of a random salt and the name),
+  so the copy does not show session ids or project names;
+- the index, the folder list and the upload records travel as one encrypted
+  `catalog.age`, written last, so it never names a bundle that is not there;
+- the main key travels locked by your passphrase; the recovery key never
+  travels anywhere.
+
+Two ways to send it, one code path:
+
+1. **A synced folder**: any folder a sync client already mirrors (Google Drive
+   for desktop, Dropbox, OneDrive, iCloud, Syncthing, a NAS mount).
+   `remote set folder <path>`. relevio writes there; the client uploads.
+2. **rclone**: talks to the provider itself (Google Drive, S3, B2, SFTP,
+   WebDAV and about 70 more), which is the way on Linux, where Google has no
+   Drive client. Connect it once in your terminal, for Google Drive with
+   least privilege (rclone then sees only the files it created):
+
+       rclone config create relevio-gdrive drive scope=drive.file
+
+   then `remote set rclone relevio-gdrive:relevio`.
+
+What can go wrong, and what happens:
+
+| Case | What relevio does |
+|---|---|
+| no network, provider down | the archive keeps working; the copy waits and `status` says since when |
+| login expired (rclone) | `status` shows the exact `rclone config reconnect` command |
+| a bundle altered or deleted in the copy | `verify` names it; the next `push` sends it again |
+| an older catalog put back in the copy | `verify` catches it; the next `push` writes the current one |
+| an emptied or damaged local index | nothing is deleted from the copy: only `forget` removes from it |
+| the computer is lost | `pull` on the new one, with the passphrase or `--recovery` |
+
+Measured on Google Drive (rclone 1.60.1): a cut upload leaves nothing behind,
+uploading the same name twice keeps one file, deletions go to Drive's trash,
+and Drive reports each file's md5 itself, which is how `verify` checks every
+bundle without downloading it.
+
+What the copy still reveals: how many bundles there are and how big each is.
+After `keys reset` or `keys rotate-recovery` the copy is replaced, but your
+provider may keep old versions or a trash folder for a while: empty them if a
+key leaked.
+
+### Timestamps
+
+`stamp setup` installs the [OpenTimestamps](https://opentimestamps.org)
+client (pinned, in its own folder inside `~/.relevio`). From then on every
+archived conversation gets a proof that it existed, byte for byte, **no later
+than a Bitcoin block**, without trusting relevio, you, or this computer's
+clock. It does **not** prove who wrote it, nor that what it says is true.
+
+- What is stamped is a small leaf holding `sha256(salt + transcript)`, with a
+  random salt per conversation. Only the hash of that leaf reaches the public
+  calendar servers: nobody can read or even confirm a guessed conversation
+  from it. The salts and proofs travel inside the encrypted catalog.
+- Leaves go out in batches (one call for thousands): when the oldest has
+  waited a day, when 10 000 wait, or on `stamp now`. Bitcoin confirms a batch
+  a few hours later. With no calendar answering, the leaves stay queued and
+  `status` says so; at least two calendars must answer.
+- Conversations archived before stamping was on are stamped when it is turned
+  on: their proof says "no later than that day", not their original date.
+  Those whose transcript is no longer on the machine need `stamp backfill`
+  (your terminal, a key).
+- `proof <id>` builds a folder for whoever must check it: the conversation
+  (in clear: read it for secrets before sharing), its salt, the leaf, the
+  proof and a `VERIFY.txt` with the steps (one `sha256sum` line, then
+  opentimestamps.org or `ots verify`). `proof-check <folder>` does those
+  steps here, asking two block explorers; one answer that matches is enough,
+  any mismatch fails it.
+
 ### What the agent is told
 
 At session start, in the one notice slot after the settings notice: that the
 archive is not set up (at most once a day, silenced by `off`), or that it is
 failing (every session, with the reason), was interrupted, or has not
-succeeded in a week. The agent is told never to run `setup` itself, and the
-script refuses without a terminal anyway.
+succeeded in a week, or that the copy off the machine is failing. The agent
+is told never to run `setup` itself, and the script refuses without a
+terminal anyway. `guide` tells it everything else: which commands it may run,
+which only you type, and how to walk you through them.
 
 ### Security and limits
 
@@ -627,7 +715,7 @@ script refuses without a terminal anyway.
   archive is encrypted to, so a key added behind your back is visible.
 - The archive refuses to live inside a git repository, behind a symbolic
   link, or in a folder you do not own.
-- Same disk, same failure: a copy off the machine is the next step.
+- Without a copy off the machine (above), same disk, same failure.
 - Not archived: Claude Code's file checkpoints (`file-history/`), and ZCode
   sessions (they are not transcript files).
 - Whether the Claude desktop app runs the `SessionEnd` hook is not verified

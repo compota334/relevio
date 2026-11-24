@@ -1175,14 +1175,36 @@ THE TWO KEYS (users mix them up: name them exactly like this)
   If a key is refused, ask which kind the user has and point them to the other
   flag: words with dashes = no --recovery; AGE-SECRET-KEY-1 = --recovery.
 
+THE COPY OFF THIS MACHINE (everything in it is encrypted, names included)
+  remote set folder <path>    a folder a sync client mirrors (Google Drive for
+                              desktop, Dropbox, OneDrive, Syncthing, a NAS)
+  remote set rclone <r:path>  any rclone remote; the user first connects it
+                              once with rclone config (a browser login). That
+                              screen shows the provider's token: never read it.
+                              Least privilege on Google Drive: scope=drive.file
+  push / verify / remote status   send what is new / check the copy / its state
+  pull folder|rclone <target>     a NEW computer brings everything back
+
+TIMESTAMPS (proof that a conversation existed no later than a Bitcoin block;
+not who wrote it, not that it is true)
+  stamp setup     installs the OpenTimestamps client from PyPI into the
+                  archive's own folder: ask the user before running it
+  stamp status / stamp now        state / send the queued leaves now
+  proof <id> [--out <folder>]     the folder to hand someone; it holds the
+                  conversation IN CLEAR: tell the user to read it for secrets
+                  before sharing it
+  proof-check <folder>            checks a proof here (two Bitcoin explorers)
+
 YOU MAY RUN THESE YOURSELF (no secret involved)
   status     health in one screen        list [q]   what is archived
   backfill   archive everything now       guide      this text
-  off / on   only when the user asks
+  remote set, push, verify, remote status, stamp status, stamp now,
+  proof-check (and proof when the conversation is still on this machine)
+  off / on / remote off / stamp off: only when the user asks
 
 ONLY THE USER TYPES THESE (they ask for a key or a confirmation)
   setup, restore <id>, keys check [--recovery], keys passphrase, keys reset,
-  keys rotate-recovery, forget <id>, pull. They refuse to run without a real terminal, on purpose.
+  keys rotate-recovery, forget <id>, pull, stamp backfill, rclone config. They refuse to run without a real terminal, on purpose.
 
 HOW TO MAKE THE USER'S PART SMALL
   1. Do every step you can first: status, list, finding the session id.
