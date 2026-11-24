@@ -41,18 +41,24 @@ stamps_load() {
 }
 
 # --- records ------------------------------------------------------------------------
-# stamps.tsv: state id folder bundle salt leaf queued_at stamped_at height.
+# stamps.tsv: state id folder bundle salt leaf queued_at stamped_at height
+# jsonl_sha256. A row belongs to one archived CONTENT (folder, session and the
+# sha256 of its transcript), not to a bundle file name: a session rewritten in
+# Claude gets a new generation, its old bundle is renamed, and the name
+# <id>.tgz.age then holds other content. The bundle column only says where
+# that content is now (stamp backfill opens it).
 # state: pending (waiting for a batch), stamped (sent, waiting for Bitcoin),
 # complete (in a Bitcoin block), needs-key (the transcript is no longer on
 # this machine: stamp backfill opens the bundle to compute the leaf).
 declare -A S_ROW
+stamp_row() { local IFS="$TAB"; printf '%s' "$*"; }  # the 10 fields, in order
 stamps_load_rows() {
-  local st id fo b salt leaf q s h
+  local st id fo b salt leaf q s h js
   S_ROW=()
   [ -s "$STAMPS_TSV" ] || return 0
   [ "$(head -1 "$STAMPS_TSV")" = "$STAMPS_HEADER" ] || die "$STAMPS_TSV is not a relevio stamp record."
-  while IFS="$TAB" read -r st id fo b salt leaf q s h; do
-    [ -n "$b" ] && S_ROW["$fo/$b"]="$st$TAB$id$TAB$fo$TAB$b$TAB$salt$TAB$leaf$TAB$q$TAB$s$TAB$h"
+  while IFS="$TAB" read -r st id fo b salt leaf q s h js; do
+    [ -n "$js" ] && S_ROW["$fo/$id/$js"]="$(stamp_row "$st" "$id" "$fo" "$b" "$salt" "$leaf" "$q" "$s" "$h" "$js")"
   done < <(tail -n +2 "$STAMPS_TSV")
 }
 # Rows are saved only when something changed (a flag set by every writer).
@@ -83,21 +89,27 @@ new_salt() { rand_hex 32; }
 # bytes> still hash to what was archived (so the leaf is of exactly the
 # archived content); otherwise the row waits for stamp backfill.
 stamps_queue() {
-  local st id fo cwd ver by sha mt fi b bb at j salt salted leaf added=0
+  local st id fo cwd ver by sha mt fi b bb at j salt salted leaf added=0 k rst rb rsalt rleaf rq rs rh
   stamps_load_rows
   while IFS="$TAB" read -r st id fo cwd ver by sha mt fi b bb at; do
-    [ -n "${S_ROW[$fo/$b]:-}" ] && continue
+    k="$fo/$id/$sha"
+    if [ -n "${S_ROW[$k]:-}" ]; then
+      # Same content, renamed bundle (an older generation now): follow it.
+      IFS="$TAB" read -r rst _ _ rb rsalt rleaf rq rs rh _ <<<"${S_ROW[$k]}"
+      [ "$rb" = "$b" ] || { S_ROW["$k"]="$(stamp_row "$rst" "$id" "$fo" "$b" "$rsalt" "$rleaf" "$rq" "$rs" "$rh" "$sha")"; S_DIRTY=1; }
+      continue
+    fi
     j="$PROJECTS/$fo/$id.jsonl"
     if [ "$st" != superseded ] && [ -f "$j" ] && [ "$(head -c "$by" "$j" | sha_of)" = "$sha" ]; then
       salt="$(new_salt)"; salted="$(head -c "$by" "$j" | salted_of "$salt")"
       leaf="$(leaf_write "$salted")"
-      S_ROW["$fo/$b"]="pending$TAB$id$TAB$fo$TAB$b$TAB$salt$TAB$leaf$TAB$(date +%s)$TAB$RELEVIO_NONE$TAB$RELEVIO_NONE"
+      S_ROW["$k"]="$(stamp_row pending "$id" "$fo" "$b" "$salt" "$leaf" "$(date +%s)" "$RELEVIO_NONE" "$RELEVIO_NONE" "$sha")"
     else
-      S_ROW["$fo/$b"]="needs-key$TAB$id$TAB$fo$TAB$b$TAB$RELEVIO_NONE$TAB$RELEVIO_NONE$TAB$(date +%s)$TAB$RELEVIO_NONE$TAB$RELEVIO_NONE"
+      S_ROW["$k"]="$(stamp_row needs-key "$id" "$fo" "$b" "$RELEVIO_NONE" "$RELEVIO_NONE" "$(date +%s)" "$RELEVIO_NONE" "$RELEVIO_NONE" "$sha")"
     fi
     added=$((added + 1)); S_DIRTY=1
   done < <(tail -n +2 "$INDEX" 2>/dev/null)
-  [ "$added" -eq 0 ] || stamps_save_rows
+  stamps_save_dirty
 }
 
 # --- batch and upgrade ---------------------------------------------------------------
@@ -115,7 +127,7 @@ throttled() {
 }
 # stamps_batch <force|auto>: sends every pending leaf in one client call.
 stamps_batch() {
-  local k st q now oldest="" n=0 err id fo b salt leaf h
+  local k st q now oldest="" n=0 err id fo b salt leaf h js
   local -a files=()
   now="$(date +%s)"
   for k in "${!S_ROW[@]}"; do
@@ -136,9 +148,9 @@ stamps_batch() {
     return 1
   fi
   for k in "${!S_ROW[@]}"; do
-    IFS="$TAB" read -r st id fo b salt leaf q _ h <<<"${S_ROW[$k]}"
+    IFS="$TAB" read -r st id fo b salt leaf q _ h js <<<"${S_ROW[$k]}"
     [ "$st" = pending ] && [ -s "$STAMP_DIR/$leaf.leaf.ots" ] || continue
-    S_ROW["$k"]="stamped$TAB$id$TAB$fo$TAB$b$TAB$salt$TAB$leaf$TAB$q$TAB$now$TAB$h"; S_DIRTY=1
+    S_ROW["$k"]="$(stamp_row stamped "$id" "$fo" "$b" "$salt" "$leaf" "$q" "$now" "$h" "$js")"; S_DIRTY=1
   done
   log "stamps: $n leaf(s) sent to the calendars"
 }
@@ -146,7 +158,7 @@ stamps_batch() {
 # the Bitcoin part of every proof sent at least an hour ago, then reads all of
 # them in ONE helper call. A proof still pending stays stamped.
 stamps_upgrade() {
-  local k st id fo b salt leaf q s h now line n=0 done_n=0 out="$RH/.attest"
+  local k st id fo b salt leaf q s h js now line n=0 done_n=0 out="$RH/.attest"
   local -a files=()
   now="$(date +%s)"
   for k in "${!S_ROW[@]}"; do
@@ -161,12 +173,12 @@ stamps_upgrade() {
   "$OTS_BIN" -q upgrade "${files[@]}" >/dev/null 2>&1 || true
   "${OTS_HELPER[@]}" attest "${files[@]}" > "$out" 2>/dev/null || true
   for k in "${!S_ROW[@]}"; do
-    IFS="$TAB" read -r st id fo b salt leaf q s h <<<"${S_ROW[$k]}"
+    IFS="$TAB" read -r st id fo b salt leaf q s h js <<<"${S_ROW[$k]}"
     [ "$st" = stamped ] || continue
     line="$(earliest_bitcoin "$out" "$leaf.leaf.ots")"
     [ -n "$line" ] || continue
     read -r h _ <<<"$line"
-    S_ROW["$k"]="complete$TAB$id$TAB$fo$TAB$b$TAB$salt$TAB$leaf$TAB$q$TAB$s$TAB$h"; S_DIRTY=1
+    S_ROW["$k"]="$(stamp_row complete "$id" "$fo" "$b" "$salt" "$leaf" "$q" "$s" "$h" "$js")"; S_DIRTY=1
     done_n=$((done_n + 1))
   done
   rm -f "${out:?}"
@@ -246,7 +258,7 @@ stamp_show() {
 # Rows whose transcript is gone: open each bundle (user's terminal, a key)
 # and compute the leaf from what was archived.
 stamp_backfill() {
-  local use=main idn k st id fo b n=0 salt salted leaf tmp
+  local use=main idn k st id fo b n=0 salt salted leaf tmp js
   [ "${1:-}" = --recovery ] && use=recovery
   require_tty; stamping_on || die "timestamping is off: run stamp setup first."
   STAMP_TMP=""; lock_or_die STAMP_TMP
@@ -258,14 +270,14 @@ stamp_backfill() {
   STAMP_TMP="$(mktemp -d "$RH/.stamp.XXXXXX")"; tmp="$STAMP_TMP"
   n=0
   for k in "${!S_ROW[@]}"; do
-    IFS="$TAB" read -r st id fo b _ <<<"${S_ROW[$k]}"
+    IFS="$TAB" read -r st id fo b _ _ _ _ _ js <<<"${S_ROW[$k]}"
     [ "$st" = needs-key ] || continue
     index_names_ok "$id" "$fo" "$b" || continue
     "$AGE" -d -i <(printf '%s\n' "$idn") "$RH/archive/$fo/$b" 2>/dev/null | gzip -dc | tar -xf - -C "$tmp" "$id.jsonl" 2>/dev/null \
       || { log "stamp backfill: could not open $fo/$b"; continue; }
     salt="$(new_salt)"; salted="$(salted_of "$salt" < "$tmp/$id.jsonl")"; rm -f "$tmp/$id.jsonl"
     leaf="$(leaf_write "$salted")"
-    S_ROW["$k"]="pending$TAB$id$TAB$fo$TAB$b$TAB$salt$TAB$leaf$TAB$(date +%s)$TAB$RELEVIO_NONE$TAB$RELEVIO_NONE"
+    S_ROW["$k"]="$(stamp_row pending "$id" "$fo" "$b" "$salt" "$leaf" "$(date +%s)" "$RELEVIO_NONE" "$RELEVIO_NONE" "$js")"; S_DIRTY=1
     n=$((n + 1))
   done
   unset idn
@@ -275,22 +287,34 @@ stamp_backfill() {
 
 # --- proof: the folder a colleague, an auditor or a court can check ---------------------------
 cmd_proof() {
-  local id="${1:-}" out="" use=main fo b st salt leaf h row k j by sha tmp
+  local id="${1:-}" out="" use=main want_fo="" fo b st salt leaf h row j by sha lines n
   shift || true
   while [ $# -gt 0 ]; do
-    case "$1" in --out) out="${2:-}"; shift 2 ;; --recovery) use=recovery; shift ;; *) die "unknown proof option '$(relevio_safe "$1")'" ;; esac
+    case "$1" in
+      --out) out="${2:-}"; shift 2 ;;
+      --recovery) use=recovery; shift ;;
+      --folder) want_fo="${2:-}"; shift 2 ;;
+      *) die "unknown proof option '$(relevio_safe "$1")'" ;;
+    esac
   done
   check_home; is_set_up || die "the archive is not set up in $RH."
   tools_load
   [[ $id =~ $SESSION_RE ]] || die "'$(relevio_safe "$id")' is not a session id."
+  # The current generation of the session, from the index (as restore picks
+  # it), then its stamp by content.
+  lines="$(awk -F'\t' -v id="$id" -v f="$want_fo" 'NR > 1 && $2 == id && ($1 == "active" || $1 == "deleted-in-claude") && (f == "" || $3 == f) { print $3 "\t" $10 "\t" $6 "\t" $7 }' "$INDEX")"
+  [ -n "$lines" ] || die "session $id is not archived."
+  n="$(grep -c . <<<"$lines")"
+  if [ "$n" -gt 1 ]; then
+    echo "Session $id is archived from $n project folders; pick one with --folder:" >&2
+    cut -f1 <<<"$lines" | sed 's/^/  --folder /' >&2
+    exit 1
+  fi
+  IFS="$TAB" read -r fo b by sha <<<"$lines"
   stamps_load_rows
-  # The current generation of the session (its bundle is <id>.tgz.age).
-  row=""
-  for k in "${!S_ROW[@]}"; do
-    case "$k" in */"$id.tgz.age") row="${S_ROW[$k]}"; break ;; esac
-  done
+  row="${S_ROW[$fo/$id/$sha]:-}"
   [ -n "$row" ] || die "session $id has no timestamp yet (stamp status shows what is queued)."
-  IFS="$TAB" read -r st _ fo b salt leaf _ _ h <<<"$row"
+  IFS="$TAB" read -r st _ _ b salt leaf _ _ h _ <<<"$row"
   case "$st" in
     complete) ;;
     stamped) echo "Note: this proof is not confirmed in Bitcoin yet (usually a few hours). It will be checkable then; run proof again later for the final one." ;;
@@ -299,7 +323,6 @@ cmd_proof() {
   out="${out:-$PWD/relevio-proof-${id:0:8}}"
   [ ! -e "$out" ] || die "$(relevio_safe "$out") already exists; choose another folder with --out."
   mkdir -p "$out"; chmod 700 "$out"
-  read -r by sha <<<"$(awk -F'\t' -v f="$fo" -v b="$b" 'NR > 1 && $3 == f && $10 == b { print $6, $7; exit }' "$INDEX")"
   j="$PROJECTS/$fo/$id.jsonl"
   if [ -f "$j" ] && [ "$(head -c "$by" "$j" | sha_of)" = "$sha" ]; then
     head -c "$by" "$j" > "$out/conversation.jsonl"

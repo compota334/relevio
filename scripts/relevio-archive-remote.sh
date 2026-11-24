@@ -42,6 +42,8 @@ remote_load() {
   fi
 }
 target_safe() { printf '%s' "$1" | safe_msg; }
+# A target goes into the key=value config: a line break would plant keys.
+target_ok() { case "$1" in *$'\n'*|*$'\r'*|"") die "the copy's target must be one line, not empty." ;; esac; }
 
 # --- transports ----------------------------------------------------------------------
 # Every t_* call either succeeds or returns 1 with R_ERR set to a one-line
@@ -120,7 +122,19 @@ t_md5() {
     folder)
       folder_ok || return 1
       : > "$out"
-      if [ $# -gt 0 ]; then
+      if [ "${1:-}" = --quick ]; then
+        # The daily audit of a folder copy: bundles by size (reading 1.5 GB
+        # back every day, or downloading a streamed Drive folder, is not an
+        # audit); the small files (keys, catalog) by md5. verify reads all.
+        [ -d "$R_BASE" ] || return 0
+        while IFS= read -r -d '' f; do
+          case "$f" in
+            *.part) ;;
+            "$R_BASE"/b/*) printf 'size:%s %s\n' "$(file_stat "$f" | cut -d' ' -f1)" "${f#"$R_BASE/"}" >> "$out" ;;
+            *) printf '%s %s\n' "$(md5_of < "$f")" "${f#"$R_BASE/"}" >> "$out" ;;
+          esac
+        done < <(find "$R_BASE" -type f -print0)
+      elif [ $# -gt 0 ]; then
         for f in "$@"; do [ -f "$R_BASE/$f" ] && printf '%s %s\n' "$(md5_of < "$R_BASE/$f")" "$f" >> "$out"; done
       elif [ -d "$R_BASE" ]; then
         while IFS= read -r -d '' f; do
@@ -130,6 +144,7 @@ t_md5() {
       fi
       return 0 ;;
     rclone)
+      [ "${1:-}" != --quick ] || shift   # Drive answers md5 from its records: no cheaper form
       if [ $# -gt 0 ]; then
         printf '%s\n' "$@" > "$out.files"
         rc_list "$out.raw" hashsum md5 --files-from "$out.files" "$R_BASE" || return 1
@@ -218,7 +233,7 @@ push_core() {
   PUSH_STAGE="$(mktemp -d "$RH/.push.XXXXXX")"; mkdir "$PUSH_STAGE/b"
   declare -A WANT=() NEW_ROW=() GOT=() ALL=()
   if [ "$mode" = audit ]; then
-    t_md5 "$PUSH_STAGE/.md5" || return 1
+    t_md5 "$PUSH_STAGE/.md5" --quick || return 1
     md5_map "$PUSH_STAGE/.md5"
     config_set remote_audit_at "$(date +%s)"
   fi
@@ -231,7 +246,7 @@ push_core() {
     row="${U_ROW[$o]:-}"
     if [ -n "$row" ]; then
       IFS="$TAB" read -r _ _ rby rmt _ rm5 _ <<<"$row"
-      [ "$rby" = "$by" ] && [ "$rmt" = "$mt" ] && { [ "$mode" != audit ] || [ "${GOT[$o]:-}" = "$rm5" ]; } && continue
+      [ "$rby" = "$by" ] && [ "$rmt" = "$mt" ] && { [ "$mode" != audit ] || [ "${GOT[$o]:-}" = "$rm5" ] || [ "${GOT[$o]:-}" = "size:$by" ]; } && continue
     fi
     if [ "$limit" -gt 0 ] && [ "$n" -ge "$limit" ]; then PUSH_PENDING=$((PUSH_PENDING + 1)); continue; fi
     sh="$(sha_of < "$f")"; m="$(md5_of < "$f")"
@@ -370,6 +385,7 @@ cmd_remote() {
 remote_set() {
   local kind="${1:-}" target="${2:-}" r
   [ $# -eq 2 ] || die "remote set needs: folder <path>, or rclone <remote:path>."
+  target_ok "$target"
   case "$kind" in
     folder)
       [ -d "$target" ] || die "'$(target_safe "$target")' is not a folder. Create it (or let the sync client create it) first."
@@ -417,7 +433,8 @@ remote_behind() {
   while IFS="$TAB" read -r _ _ fo _ _ _ _ _ _ b _; do
     [ -n "${A_STAT[$fo/$b]:-}" ] || continue
     read -r by mt <<<"${A_STAT[$fo/$b]}"
-    o="$(opaque_for "$fo" "$b")"; row="${U_ROW[$o]:-}"
+    # A bundle never sent has no record (and no need for its opaque name).
+    o="${U_KEY[$fo/$b]:-}"; row="${o:+${U_ROW[$o]:-}}"
     if [ -z "$row" ]; then n=$((n + 1)); continue; fi
     IFS="$TAB" read -r _ _ rby rmt _ <<<"$row"
     [ "$rby" = "$by" ] && [ "$rmt" = "$mt" ] || n=$((n + 1))
@@ -501,13 +518,17 @@ cmd_pull() {
   mkdir -p "$RH/keys" "$RH/archive"; chmod 700 "$RH" "$RH/keys" "$RH/archive"
   : > "$RH/.pull-in-progress"
   AGE="$(command -v age)"; AGE_KEYGEN="$(command -v age-keygen)"; SHA="$(sha_tool)"
+  target_ok "$target"
   R_KIND="$kind"; R_TARGET="$target"
   case "$kind" in
     folder) [ -d "$target" ] || die "'$(target_safe "$target")' is not a folder." ;;
     rclone) RCLONE="$(command -v rclone)" || die "rclone is not installed: sudo apt install rclone (Linux) or see https://rclone.org/install/" ;;
     *) die "pull needs: folder <path>, or rclone <remote:path>." ;;
   esac
-  tmp="$(mktemp -d "$RH/.pull.XXXXXX")"; PUSH_STAGE="$tmp"; trap 'rm -rf "${PUSH_STAGE:?}"' EXIT
+  # The lock keeps a session starting or ending meanwhile from archiving into
+  # a home whose index this pull is about to replace.
+  PUSH_STAGE=""; lock_or_die PUSH_STAGE
+  tmp="$(mktemp -d "$RH/.pull.XXXXXX")"; PUSH_STAGE="$tmp"
   t_list_machines "$tmp/machines" || die "$R_ERR"
   machines="$(grep -E '^[0-9a-f]{12}$' "$tmp/machines" || true)"
   [ -n "$machines" ] || die "no relevio copy found at $(target_safe "$target") (no machines/ folder in it)."

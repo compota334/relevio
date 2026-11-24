@@ -38,7 +38,7 @@
 #   stamp setup | status | now | backfill | off
 #             OpenTimestamps: prove each archived conversation existed no
 #             later than a Bitcoin block (stamped in daily batches)
-#   proof <id> [--out <folder>]  a folder anyone can check: the
+#   proof <id> [--out <folder>] [--folder <f>] [--recovery]  a folder anyone can check: the
 #             conversation, its salt, the stamped leaf and its proof
 #   proof-check <folder>  check a proof folder here, with two Bitcoin explorers
 #   off       stop archiving new sessions (what is archived stays)
@@ -366,10 +366,13 @@ cmd_status() {
   case "$k" in "") k="unset (30 days)" ;; "?unreadable") k="unreadable" ;; *) k="$(relevio_safe "$k")" ;; esac
   echo "  Claude Code keeps conversations: cleanupPeriodDays $k in $CC_DIR/settings.json"
   echo "  Claude Code's own conversations: $(human_bytes "$(du -sk "$CC_DIR/projects" 2>/dev/null | awk '{ print $1 * 1024 }')") in $CC_DIR/projects"
-  stamp_show
+  # The stamps and the copy report; a broken config there (rclone gone, a
+  # damaged record) shows as a failing line, never as a status that stops.
+  ( stamp_show ) 2>"$RH/.status.err" || { echo "  stamps: CANNOT READ: $(sed 's/^ERROR: //' "$RH/.status.err" | tail -1 | safe_msg | cut -c1-150)"; healthy=no; }
   [ "$(stamps_status_field state)" = fail ] && stamping_on && healthy=no
   if remote_is_set; then
-    remote_show || healthy=no
+    ( remote_show ) 2>"$RH/.status.err" || { echo "  copy: CANNOT READ: $(sed 's/^ERROR: //' "$RH/.status.err" | tail -1 | safe_msg | cut -c1-150)"; healthy=no; }
+    rm -f "${RH:?}/.status.err"
     [ "$(remote_status_field state)" = fail ] && healthy=no
   else
     echo "  copy off this machine: none (same disk, same failure). Set one with: remote set folder <path> | remote set rclone <remote:path>"

@@ -2704,6 +2704,13 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     cpa push >/dev/null 2>&1
     check "copy ($kind): ... and the next push writes the current catalog back" \
       "$(cpa verify >/dev/null 2>&1; echo $?)" "0"
+    if [ "$kind" = rclone ]; then
+      sed -i 's|^rclone=.*|rclone=/nonexistent/rclone|' "$cp_t/h/config"
+      out="$(cpa status 2>&1)"; rc=$?
+      check "copy (rclone): with rclone gone, status still reports everything and names the copy as unreadable" \
+        "$rc:$(contains "$out" 'copy: CANNOT READ: rclone is missing'):$(contains "$out" 'Claude Code keeps conversations')" "1:yes:yes"
+      sed -i "s|^rclone=.*|rclone=$(command -v rclone)|" "$cp_t/h/config"
+    fi
     if [ "$kind" = folder ]; then
       # An archiving run with nothing new trusts the upload records: no call
       # to the copy at all, until the daily audit is due.
@@ -2727,6 +2734,8 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
       mkdir -p "$cp_t/repo"; git -C "$cp_t/repo" init -q
       check "copy (folder): a copy inside a git repository is refused" \
         "$(contains "$(cpa remote set folder "$cp_t/repo" 2>&1)" 'inside a git repository')" "yes"
+      check "copy (folder): a target with a line break is refused (it would plant config keys)" \
+        "$(contains "$(cpa remote set folder "$(printf '%s\nage=/tmp/evil' "$cp_t/cloud")" 2>&1)" 'must be one line'):$(grep -c '^age=/tmp/evil' "$cp_t/h/config")" "yes:0"
       check "copy (folder): a copy inside the archive is refused" \
         "$(contains "$(cpa remote set folder "$cp_t/h/archive" 2>&1)" 'inside the archive itself')" "yes"
       cpa remote set folder "$cp_t/cloud" >/dev/null 2>&1; cpa push >/dev/null 2>&1
@@ -2884,6 +2893,16 @@ FAKE
     "$(contains "$(spa proof-check "$sp_t/p" 2>&1)" 'does NOT match the stamped leaf')" "yes"
   check "stamp: proof of the session whose transcript is gone opens the archive (a key)" \
     "$(grep '^AGE-SECRET-KEY' "$sp_t/rec.key" | spa proof 00000003-aaaa-4bbb-8ccc-dddddddddddd --out "$sp_t/p3" --recovery >/dev/null 2>&1; spa proof-check "$sp_t/p3" >/dev/null 2>&1; echo $?):$(cmp -s "$sp_t/s3.jsonl" "$sp_t/p3/conversation.jsonl" && echo same)" "0:same"
+  # A session rewritten after it was stamped: the old content keeps its proof
+  # (now in an older generation), the new content gets its own.
+  printf '{"cwd":"%s","type":"user","secret":"transcript-text-1 rewritten"}\n' "$sp_t/p1" > "$sp_t/cc/projects/-p1/00000001-aaaa-4bbb-8ccc-dddddddddddd.jsonl"
+  touch -d '1 hour ago' "$sp_t/cc/projects/-p1/00000001-aaaa-4bbb-8ccc-dddddddddddd.jsonl" 2>/dev/null
+  spa sync --all >/dev/null 2>&1; FAKE_OTS_CONFIRM=1 spa stamp now >/dev/null 2>&1
+  check "stamp: a rewritten session keeps the old proof and gets a new one" \
+    "$(grep -c '^complete	00000001' "$sp_t/h/stamps.tsv"):$(grep -c '^needs-key' "$sp_t/h/stamps.tsv")" "2:0"
+  spa proof 00000001-aaaa-4bbb-8ccc-dddddddddddd --out "$sp_t/p-new" >/dev/null 2>&1
+  check "stamp: ... and proof gives the CURRENT conversation, which checks" \
+    "$(grep -c rewritten "$sp_t/p-new/conversation.jsonl"):$(spa proof-check "$sp_t/p-new" >/dev/null 2>&1; echo $?)" "1:0"
   # The stamps travel in the encrypted catalog: a new machine can still prove.
   spa remote set folder "$sp_t/cloud" >/dev/null 2>&1; spa push >/dev/null 2>&1
   check "stamp: the copy holds no readable stamp file" \
@@ -2891,7 +2910,7 @@ FAKE
   mkdir -p "$sp_t/cc2/projects"
   grep '^AGE-SECRET-KEY' "$sp_t/rec.key" | RELEVIO_HOME="$sp_t/h2" CLAUDE_CONFIG_DIR="$sp_t/cc2" RELEVIO_TEST_INSECURE_KEYS=1 bash "$ARC" pull folder "$sp_t/cloud" --recovery >/dev/null 2>&1
   check "stamp: after pull on a new machine, every proof is there" \
-    "$(cmp -s "$sp_t/h/stamps.tsv" "$sp_t/h2/stamps.tsv" && echo same):$(ls "$sp_t/h2/stamps" | grep -c '\.ots$')" "same:3"
+    "$(cmp -s "$sp_t/h/stamps.tsv" "$sp_t/h2/stamps.tsv" && echo same):$(ls "$sp_t/h2/stamps" | grep -c '\.ots$')" "same:4"
   rm -rf "$sp_t"
 else
   echo "  SKIP  stamp: timestamps (age is not installed)"; SKIPS=$((SKIPS + 1))
