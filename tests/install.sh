@@ -2652,7 +2652,7 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     done
     cpa() {
       RELEVIO_HOME="$cp_t/h" CLAUDE_CONFIG_DIR="$cp_t/cc" RELEVIO_TEST_INSECURE_KEYS=1 \
-        RELEVIO_TEST_RECOVERY_IDENTITY="$cp_t/rec.key" RELEVIO_TEST_QUIET_MIN=0 bash "$ARC" "$@"
+        RELEVIO_TEST_RECOVERY_IDENTITY="${CP_REC:-$cp_t/rec.key}" RELEVIO_TEST_QUIET_MIN=0 bash "$ARC" "$@"
     }
     grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpa setup >/dev/null 2>&1
     cpa backfill >/dev/null 2>&1
@@ -2719,8 +2719,8 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
         "$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | grep -c .)" "3"
       cp "$cp_t/index.bak" "$cp_t/h/index.tsv"
       printf '00000002\n' | cpa forget 00000002-aaaa-4bbb-8ccc-dddddddddddd >/dev/null 2>&1
-      check "copy (folder): forget removes the session from the copy too" \
-        "$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | grep -c .)" "2"
+      check "copy (folder): forget removes the session from the copy too, catalog included" \
+        "$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | grep -c .):$(grep -c '^state ok' "$cp_t/h/remote.status")" "2:1"
     fi
     # pull: a new machine brings the whole archive back from the copy.
     cpa push >/dev/null 2>&1
@@ -2748,6 +2748,23 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
       "$(contains "$(cpn push 2>&1)" '0 bundle(s) sent'):$(cpn verify >/dev/null 2>&1; echo $?)" "yes:0"
     check "copy ($kind): pull refuses a machine that already has an archive" \
       "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$kind" "$tgt" --recovery 2>&1)" 'already has an archive')" "yes"
+    # keys rotate-recovery: a leaked recovery key is replaced, here and in the copy.
+    age-keygen 2>/dev/null > "$cp_t/rec2.key"
+    out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | CP_REC="$cp_t/rec2.key" cpa keys rotate-recovery 2>&1)"; rc=$?
+    check "copy ($kind): rotate-recovery re-encrypts every bundle and replaces the copy" \
+      "$rc:$(contains "$out" 'opens nothing here any more'):$(contains "$out" 'copy: replaced')" "0:yes:yes"
+    check "copy ($kind): ... the old recovery key no longer opens the archive, the new one does" \
+      "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpa keys check --recovery >/dev/null 2>&1; echo $?):$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | cpa keys check --recovery 2>/dev/null)" "2:recovery key works."
+    f="$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | head -1)"
+    check "copy ($kind): ... nor any bundle in the copy, which the new key opens" \
+      "$(age -d -i "$cp_t/rec.key" "$f" >/dev/null 2>&1; echo $?):$(age -d -i "$cp_t/rec2.key" "$f" >/dev/null 2>&1; echo $?)" "1:0"
+    check "copy ($kind): ... and the copy verifies" "$(cpa verify >/dev/null 2>&1; echo $?)" "0"
+    sid="$(sed -n '2p' "$cp_t/h/index.tsv" | cut -f2)"; mv "$cp_t/cc/projects/-p1/$sid.jsonl" "$cp_t/aside.jsonl"
+    check "copy ($kind): ... and a restore with the passphrase still works" \
+      "$(cpa restore "$sid" >/dev/null 2>&1; echo $?):$(cmp -s "$cp_t/aside.jsonl" "$cp_t/cc/projects/-p1/$sid.jsonl" && echo same)" "0:same"
+    out="$(printf 'x\nx\nx\n' | CP_REC="$cp_t/rec.key" cpa keys rotate-recovery 2>&1)"; rc=$?
+    check "copy ($kind): rotate-recovery typed back wrong three times changes nothing" \
+      "$rc:$(contains "$out" 'nothing changed'):$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | cpa keys check --recovery 2>/dev/null)" "2:yes:recovery key works."
     rm -rf "$cp_t"
   done
 else

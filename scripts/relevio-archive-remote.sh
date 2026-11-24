@@ -211,6 +211,11 @@ remote_status_field() { [ -r "$RH/remote.status" ] || return 0; sed -n "s/^$1 //
 PUSH_SENT=0; PUSH_PENDING=0
 push_core() {  # [limit]
   local limit="${1:-0}" st fo b f by mt o row stage sh m n=0 changed=0 rby rmt rm5
+  # Every caller (sync, forget, keys) must not have to remember these: an
+  # empty SHA makes every hash, and every opaque name, silently empty, and an
+  # empty AGE cannot encrypt the catalog.
+  [ -n "${SHA:-}" ] || SHA="$(sha_tool)" || { R_ERR="no sha256 tool (sha256sum or shasum) found"; return 1; }
+  [ -n "${AGE:-}" ] || load_config
   remote_load; remote_records_load
   stage="$(mktemp -d "$RH/.push.XXXXXX")"; PUSH_STAGE="$stage"
   declare -A WANT=() NEW_ROW=() GOT=()
@@ -237,6 +242,7 @@ push_core() {  # [limit]
     fi
     if [ "$limit" -gt 0 ] && [ "$n" -ge "$limit" ]; then PUSH_PENDING=$((PUSH_PENDING + 1)); continue; fi
     sh="$(sha_of < "$f")"; m="$(md5_of < "$f")"
+    [ ${#sh} -eq 64 ] && [ ${#m} -eq 32 ] && [ ${#o} -eq 32 ] || { R_ERR="could not hash $fo/$b"; rm -rf "$stage"; return 1; }
     ln -s "$f" "$stage/$o.age"
     NEW_ROW["$o"]="$fo$TAB$b$TAB$by$TAB$mt$TAB$sh$TAB$m$TAB$(utc_iso)"
     n=$((n + 1))
