@@ -24,7 +24,7 @@ CATALOG_FORMAT=1
 # What the encrypted catalog carries besides its META (stamps/ is a folder).
 CATALOG_FILES=(index.tsv folders.tsv forgotten.tsv remote.tsv stamps.tsv)
 # The config keys that describe the copy; `remote set` and `remote off` reset them.
-REMOTE_STATE_KEYS=(catalog_seq catalog_md5 catalog_stamps sent_main.age sent_recipients.txt readme_sent remote_audit_at)
+REMOTE_STATE_KEYS=(catalog_seq catalog_md5 catalog_stamps sent_main.age sent_recipients.txt sent_recipients.mac readme_sent remote_audit_at)
 REMOTE_AUDIT_EVERY=86400
 RCLONE_OPTS=(--retries 2 --low-level-retries 3 --contimeout 15s --timeout 60s)
 
@@ -180,6 +180,35 @@ t_list_machines() {  # <out file>
 }
 md5_of() { if command -v md5sum >/dev/null 2>&1; then md5sum | awk '{ print $1 }'; else md5 -q; fi; }
 
+# --- what came from the copy is untrusted ---------------------------------------------
+# age encrypts but does not prove who wrote a file: anyone holding the public
+# keys (they are in the copy) can make a catalog or a bundle the owner's key
+# opens. So every record that comes back from the copy is checked field by
+# field before any of it is used in a path, a number or the config.
+# tsv_valid <index|remote|stamps|forgotten|folders> <file>: 0, or 1 with the
+# first bad line number in TSV_BAD.
+TSV_BAD=0
+tsv_valid() {
+  TSV_BAD="$(awk -F'\t' -v k="$1" '
+    function hex(v, n) { return v ~ ("^[0-9a-f]{" n "}$") }
+    function num(v) { return v ~ /^[0-9]{1,12}$/ }
+    function uuid(v) { return v ~ /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/ }
+    function fold(v) { return v ~ /^[^\/]+$/ && v != "." && v != ".." }
+    function bund(v, id) { return v ~ ("^" id "(\\.[0-9]{8}T[0-9]{6}Z|\\.orphan-[0-9]{8}T[0-9]{6}Z)?\\.tgz\\.age$") }
+    function opt(v, ok) { return v == "-" || ok }
+    NR == 1 && k != "forgotten" && k != "folders" { next }
+    {
+      ok = 0
+      if (k == "index") ok = NF == 12 && $1 ~ /^(active|deleted-in-claude|superseded)$/ && uuid($2) && fold($3) && num($6) && hex($7, 64) && num($8) && num($9) && bund($10, $2) && num($11)
+      else if (k == "remote") ok = NF == 8 && hex($1, 32) && fold($2) && bund($3, substr($3, 1, 36)) && uuid(substr($3, 1, 36)) && num($4) && num($5) && hex($6, 64) && hex($7, 32)
+      else if (k == "stamps") ok = NF == 10 && $1 ~ /^(pending|stamped|complete|needs-key)$/ && uuid($2) && fold($3) && bund($4, $2) && opt($5, hex($5, 64)) && opt($6, hex($6, 64)) && num($7) && opt($8, num($8)) && opt($9, num($9)) && hex($10, 64)
+      else if (k == "forgotten") ok = uuid($1)
+      else if (k == "folders") ok = fold($1) && num($3)
+      if (!ok) { print NR; exit }
+    }' "$2")"
+  [ -z "$TSV_BAD" ]
+}
+
 # --- upload records ------------------------------------------------------------------
 # remote.tsv: opaque folder bundle bytes mtime sha256 md5 uploaded_at, one row
 # per bundle in the copy. A bundle is re-sent when its bytes or mtime change
@@ -194,6 +223,7 @@ remote_records_load() {
   U_ROW=(); U_KEY=()
   [ -s "$REMOTE_TSV" ] || return 0
   [ "$(head -1 "$REMOTE_TSV")" = "$REMOTE_HEADER" ] || die "$REMOTE_TSV is not a relevio upload record."
+  tsv_valid remote "$REMOTE_TSV" || die "$REMOTE_TSV line $TSV_BAD is malformed; nothing was sent or fetched."
   while IFS="$TAB" read -r o f b by mt sh m at; do
     [ -n "$o" ] || continue
     U_ROW["$o"]="$f$TAB$b$TAB$by$TAB$mt$TAB$sh$TAB$m$TAB$at"; U_KEY["$f/$b"]="$o"
@@ -289,7 +319,7 @@ push_core() {
   [ "$changed" = 1 ] && remote_records_save
   # Keys: sent when they change (a passphrase change rewrites main.age), or
   # when an audit finds them missing or altered in the copy.
-  for f in main.age recipients.txt; do
+  for f in main.age recipients.txt recipients.mac; do
     [ -f "$RH/keys/$f" ] || continue
     m="$(md5_of < "$RH/keys/$f")"
     [ "$(config_get "sent_$f")" = "$m" ] && { [ "$mode" != audit ] || [ "${ALL[keys/$f]:-}" = "$m" ]; } && continue
@@ -546,7 +576,15 @@ cmd_pull() {
   { echo "format=$ARCHIVE_FORMAT"; echo "age=$AGE"; echo "age_keygen=$AGE_KEYGEN"; echo "created=$(utc_iso)"; } > "$RH/config"
   [ "$kind" = rclone ] && config_set rclone "$RCLONE"
   # The key opens the catalog; then everything else needs no secret.
-  local idn; idn="$(identity_for "$use" "Opening the copy's catalog (the list of what it holds).")"
+  local idn rc=0; idn="$(identity_for "$use" "Opening the copy's catalog (the list of what it holds).")"
+  # The key list must be the owner's: sealed with the key just typed (anyone
+  # who can write to the copy could have added a key of their own).
+  [ -n "$(printf '%s\n' "$idn" | "$AGE_KEYGEN" -y 2>/dev/null | grep -xFf - "$RH/keys/recipients.txt")" ] \
+    || { unset idn; die "the copy's key list does not contain the key you typed: it is not this archive's. Nothing was brought back."; }
+  t_get keys/recipients.mac "$RH/keys/recipients.mac" \
+    || { unset idn; die "the copy has no seal for its key list (keys/recipients.mac), so it cannot be trusted. On the old machine, run keys check and keys check --recovery, then push; or rerun here if the copy was made by an older relevio."; }
+  seal_check "$use" "$idn" || rc=$?
+  [ "$rc" -eq 0 ] || { unset idn; die "the copy's key list does NOT match its seal: someone may have added a key to it. Nothing was brought back; do not use this copy until you know why."; }
   "$AGE" -d -i <(printf '%s\n' "$idn") "$tmp/catalog.age" 2>/dev/null | gzip -dc > "$tmp/catalog.tar" \
     || { unset idn; die "that key could not open the copy's catalog. Nothing was brought back."; }
   unset idn
@@ -559,17 +597,29 @@ cmd_pull() {
     esac
   done < "$tmp/entries"
   mkdir "$tmp/c"; tar -xf "$tmp/catalog.tar" -C "$tmp/c" --no-same-owner
+  # Only plain files and folders: a link would make the copies below read a
+  # file of this machine (an SSH key, a cloud token) into the archive, and the
+  # next push would send it out.
+  [ -z "$(find "$tmp/c" ! -type f ! -type d -print -quit)" ] || die "the catalog holds a link or a special file: it was not made by relevio. Nothing was brought back."
+  local seq salt
   [ "$(head -1 "$tmp/c/META")" = "relevio-catalog $CATALOG_FORMAT" ] || die "the catalog was made by a newer relevio (or is damaged). Update relevio."
-  [ "$(sed -n 's/^machine //p' "$tmp/c/META")" = "$mid" ] || die "the catalog names another machine than its folder: the copy is inconsistent. Nothing was brought back."
+  [ "$(grep -c '^machine ' "$tmp/c/META")" = 1 ] && [ "$(sed -n 's/^machine //p' "$tmp/c/META")" = "$mid" ] || die "the catalog names another machine than its folder: the copy is inconsistent. Nothing was brought back."
+  seq="$(sed -n 's/^seq //p' "$tmp/c/META")"; salt="$(sed -n 's/^copy_salt //p' "$tmp/c/META")"
+  [[ $seq =~ ^[0-9]{1,9}$ ]] && [[ $salt =~ ^[0-9a-f]{64}$ ]] || die "the catalog's header is malformed: it was not made by relevio. Nothing was brought back."
   [ ! -f "$tmp/c/index.tsv" ] || [ "$(head -1 "$tmp/c/index.tsv")" = "$INDEX_HEADER" ] || die "the catalog's index is not a format $ARCHIVE_FORMAT index."
   [ -f "$tmp/c/remote.tsv" ] && [ "$(head -1 "$tmp/c/remote.tsv")" = "$REMOTE_HEADER" ] || die "the catalog has no upload records."
-  for kf in "${CATALOG_FILES[@]}"; do [ -f "$tmp/c/$kf" ] && cp "$tmp/c/$kf" "$RH/$kf"; done
-  [ -d "$tmp/c/stamps" ] && { mkdir -p "$RH/stamps"; chmod 700 "$RH/stamps"; cp "$tmp/c/stamps/"* "$RH/stamps/" 2>/dev/null || true; }
+  [ ! -f "$tmp/c/stamps.tsv" ] || [ "$(head -1 "$tmp/c/stamps.tsv")" = "$STAMPS_HEADER" ] || die "the catalog's stamp records are not relevio's."
+  for kf in index:index.tsv remote:remote.tsv stamps:stamps.tsv forgotten:forgotten.tsv folders:folders.tsv; do
+    [ ! -f "$tmp/c/${kf#*:}" ] || tsv_valid "${kf%%:*}" "$tmp/c/${kf#*:}" \
+      || die "the catalog's ${kf#*:} line $TSV_BAD is malformed: it was not made by relevio. Nothing was brought back."
+  done
+  for kf in "${CATALOG_FILES[@]}"; do [ -f "$tmp/c/$kf" ] && cp -P "$tmp/c/$kf" "$RH/$kf"; done
+  [ -d "$tmp/c/stamps" ] && { mkdir -p "$RH/stamps"; chmod 700 "$RH/stamps"; cp -P "$tmp/c/stamps/"* "$RH/stamps/" 2>/dev/null || true; }
   [ -f "$RH/stamps.tsv" ] && config_set catalog_stamps "$(md5_of < "$RH/stamps.tsv")"
-  config_set machine "$mid"; config_set copy_salt "$(sed -n 's/^copy_salt //p' "$tmp/c/META")"
+  config_set machine "$mid"; config_set copy_salt "$salt"
   config_set remote_kind "$kind"; config_set remote_target "$target"
-  config_set catalog_seq "$(sed -n 's/^seq //p' "$tmp/c/META")"; config_set catalog_md5 "$(md5_of < "$tmp/catalog.age")"
-  for kf in main.age recipients.txt; do [ -f "$RH/keys/$kf" ] && config_set "sent_$kf" "$(md5_of < "$RH/keys/$kf")"; done
+  config_set catalog_seq "$seq"; config_set catalog_md5 "$(md5_of < "$tmp/catalog.age")"
+  for kf in main.age recipients.txt recipients.mac; do [ -f "$RH/keys/$kf" ] && config_set "sent_$kf" "$(md5_of < "$RH/keys/$kf")"; done
   write_canary
   echo "Catalog #$(config_get catalog_seq), written $(sed -n 's/^written //p' "$tmp/c/META"). Fetching the bundles..."
   remote_records_load

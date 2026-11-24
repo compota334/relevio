@@ -661,6 +661,16 @@ uploading the same name twice keeps one file, deletions go to Drive's trash,
 and Drive reports each file's md5 itself, which is how `verify` checks every
 bundle without downloading it.
 
+Who can write to the copy is a different question from who can read it:
+age encrypts but does not sign, so anyone holding the public keys could make
+a file your key opens. So `pull` checks every record it brings back field by
+field and refuses links, and the key list is **sealed** with your keys
+(`keys/recipients.mac`, written wherever you type a key): a key someone adds
+to the copy is caught before anything is encrypted to it. Someone who can
+write to your copy can still delete it or plant a fake conversation in it;
+they cannot read yours. An archive set up before the seal existed gets it the
+first time you run `keys check` and `keys check --recovery`.
+
 What the copy still reveals: how many bundles there are and how big each is.
 After `keys reset` or `keys rotate-recovery` the copy is replaced, but your
 provider may keep old versions or a trash folder for a while: empty them if a

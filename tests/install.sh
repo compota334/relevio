@@ -2405,7 +2405,7 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     "$rc:$(yesno "$([ -f "$arp/-f1/$r1.jsonl" ]; echo $?)"):$(ls "$arp/-f1" | grep -c "^$r1.relevio-replaced-")" "0:yes:1"
   # keys: check both, and a reset that keeps every bundle openable.
   check "archive: keys check works with the main key and with the recovery key" \
-    "$(arcr keys check 2>&1):$(grep '^AGE-SECRET-KEY' "$ar/rec.key" | arcr keys check --recovery 2>/dev/null)" "passphrase works.:recovery key works."
+    "$(arcr keys check 2>&1 | head -1):$(grep '^AGE-SECRET-KEY' "$ar/rec.key" | arcr keys check --recovery 2>/dev/null | head -1)" "passphrase works.:recovery key works."
   out="$(echo 'apple-river-stone-cloud-tiger-lemon-piano-ocean-fox-maple' | arcr keys check --recovery 2>&1)"; rc=$?
   check "archive: a passphrase typed where the recovery key goes says to drop --recovery" \
     "$rc:$(contains "$out" 'rerun the same command WITHOUT --recovery'):$(contains "$out" 'RECOVERY KEY (your emergency key)')" "2:yes:yes"
@@ -2775,13 +2775,55 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
       "$(contains "$(cpn push 2>&1)" '0 bundle(s) sent'):$(cpn verify >/dev/null 2>&1; echo $?)" "yes:0"
     check "copy ($kind): pull refuses a machine that already has an archive" \
       "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$kind" "$tgt" --recovery 2>&1)" 'already has an archive')" "yes"
+    # A copy someone else can write to: age proves nothing about who wrote a
+    # file, so a forged catalog opens with the owner's key. pull must refuse
+    # every field it cannot trust, never run or follow it.
+    if [ "$kind" = folder ]; then
+      mb="$(find "$cp_t/cloud/machines" -mindepth 1 -maxdepth 1 -type d | head -1)"; mid="${mb##*/}"
+      cp -R "$cp_t/cloud" "$cp_t/cloud.good"
+      forge() {  # <dir with the tar content>: encrypts it as the copy's catalog
+        tar -cf - -C "$1" . | gzip -c | age -e -R "$mb/keys/recipients.txt" -o "$mb/catalog.age"
+      }
+      fresh() { rm -rf "${cp_t:?}/new"; mkdir -p "$cp_t/cc-new/projects"; }
+      mkdir -p "$cp_t/forge"
+      printf 'relevio-catalog 1\nseq a[$(touch %s/PWNED)]\nmachine %s\ncopy_salt %s\n' "$cp_t" "$mid" "$(printf x | sha256sum | cut -c1-64)" > "$cp_t/forge/META"
+      head -1 "$cp_t/h/remote.tsv" > "$cp_t/forge/remote.tsv"
+      forge "$cp_t/forge"; fresh
+      out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" "$cp_t/rec.key" 2>/dev/null | sed 's/^[^:]*://' | head -1 | cpn pull folder "$cp_t/cloud" --recovery 2>&1)"
+      cpn push >/dev/null 2>&1
+      check "copy: a forged catalog with code in a number is refused, and nothing runs" \
+        "$(contains "$out" 'header is malformed'):$(yesno "$([ -e "$cp_t/PWNED" ]; echo $?)")" "yes:no"
+      printf 'relevio-catalog 1\nseq 5\nmachine %s\ncopy_salt %s\n' "$mid" "$(printf x | sha256sum | cut -c1-64)" > "$cp_t/forge/META"
+      ln -s ../../../../.ssh/id_ed25519 "$cp_t/forge/folders.tsv"
+      forge "$cp_t/forge"; fresh
+      out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery 2>&1)"
+      check "copy: a forged catalog holding a link is refused" "$(contains "$out" 'holds a link')" "yes"
+      rm -f "$cp_t/forge/folders.tsv"
+      printf 'zz\tx\n' >> "$cp_t/forge/remote.tsv"
+      forge "$cp_t/forge"; fresh
+      out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery 2>&1)"
+      check "copy: a forged catalog with a malformed record is refused" "$(contains "$out" 'remote.tsv line 2 is malformed')" "yes"
+      rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"
+      age-keygen 2>/dev/null | age-keygen -y >> "$mb/keys/recipients.txt"; fresh
+      out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery 2>&1)"
+      check "copy: a key added to the copy's key list is caught by its seal, and nothing is brought back" \
+        "$(contains "$out" 'does NOT match its seal'):$(find "$cp_t/new/archive" -name '*.age' 2>/dev/null | grep -c .)" "yes:0"
+      rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"; rm -f "$mb/keys/recipients.mac"; fresh
+      check "copy: a copy whose key list has no seal is refused" \
+        "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery 2>&1)" 'no seal for its key list')" "yes"
+      rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"; rm -rf "${cp_t:?}/new"
+      cp "$cp_t/h/keys/recipients.txt" "$cp_t/rcp.bak"; age-keygen 2>/dev/null | age-keygen -y >> "$cp_t/h/keys/recipients.txt"
+      check "copy: keys check catches a key added to the local key list" \
+        "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpa keys check --recovery >/dev/null 2>&1; echo $?)" "1"
+      cp "$cp_t/rcp.bak" "$cp_t/h/keys/recipients.txt"
+    fi
     # keys rotate-recovery: a leaked recovery key is replaced, here and in the copy.
     age-keygen 2>/dev/null > "$cp_t/rec2.key"
     out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | CP_REC="$cp_t/rec2.key" cpa keys rotate-recovery 2>&1)"; rc=$?
     check "copy ($kind): rotate-recovery re-encrypts every bundle and replaces the copy" \
       "$rc:$(contains "$out" 'opens nothing here any more'):$(contains "$out" 'copy: replaced')" "0:yes:yes"
     check "copy ($kind): ... the old recovery key no longer opens the archive, the new one does" \
-      "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpa keys check --recovery >/dev/null 2>&1; echo $?):$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | cpa keys check --recovery 2>/dev/null)" "2:recovery key works."
+      "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpa keys check --recovery >/dev/null 2>&1; echo $?):$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | cpa keys check --recovery 2>/dev/null | head -1)" "2:recovery key works."
     f="$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | head -1)"
     check "copy ($kind): ... nor any bundle in the copy, which the new key opens" \
       "$(age -d -i "$cp_t/rec.key" "$f" >/dev/null 2>&1; echo $?):$(age -d -i "$cp_t/rec2.key" "$f" >/dev/null 2>&1; echo $?)" "1:0"
@@ -2791,7 +2833,7 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
       "$(cpa restore "$sid" >/dev/null 2>&1; echo $?):$(cmp -s "$cp_t/aside.jsonl" "$cp_t/cc/projects/-p1/$sid.jsonl" && echo same)" "0:same"
     out="$(printf 'x\nx\nx\n' | CP_REC="$cp_t/rec.key" cpa keys rotate-recovery 2>&1)"; rc=$?
     check "copy ($kind): rotate-recovery typed back wrong three times changes nothing" \
-      "$rc:$(contains "$out" 'nothing changed'):$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | cpa keys check --recovery 2>/dev/null)" "2:yes:recovery key works."
+      "$rc:$(contains "$out" 'nothing changed'):$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | cpa keys check --recovery 2>/dev/null | head -1)" "2:yes:recovery key works."
     rm -rf "$cp_t"
   done
 else

@@ -168,6 +168,7 @@ find_deps() {
 }
 config_get() { [ -r "$RH/config" ] || return 0; sed -n "s/^$1=//p" "$RH/config" | head -1; }
 config_set() {  # <key> <value>: one line per key, rewritten through a temp file
+  case "$2" in *$'\n'*|*$'\r'*) die "config value for $1 has a line break: refused (it would plant other keys)." ;; esac
   KEY="$1" VAL="$2" awk -F= -v OFS== '
     BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VAL"] }
     $1 == k { if (!done) print k, v; done = 1; next }
@@ -229,7 +230,37 @@ EOF
     [ "$tries" -ge 3 ] && { unset entered; return 1; }
     echo "That does not match. Try again ($tries of 3)."
   done
-  unset entered
+  # Kept in memory only, for the caller to seal the key list; it unsets it.
+  REC_ENTERED="$entered"; unset entered
+}
+
+# --- the seal of the key list --------------------------------------------------------
+# recipients.txt is public and travels to the off-machine copy, where anyone
+# who can write there could add a key of their own: every later archive would
+# then be readable by them. recipients.mac binds the list to each secret key:
+# one line per key, sha256(sha256(secret) newline sha256(recipients.txt)).
+# The input is fixed length, so it cannot be extended. Writing or checking a
+# line needs that secret, so it happens only where the user types a key.
+REC_ENTERED=""
+seal_of() {  # <identity> <recipients file>
+  local ks rs
+  ks="$(printf '%s\n' "$1" | grep '^AGE-SECRET-KEY-1' | sha_of)"
+  rs="$(sha_of < "$2")"
+  printf '%s\n%s' "$ks" "$rs" | sha_of
+}
+seal_write() {  # <main|recovery> <identity> [recipients file] [seal file]
+  local f="${3:-$RH/keys/recipients.txt}" m="${4:-$RH/keys/recipients.mac}" v
+  v="$(seal_of "$2" "$f")"
+  { [ -f "$m" ] && grep -v "^$1 " "$m"; printf '%s %s\n' "$1" "$v"; } > "$m.tmp"
+  mv "$m.tmp" "$m"
+}
+# seal_check <main|recovery> <identity> [recipients file] [seal file]:
+# 0 sealed and matching, 1 a seal exists and does NOT match, 2 no seal yet.
+seal_check() {
+  local f="${3:-$RH/keys/recipients.txt}" m="${4:-$RH/keys/recipients.mac}" have
+  have="$( [ -f "$m" ] && sed -n "s/^$1 //p" "$m" | head -1 || true)"
+  [ -n "$have" ] || return 2
+  [ "$have" = "$(seal_of "$2" "$f")" ] || return 1
 }
 
 # --- setup -----------------------------------------------------------------------
@@ -239,6 +270,7 @@ cmd_setup() {
   require_tty
   is_set_up && die "the archive is already set up in $RH (status shows it)."
   find_deps
+  SHA="$(sha_tool)"
   mkdir -p "$RH/keys" "$RH/archive"
   chmod 700 "$RH" "$RH/keys" "$RH/archive"
   AGE="$(command -v age)"; AGE_KEYGEN="$(command -v age-keygen)"
@@ -284,6 +316,7 @@ EOF
   new_recovery_key "Step 2 of 3" "Step 3 of 3" || { rm -rf "$RH/keys"; die "the recovery key did not match three times. Nothing was set up; run setup again."; }
   rec_pub="$REC_PUB"
   write_recipients "$main_pub" "$rec_pub" "$RH/keys/recipients.txt"
+  seal_write recovery "$REC_ENTERED"; REC_ENTERED=""
   write_canary
   {
     echo "format=$ARCHIVE_FORMAT"
@@ -297,6 +330,7 @@ EOF
     rm -rf "$RH/keys" "$RH/config"
     die "the main key could not open a test file, so nothing was set up. Run setup again."
   fi
+  seal_write main "$main"
   n="$(find "$CC_DIR/projects" -mindepth 2 -maxdepth 2 -name '*.jsonl' 2>/dev/null | grep -c . || true)"
   cat <<EOF
 
@@ -1058,13 +1092,19 @@ cmd_keys() {
   esac
 }
 keys_check() {
-  local idn
+  local idn rc=0
   idn="$(identity_for "$1" "Testing your passphrase: nothing is opened or changed.")"
-  if canary_opens "$idn"; then
-    unset idn; [ "$1" = recovery ] && echo "recovery key works." || echo "passphrase works."
-  else
-    unset idn; echo "that key does NOT open the archive." >&2; exit 1
-  fi
+  canary_opens "$idn" || { unset idn; echo "that key does NOT open the archive." >&2; exit 1; }
+  [ "$1" = recovery ] && echo "recovery key works." || echo "passphrase works."
+  # The key list's seal for this key: checked, or made when missing (an
+  # archive set up before the seal existed).
+  seal_check "$1" "$idn" || rc=$?
+  case "$rc" in
+    0) echo "The key list is sealed and intact." ;;
+    2) seal_write "$1" "$idn"; echo "The key list is now sealed with this key (an off-machine copy needs it)." ;;
+    *) unset idn; echo "WARNING: the key list (keys/recipients.txt) does NOT match its seal: a key may have been added behind your back. Do not push; compare it with status and run keys rotate-recovery." >&2; exit 1 ;;
+  esac
+  unset idn
 }
 keys_passphrase() {
   local idn
@@ -1109,7 +1149,6 @@ keys_reset() {
   protect_main_key "$main" "$RH/keys/main.new" || die "the new passphrase was not set; nothing changed."
   write_recipients "$main_pub" "$rec_pub" "$RH/keys/recipients.txt.new"
   reencrypt_into_new "$rec" "$RH/keys/recipients.txt.new" "$main"
-  unset rec main
   ts="$(utc_stamp)"
   mkdir -p "$RH/keys/old"
   [ -e "$RH/keys/main.age" ] && mv "$RH/keys/main.age" "$RH/keys/old/main.$ts.age"
@@ -1118,6 +1157,8 @@ keys_reset() {
   mv "$RH/archive.new" "$RH/archive"
   mv "$RH/keys/recipients.txt.new" "$RH/keys/recipients.txt"
   if [ -e "$RH/keys/main.new.key" ]; then mv "$RH/keys/main.new.key" "$RH/keys/main.key"; else mv "$RH/keys/main.new.age" "$RH/keys/main.age"; fi
+  rm -f "${RH:?}/keys/recipients.mac"
+  seal_write main "$main"; seal_write recovery "$rec"; unset rec main
   write_canary
   rm -rf "$RH/archive.old.$ts"
   log "keys reset: $REENC_N bundle(s) re-encrypted to a new main key"
@@ -1138,13 +1179,14 @@ keys_rotate_recovery() {
   new_recovery_key "Step 1 of 2" "Step 2 of 2" || { unset main; die "the new recovery key did not match three times; nothing changed (the old one still works)."; }
   write_recipients "$main_pub" "$REC_PUB" "$RH/keys/recipients.txt.new"
   reencrypt_into_new "$main" "$RH/keys/recipients.txt.new" "$main"
-  unset main
   ts="$(utc_stamp)"
   mkdir -p "$RH/keys/old"
   mv "$RH/archive" "$RH/archive.old.$ts"
   mv "$RH/archive.new" "$RH/archive"
   mv "$RH/keys/recipients.txt" "$RH/keys/old/recipients.$ts.txt"
   mv "$RH/keys/recipients.txt.new" "$RH/keys/recipients.txt"
+  rm -f "${RH:?}/keys/recipients.mac"
+  seal_write main "$main"; seal_write recovery "$REC_ENTERED"; unset main; REC_ENTERED=""
   write_canary
   rm -rf "$RH/archive.old.$ts"
   log "keys rotate-recovery: $REENC_N bundle(s) re-encrypted; old recovery ${old_pub:0:12}... removed"

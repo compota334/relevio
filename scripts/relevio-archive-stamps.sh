@@ -57,6 +57,7 @@ stamps_load_rows() {
   S_ROW=()
   [ -s "$STAMPS_TSV" ] || return 0
   [ "$(head -1 "$STAMPS_TSV")" = "$STAMPS_HEADER" ] || die "$STAMPS_TSV is not a relevio stamp record."
+  tsv_valid stamps "$STAMPS_TSV" || die "$STAMPS_TSV line $TSV_BAD is malformed."
   while IFS="$TAB" read -r st id fo b salt leaf q s h js; do
     [ -n "$js" ] && S_ROW["$fo/$id/$js"]="$(stamp_row "$st" "$id" "$fo" "$b" "$salt" "$leaf" "$q" "$s" "$h" "$js")"
   done < <(tail -n +2 "$STAMPS_TSV")
