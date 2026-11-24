@@ -287,7 +287,9 @@ push_core() {  # [limit]
   # The catalog is rewritten when anything changed, and also when the one in
   # the copy is not the last one this machine wrote (replaced, rolled back,
   # deleted).
-  if [ "$changed" = 1 ] || [ -z "$(config_get catalog_seq)" ] || [ "${ALL[catalog.age]:-}" != "$(config_get catalog_md5)" ]; then
+  local stamps_sha=""; [ -f "$RH/stamps.tsv" ] && stamps_sha="$(sha_of < "$RH/stamps.tsv")"
+  if [ "$changed" = 1 ] || [ -z "$(config_get catalog_seq)" ] || [ "${ALL[catalog.age]:-}" != "$(config_get catalog_md5)" ] \
+     || [ "$stamps_sha" != "$(config_get catalog_stamps)" ]; then
     catalog_build "$stage/catalog.age" || { rm -rf "$stage"; return 1; }
     t_put "$stage/catalog.age" catalog.age || { rm -rf "$stage"; return 1; }
     config_set catalog_sha "$(sha_of < "$stage/catalog.age")"; config_set catalog_md5 "$(md5_of < "$stage/catalog.age")"
@@ -306,7 +308,11 @@ catalog_build() {  # <out file>
   d="$(mktemp -d "$RH/.catalog.XXXXXX")"
   { echo "relevio-catalog $CATALOG_FORMAT"; echo "seq $seq"; echo "machine $(config_get machine)"
     echo "copy_salt $(config_get copy_salt)"; echo "written $(utc_iso)"; echo "relevio_version $(relevio_version)"; } > "$d/META"
-  for f in index.tsv folders.tsv forgotten.tsv remote.tsv; do [ -f "$RH/$f" ] && cp "$RH/$f" "$d/$f"; done
+  for f in index.tsv folders.tsv forgotten.tsv remote.tsv stamps.tsv; do [ -f "$RH/$f" ] && cp "$RH/$f" "$d/$f"; done
+  # The stamp leaves and proofs travel too: without them a new machine could
+  # not hand anyone a proof.
+  [ -d "$RH/stamps" ] && cp -R "$RH/stamps" "$d/stamps"
+  [ -f "$RH/stamps.tsv" ] && config_set catalog_stamps "$(sha_of < "$RH/stamps.tsv")"
   tar -cf - -C "$d" . | gzip -c | "$AGE" -e -R "$RH/keys/recipients.txt" -o "$1" || { rm -rf "$d"; R_ERR="could not encrypt the catalog"; return 1; }
   rm -rf "$d"
   config_set catalog_seq "$seq"
@@ -529,14 +535,20 @@ cmd_pull() {
   unset idn
   tar -tf "$tmp/catalog.tar" > "$tmp/entries" || die "the catalog is damaged."
   while IFS= read -r e; do
-    case "$e" in ./|./META|./index.tsv|./folders.tsv|./forgotten.tsv|./remote.tsv) ;; *) die "the catalog holds an unexpected entry ($(relevio_safe "$e"))." ;; esac
+    case "$e" in
+      ./|./META|./index.tsv|./folders.tsv|./forgotten.tsv|./remote.tsv|./stamps.tsv|./stamps/) ;;
+      ./stamps/*) [[ $e =~ ^\./stamps/[0-9a-f]{64}\.leaf(\.ots)?$ ]] || die "the catalog holds an unexpected entry ($(relevio_safe "$e"))." ;;
+      *) die "the catalog holds an unexpected entry ($(relevio_safe "$e"))." ;;
+    esac
   done < "$tmp/entries"
   mkdir "$tmp/c"; tar -xf "$tmp/catalog.tar" -C "$tmp/c" --no-same-owner
   [ "$(head -1 "$tmp/c/META")" = "relevio-catalog $CATALOG_FORMAT" ] || die "the catalog was made by a newer relevio (or is damaged). Update relevio."
   [ "$(sed -n 's/^machine //p' "$tmp/c/META")" = "$mid" ] || die "the catalog names another machine than its folder: the copy is inconsistent. Nothing was brought back."
   [ ! -f "$tmp/c/index.tsv" ] || [ "$(head -1 "$tmp/c/index.tsv")" = "$INDEX_HEADER" ] || die "the catalog's index is not a format $ARCHIVE_FORMAT index."
   [ -f "$tmp/c/remote.tsv" ] && [ "$(head -1 "$tmp/c/remote.tsv")" = "$REMOTE_HEADER" ] || die "the catalog has no upload records."
-  for kf in index.tsv folders.tsv forgotten.tsv remote.tsv; do [ -f "$tmp/c/$kf" ] && cp "$tmp/c/$kf" "$RH/$kf"; done
+  for kf in index.tsv folders.tsv forgotten.tsv remote.tsv stamps.tsv; do [ -f "$tmp/c/$kf" ] && cp "$tmp/c/$kf" "$RH/$kf"; done
+  [ -d "$tmp/c/stamps" ] && { mkdir -p "$RH/stamps"; chmod 700 "$RH/stamps"; cp "$tmp/c/stamps/"* "$RH/stamps/" 2>/dev/null || true; }
+  [ -f "$RH/stamps.tsv" ] && config_set catalog_stamps "$(sha_of < "$RH/stamps.tsv")"
   config_set machine "$mid"; config_set copy_salt "$(sed -n 's/^copy_salt //p' "$tmp/c/META")"
   config_set remote_kind "$kind"; config_set remote_target "$target"
   config_set catalog_seq "$(sed -n 's/^seq //p' "$tmp/c/META")"; config_set catalog_sha "$(sha_of < "$tmp/catalog.age")"; config_set catalog_md5 "$(md5_of < "$tmp/catalog.age")"

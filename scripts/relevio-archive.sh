@@ -35,6 +35,12 @@
 #   pull folder <path> | rclone <remote:path> [--machine id] [--recovery]
 #             a new computer: bring the whole archive back from the copy
 #             into an empty home (your terminal only: asks for a key)
+#   stamp setup | status | now | backfill | off
+#             OpenTimestamps: prove each archived conversation existed no
+#             later than a Bitcoin block (stamped in daily batches)
+#   proof <id> [--out <folder>]  a folder anyone can check: the
+#             conversation, its salt, the stamped leaf and its proof
+#   proof-check <folder>  check a proof folder here, with two Bitcoin explorers
 #   off       stop archiving new sessions (what is archived stays)
 #   on        start again after off
 #   sync      what the hooks run: --session <id> --transcript <path> [--wait-stable],
@@ -56,6 +62,8 @@ RH="${RELEVIO_HOME:-$HOME/.relevio}"
 CC_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 # The off-machine copy (remote, push, verify, pull) lives in its own file.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/relevio-archive-remote.sh"
+# Timestamps (stamp, proof, proof-check) live in theirs.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/relevio-archive-stamps.sh"
 
 # --- The archive's home -------------------------------------------------------
 # Refused when it could leak or be swapped: a symlink can point the archive
@@ -341,6 +349,8 @@ cmd_status() {
   case "$k" in "") k="unset (30 days)" ;; "?unreadable") k="unreadable" ;; *) k="$(relevio_safe "$k")" ;; esac
   echo "  Claude Code keeps conversations: cleanupPeriodDays $k in $CC_DIR/settings.json"
   echo "  Claude Code's own conversations: $(human_bytes "$(du -sk "$CC_DIR/projects" 2>/dev/null | awk '{ print $1 * 1024 }')") in $CC_DIR/projects"
+  stamp_show
+  [ "$(stamps_status_field state)" = fail ] && stamping_on && healthy=no
   if remote_is_set; then
     remote_show || healthy=no
     [ "$(remote_status_field state)" = fail ] && healthy=no
@@ -369,6 +379,11 @@ if test_gate; then
   STABLE_WAIT="${RELEVIO_TEST_STABLE_WAIT:-$STABLE_WAIT}"
   TEST_FREE_KB="${RELEVIO_TEST_FREE_KB:-}"
   TEST_FAIL_AFTER="${RELEVIO_TEST_FAIL_AFTER:-}"
+  STAMP_MAX_WAIT="${RELEVIO_TEST_STAMP_MAX_WAIT:-$STAMP_MAX_WAIT}"
+  STAMP_RETRY="${RELEVIO_TEST_STAMP_RETRY:-$STAMP_RETRY}"
+  STAMP_UPGRADE_AFTER="${RELEVIO_TEST_STAMP_UPGRADE_AFTER:-$STAMP_UPGRADE_AFTER}"
+  [ -z "${RELEVIO_TEST_EXPLORERS:-}" ] || read -r -a EXPLORERS <<<"$RELEVIO_TEST_EXPLORERS"
+  TEST_OTS_BIN="${RELEVIO_TEST_OTS_BIN:-}"; TEST_OTS_HELPER="${RELEVIO_TEST_OTS_HELPER:-}"
 fi
 
 log() { printf '%s %s\n' "$(utc_iso)" "$*" >> "$RH/log"; }
@@ -773,6 +788,7 @@ cmd_sync() {
       archive_folders < <(all_folders) ;;
   esac
   end_run
+  stamp_after_run
   push_after_run
 }
 
@@ -799,6 +815,7 @@ cmd_backfill() {
   archive_folders < <(all_folders)
   end_run
   echo "Done: $(counts)."
+  stamp_after_run
   if remote_is_set; then
     echo "Sending to the off-machine copy..."
     push_after_run
@@ -1283,6 +1300,9 @@ case "${1:-}" in
   push) shift; cmd_push "$@" ;;
   verify) shift; cmd_verify "$@" ;;
   pull) shift; cmd_pull "$@" ;;
+  stamp) shift; cmd_stamp "$@" ;;
+  proof) shift; cmd_proof "$@" ;;
+  proof-check) shift; cmd_proof_check "$@" ;;
   list) shift; cmd_list "$@" ;;
   restore) shift; cmd_restore "$@" ;;
   keys) shift; cmd_keys "$@" ;;

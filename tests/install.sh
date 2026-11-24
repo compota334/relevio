@@ -2771,6 +2771,109 @@ else
   echo "  SKIP  copy: remote, push and verify (age is not installed)"; SKIPS=$((SKIPS + 1))
 fi
 
+# --- Case 22: timestamps (stamp, proof, proof-check) -------------------------
+# The OpenTimestamps client and the Bitcoin explorers are faked here (no
+# network in tests); the real ones were measured by hand (blueprint, O1-O4).
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  sp_t="$(mktemp -d)"; mkdir -p "$sp_t/cc/projects/-p1" "$sp_t/p1" "$sp_t/api/block-height" "$sp_t/api/block" "$sp_t/cloud"
+  age-keygen 2>/dev/null > "$sp_t/rec.key"
+  cat > "$sp_t/ots" <<'FAKE'
+#!/usr/bin/env bash
+# fake ots: stamp writes "<file>.ots" holding the file's sha256; upgrade marks
+# every proof complete in block 900000 when FAKE_OTS_CONFIRM=1.
+cmd=""; files=()
+for a in "$@"; do case "$a" in -q|-m|2) ;; stamp|upgrade) cmd="$a" ;; *) files+=("$a") ;; esac; done
+if [ "$cmd" = stamp ]; then
+  [ "${FAKE_OTS_DOWN:-}" = 1 ] && { echo "Failed to create timestamp: need at least 2 attestations but received 0 within timeout" >&2; exit 1; }
+  echo "$#" >> "$FAKE_OTS_LOG"
+  for f in "${files[@]}"; do echo "PENDING $(sha256sum < "$f" | cut -c1-64)" > "$f.ots"; done
+else
+  [ "${FAKE_OTS_CONFIRM:-}" = 1 ] || exit 1
+  for f in "${files[@]}"; do sed -i 's/^PENDING /COMPLETE /' "$f"; done
+fi
+FAKE
+  cat > "$sp_t/helper" <<'FAKE'
+read -r st dg < "$2"
+case "$1" in
+  digest) echo "$dg" ;;
+  attest) if [ "$st" = COMPLETE ]; then echo "bitcoin 900000 $(printf 'root' | sha256sum | cut -c1-64)"; else echo "pending https://fake"; fi ;;
+esac
+FAKE
+  h="$(printf 'block' | sha256sum | cut -c1-64)"
+  echo "$h" > "$sp_t/api/block-height/900000"
+  printf '{"merkle_root":"%s","timestamp":1795000000}\n' "$(printf 'root' | sha256sum | cut -c1-64)" > "$sp_t/api/block/$h"
+  mkdir -p "$sp_t/bad/block-height" "$sp_t/bad/block"; cp "$sp_t/api/block-height/900000" "$sp_t/bad/block-height/"
+  printf '{"merkle_root":"%s","timestamp":1795000000}\n' "$(printf 'other' | sha256sum | cut -c1-64)" > "$sp_t/bad/block/$h"
+  for i in 1 2 3; do
+    printf '{"cwd":"%s","type":"user","secret":"transcript-text-%d"}\n' "$sp_t/p1" "$i" > "$sp_t/cc/projects/-p1/0000000$i-aaaa-4bbb-8ccc-dddddddddddd.jsonl"
+  done
+  touch -d '1 hour ago' "$sp_t/cc/projects/-p1/"*.jsonl 2>/dev/null
+  spa() {
+    RELEVIO_HOME="$sp_t/h" CLAUDE_CONFIG_DIR="$sp_t/cc" RELEVIO_TEST_INSECURE_KEYS=1 \
+      RELEVIO_TEST_RECOVERY_IDENTITY="$sp_t/rec.key" RELEVIO_TEST_QUIET_MIN=0 RELEVIO_TEST_STABLE_WAIT=0 \
+      RELEVIO_TEST_OTS_BIN="$sp_t/ots" RELEVIO_TEST_OTS_HELPER="$sp_t/helper" FAKE_OTS_LOG="$sp_t/ots.log" \
+      RELEVIO_TEST_STAMP_MAX_WAIT=0 RELEVIO_TEST_STAMP_RETRY=0 RELEVIO_TEST_STAMP_UPGRADE_AFTER=0 \
+      RELEVIO_TEST_EXPLORERS="${SP_EXPLORERS:-file://$sp_t/api}" bash "$ARC" "$@"
+  }
+  chmod +x "$sp_t/ots"
+  grep '^AGE-SECRET-KEY' "$sp_t/rec.key" | spa setup >/dev/null 2>&1
+  spa backfill >/dev/null 2>&1
+  # Session 3's transcript disappears before stamping starts: it needs a key.
+  mv "$sp_t/cc/projects/-p1/00000003-aaaa-4bbb-8ccc-dddddddddddd.jsonl" "$sp_t/s3.jsonl"
+  check "stamp: status says off before setup" "$(contains "$(spa stamp status 2>&1)" 'stamps: off')" "yes"
+  spa stamp setup >/dev/null 2>&1
+  FAKE_OTS_DOWN=1 spa sync --all >/dev/null 2>&1; rc=$?
+  check "stamp: with no calendar answering, the leaves stay queued and the archive run still succeeds" \
+    "$rc:$(grep -c '^state ok' "$sp_t/h/status"):$(contains "$(spa stamp status 2>&1)" '2 queued for the next batch'):$(contains "$(spa stamp status 2>&1)" 'last try FAILED: no timestamp calendar answered')" "0:1:yes:yes"
+  check "stamp: ... and status is not healthy while stamping fails" "$(spa status >/dev/null 2>&1; echo $?)" "1"
+  spa sync --all >/dev/null 2>&1
+  check "stamp: the next archiving run sends every queued leaf in ONE client call" \
+    "$(contains "$(spa stamp status 2>&1)" '2 waiting for Bitcoin'):$(grep -c . "$sp_t/ots.log")" "yes:1"
+  check "stamp: a transcript gone from the machine needs a key, and status says how" \
+    "$(contains "$(spa stamp status 2>&1)" '1 need a key')" "yes"
+  check "stamp: a leaf holds only a salted hash: no transcript text, no session id" \
+    "$(grep -rl -e 'transcript-text' -e '0000000' "$sp_t/h/stamps" | grep -c .):$(head -1 "$(ls "$sp_t/h/stamps/"*.leaf | head -1)")" "0:relevio timestamp leaf 1"
+  out="$(grep '^AGE-SECRET-KEY' "$sp_t/rec.key" | spa stamp backfill --recovery 2>&1)"
+  check "stamp: backfill opens the archived copy and queues its leaf" \
+    "$(contains "$out" '1 leaf(s) computed'):$(contains "$(spa stamp status 2>&1)" '1 queued')" "yes:yes"
+  check "stamp: ... leaving no transcript behind in clear" "$(find "$sp_t/h" -name '*.jsonl' | grep -c .)" "0"
+  spa stamp now >/dev/null 2>&1
+  check "stamp: a proof before Bitcoin confirms says it is not confirmed" \
+    "$(contains "$(spa proof 00000001-aaaa-4bbb-8ccc-dddddddddddd --out "$sp_t/early" 2>&1)" 'not confirmed in Bitcoin yet'):$(spa proof-check "$sp_t/early" >/dev/null 2>&1; echo $?)" "yes:1"
+  FAKE_OTS_CONFIRM=1 spa stamp now >/dev/null 2>&1
+  check "stamp: once Bitcoin confirms, every proof is complete" \
+    "$(contains "$(spa stamp status 2>&1)" 'stamps: 3 proven in Bitcoin, 0 waiting')" "yes"
+  out="$(spa proof 00000001-aaaa-4bbb-8ccc-dddddddddddd --out "$sp_t/p" 2>&1)"; rc=$?
+  check "stamp: proof builds the folder and warns that the conversation is in clear" \
+    "$rc:$(ls "$sp_t/p" | tr '\n' ' '):$(contains "$out" 'Read it for secrets')" "0:conversation.jsonl leaf.txt leaf.txt.ots salt.txt VERIFY.txt :yes"
+  check "stamp: ... the command in VERIFY.txt, run by hand, gives the stamped hash" \
+    "$(cd "$sp_t/p" && (printf '%s\n' "$(cat salt.txt)"; cat conversation.jsonl) | sha256sum | cut -c1-64):$(grep -c 'opentimestamps.org' "$sp_t/p/VERIFY.txt")" "$(sed -n 's/^salted-sha256 //p' "$sp_t/p/leaf.txt"):1"
+  out="$(spa proof-check "$sp_t/p" 2>&1)"; rc=$?
+  check "stamp: proof-check passes against a Bitcoin explorer" "$rc:$(contains "$out" 'existed no later than that block')" "0:yes"
+  out="$(SP_EXPLORERS="file://$sp_t/nothing file://$sp_t/api" spa proof-check "$sp_t/p" 2>&1)"; rc=$?
+  check "stamp: ... one explorer down is fine when another answers" "$rc:$(contains "$out" 'no answer')" "0:yes"
+  out="$(SP_EXPLORERS="file://$sp_t/nothing" spa proof-check "$sp_t/p" 2>&1)"; rc=$?
+  check "stamp: ... no explorer answering is not a pass" "$rc:$(contains "$out" 'not checked yet')" "2:yes"
+  out="$(SP_EXPLORERS="file://$sp_t/api file://$sp_t/bad" spa proof-check "$sp_t/p" 2>&1)"; rc=$?
+  check "stamp: ... any explorer that disagrees fails the proof" "$rc:$(contains "$out" 'disagrees')" "2:yes"
+  sed -i 's/transcript-text-1/transcript-text-X/' "$sp_t/p/conversation.jsonl"
+  check "stamp: proof-check catches one changed byte in the conversation" \
+    "$(contains "$(spa proof-check "$sp_t/p" 2>&1)" 'does NOT match the stamped leaf')" "yes"
+  check "stamp: proof of the session whose transcript is gone opens the archive (a key)" \
+    "$(grep '^AGE-SECRET-KEY' "$sp_t/rec.key" | spa proof 00000003-aaaa-4bbb-8ccc-dddddddddddd --out "$sp_t/p3" --recovery >/dev/null 2>&1; spa proof-check "$sp_t/p3" >/dev/null 2>&1; echo $?):$(cmp -s "$sp_t/s3.jsonl" "$sp_t/p3/conversation.jsonl" && echo same)" "0:same"
+  # The stamps travel in the encrypted catalog: a new machine can still prove.
+  spa remote set folder "$sp_t/cloud" >/dev/null 2>&1; spa push >/dev/null 2>&1
+  check "stamp: the copy holds no readable stamp file" \
+    "$(find "$sp_t/cloud" -name '*.leaf*' -o -name 'stamps*' | grep -c .)" "0"
+  mkdir -p "$sp_t/cc2/projects"
+  grep '^AGE-SECRET-KEY' "$sp_t/rec.key" | RELEVIO_HOME="$sp_t/h2" CLAUDE_CONFIG_DIR="$sp_t/cc2" RELEVIO_TEST_INSECURE_KEYS=1 bash "$ARC" pull folder "$sp_t/cloud" --recovery >/dev/null 2>&1
+  check "stamp: after pull on a new machine, every proof is there" \
+    "$(cmp -s "$sp_t/h/stamps.tsv" "$sp_t/h2/stamps.tsv" && echo same):$(ls "$sp_t/h2/stamps" | grep -c '\.ots$')" "same:3"
+  rm -rf "$sp_t"
+else
+  echo "  SKIP  stamp: timestamps (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+
 # --- Case 13: the one-time migration of pre-v0.22 headers -------------------
 # Other projects (and other people) are running relevio v0.21 and older, where
 # Branch could carry prose and Commits a "(N commits)" suffix. There is no

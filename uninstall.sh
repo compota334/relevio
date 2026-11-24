@@ -27,7 +27,7 @@ echo
 # --- 1. Hooks and slash commands ---------------------------------------------
 for f in .claude/hooks/context-warn.sh .claude/hooks/session-start.sh .claude/hooks/session-end.sh \
          .claude/commands/handoff.md .claude/commands/kickoff.md .claude/commands/revisit.md \
-         .claude/scripts/relevio-*.sh; do
+         .claude/scripts/relevio-*.sh .claude/scripts/relevio-*.py; do
   if [ -f "$f" ]; then rm "$f"; info "removed: $f"; fi
 done
 rmdir .claude/hooks .claude/commands .claude/scripts 2>/dev/null || true
