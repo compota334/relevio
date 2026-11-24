@@ -31,6 +31,9 @@
 #             every archiving run once a copy is set)
 #   verify [--sample n]  check the copy: every bundle by the provider's md5,
 #             a random sample downloaded, and the catalog
+#   pull folder <path> | rclone <remote:path> [--machine id] [--recovery]
+#             a new computer: bring the whole archive back from the copy
+#             into an empty home (your terminal only: asks for a key)
 #   off       stop archiving new sessions (what is archived stays)
 #   on        start again after off
 #   sync      what the hooks run: --session <id> --transcript <path> [--wait-stable],
@@ -1220,6 +1223,7 @@ case "${1:-}" in
   remote) shift; cmd_remote "$@" ;;
   push) shift; cmd_push "$@" ;;
   verify) shift; cmd_verify "$@" ;;
+  pull) shift; cmd_pull "$@" ;;
   list) shift; cmd_list "$@" ;;
   restore) shift; cmd_restore "$@" ;;
   keys) shift; cmd_keys "$@" ;;

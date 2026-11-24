@@ -2693,6 +2693,8 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     check "copy ($kind): verify catches an older catalog put back in the copy" \
       "$rc:$(contains "$out" 'NOT the one this machine wrote')" "1:yes"
     cpa push >/dev/null 2>&1
+    check "copy ($kind): ... and the next push writes the current catalog back" \
+      "$(cpa verify >/dev/null 2>&1; echo $?)" "0"
     if [ "$kind" = folder ]; then
       mv "$cp_t/cloud" "$cp_t/cloud.away"
       out="$(cpa push 2>&1)"; rc=$?
@@ -2720,6 +2722,32 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
       check "copy (folder): forget removes the session from the copy too" \
         "$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | grep -c .)" "2"
     fi
+    # pull: a new machine brings the whole archive back from the copy.
+    cpa push >/dev/null 2>&1
+    cpn() { RELEVIO_HOME="$cp_t/new" CLAUDE_CONFIG_DIR="$cp_t/cc-new" RELEVIO_TEST_INSECURE_KEYS=1 RELEVIO_TEST_STABLE_WAIT=0 bash "$ARC" "$@"; }
+    mkdir -p "$cp_t/cc-new/projects"
+    out="$(age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY' | cpn pull "$kind" "$tgt" --recovery 2>&1)"; rc=$?
+    check "copy ($kind): pull with a key that is not the archive's brings nothing back" \
+      "$rc:$(contains "$out" "not one of this archive's keys"):$(find "$cp_t/new/archive" -name '*.age' 2>/dev/null | grep -c .)" "2:yes:0"
+    f="$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | head -1)"; cp "$f" "$cp_t/good.age"; echo tamper >> "$f"
+    out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$kind" "$tgt" --recovery 2>&1)"; rc=$?
+    check "copy ($kind): pull stops on a bundle altered in the copy, and says how to resume" \
+      "$rc:$(contains "$out" 'is not what was sent (sha256)')" "2:yes"
+    cp "$cp_t/good.age" "$f"
+    out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$kind" "$tgt" --recovery 2>&1)"; rc=$?
+    n_src="$(find "$cp_t/h/archive" -name '*.age' | grep -c .)"
+    check "copy ($kind): rerunning pull resumes and brings every bundle back" \
+      "$rc:$(find "$cp_t/new/archive" -name '*.age' | grep -c .)" "0:$n_src"
+    check "copy ($kind): ... with the same index as the old machine" \
+      "$(cmp -s "$cp_t/h/index.tsv" "$cp_t/new/index.tsv" && echo same)" "same"
+    sid="$(sed -n '2p' "$cp_t/new/index.tsv" | cut -f2)"
+    out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn restore "$sid" --recovery 2>&1)"; rc=$?
+    check "copy ($kind): a conversation restored on the new machine is identical to the original" \
+      "$rc:$(cmp -s "$cp_t/cc/projects/-p1/$sid.jsonl" "$cp_t/cc-new/projects/-p1/$sid.jsonl" && echo same)" "0:same"
+    check "copy ($kind): ... the new machine continues the copy without sending anything again" \
+      "$(contains "$(cpn push 2>&1)" '0 bundle(s) sent'):$(cpn verify >/dev/null 2>&1; echo $?)" "yes:0"
+    check "copy ($kind): pull refuses a machine that already has an archive" \
+      "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$kind" "$tgt" --recovery 2>&1)" 'already has an archive')" "yes"
     rm -rf "$cp_t"
   done
 else

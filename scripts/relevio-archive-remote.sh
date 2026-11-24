@@ -134,6 +134,25 @@ t_md5() {
       awk '$2 !~ /\.part$/ { print $1, $2 }' "$RH/.rclone.out"; rm -f "$RH/.rclone.out" ;;
   esac
 }
+# t_md5_all: "<md5> <relative path>" for every file of this machine's copy
+# (bundles, keys, catalog), in one listing call.
+t_md5_all() {
+  case "$R_KIND" in
+    folder)
+      folder_ok || return 1
+      [ -d "$R_BASE" ] || return 0
+      local f
+      while IFS= read -r -d '' f; do
+        case "$f" in *.part) continue ;; esac
+        printf '%s %s\n' "$(md5_of < "$f")" "${f#"$R_BASE/"}"
+      done < <(find "$R_BASE" -type f -print0) ;;
+    rclone)
+      if ! rc_to "$RH/.rclone.out" hashsum md5 "$R_BASE"; then
+        rm -f "$RH/.rclone.out"; [ "$R_ERR" = "not found in the copy" ] && return 0; return 1
+      fi
+      awk '$2 !~ /\.part$/ { print $1, $2 }' "$RH/.rclone.out"; rm -f "$RH/.rclone.out" ;;
+  esac
+}
 t_delete() {  # <relative path>; a file already gone is fine
   case "$R_KIND" in
     folder) folder_ok || return 1; rm -f "$R_BASE/$1" ;;
@@ -195,12 +214,17 @@ push_core() {  # [limit]
   remote_load; remote_records_load
   stage="$(mktemp -d "$RH/.push.XXXXXX")"; PUSH_STAGE="$stage"
   declare -A WANT=() NEW_ROW=() GOT=()
-  # What the copy really holds (one listing call): a bundle missing or altered
-  # there is sent again, whatever the records say.
+  # What the copy really holds (one listing call): a bundle, a key or a
+  # catalog missing or altered there is sent again, whatever the records say.
   local gm gn
+  declare -A ALL=()
   # (into a file, not a pipe: R_ERR must survive, and a pipe is a subshell)
-  t_md5 b > "$RH/.push.md5" || { rm -rf "$stage"; return 1; }
-  while read -r gm gn; do [ -n "$gn" ] && GOT["${gn%.age}"]="$gm"; done < "$RH/.push.md5"
+  t_md5_all > "$RH/.push.md5" || { rm -rf "$stage"; return 1; }
+  while read -r gm gn; do
+    [ -n "$gn" ] || continue
+    ALL["$gn"]="$gm"
+    case "$gn" in b/*.age) gn="${gn#b/}"; GOT["${gn%.age}"]="$gm" ;; esac
+  done < "$RH/.push.md5"
   while IFS="$TAB" read -r st _ fo _ _ _ _ _ _ b _; do
     f="$RH/archive/$fo/$b"
     [ -f "$f" ] || { log "push: $fo/$b is in the index but missing on disk; not sent"; continue; }
@@ -250,14 +274,17 @@ push_core() {  # [limit]
   for f in main.age recipients.txt; do
     [ -f "$RH/keys/$f" ] || continue
     sh="$(sha_of < "$RH/keys/$f")"
-    [ "$(config_get "sent_$f")" = "$sh" ] && continue
+    [ "$(config_get "sent_$f")" = "$sh" ] && [ "${ALL[keys/$f]:-}" = "$(md5_of < "$RH/keys/$f")" ] && continue
     t_put "$RH/keys/$f" "keys/$f" || { rm -rf "$stage"; return 1; }
     config_set "sent_$f" "$sh"; changed=1
   done
-  if [ "$changed" = 1 ] || [ -z "$(config_get catalog_seq)" ]; then
+  # The catalog is rewritten when anything changed, and also when the one in
+  # the copy is not the last one this machine wrote (replaced, rolled back,
+  # deleted).
+  if [ "$changed" = 1 ] || [ -z "$(config_get catalog_seq)" ] || [ "${ALL[catalog.age]:-}" != "$(config_get catalog_md5)" ]; then
     catalog_build "$stage/catalog.age" || { rm -rf "$stage"; return 1; }
     t_put "$stage/catalog.age" catalog.age || { rm -rf "$stage"; return 1; }
-    config_set catalog_sha "$(sha_of < "$stage/catalog.age")"
+    config_set catalog_sha "$(sha_of < "$stage/catalog.age")"; config_set catalog_md5 "$(md5_of < "$stage/catalog.age")"
   fi
   [ "$(config_get readme_sent)" = 1 ] || { readme_write "$stage/README.txt"; readme_put "$stage/README.txt" && config_set readme_sent 1; }
   rm -rf "$stage" "$RH/.push.md5"; PUSH_STAGE=""
@@ -323,7 +350,7 @@ cmd_remote() {
     status) remote_show ;;
     off)
       remote_is_set || { echo "No off-machine copy is set."; return 0; }
-      for k in remote_kind remote_target rclone catalog_seq catalog_sha sent_main.age sent_recipients.txt readme_sent; do config_unset "$k"; done
+      for k in remote_kind remote_target rclone catalog_seq catalog_sha catalog_md5 sent_main.age sent_recipients.txt readme_sent; do config_unset "$k"; done
       rm -f "$REMOTE_TSV" "$RH/remote.status"
       echo "The off-machine copy is no longer updated. What is already there stays; delete it from the provider yourself if you want it gone." ;;
     *) die "remote needs: set folder <path> | set rclone <remote:path> | status | off" ;;
@@ -351,7 +378,7 @@ remote_set() {
   [ -n "$(config_get machine)" ] || config_set machine "$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   [ -n "$(config_get copy_salt)" ] || config_set copy_salt "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
   config_set remote_kind "$kind"; config_set remote_target "$target"
-  for k in catalog_seq catalog_sha sent_main.age sent_recipients.txt readme_sent; do config_unset "$k"; done
+  for k in catalog_seq catalog_sha catalog_md5 sent_main.age sent_recipients.txt readme_sent; do config_unset "$k"; done
   rm -f "$REMOTE_TSV" "$RH/remote.status"
   echo "Off-machine copy set: $kind $(target_safe "$target")."
   echo "Every bundle, the keys and an encrypted catalog go there; names are opaque."
@@ -440,4 +467,100 @@ cmd_verify() {
   else bad=$((bad + 1)); echo "  CATALOG missing in the copy (${R_ERR:-?})."; fi
   if [ $((bad + miss)) -eq 0 ]; then echo "The copy is complete and intact."; remote_status_write ok "verified $n"
   else remote_status_write fail "verify: $miss missing, $bad altered or unreadable"; echo "Run push to send again what is missing or altered."; exit 1; fi
+}
+
+# --- pull: a new (or reinstalled) machine ------------------------------------------
+# Brings keys, catalog and every bundle from the copy into an EMPTY archive
+# home, then restore works as on the old machine. Needs a key to open the
+# catalog, so it runs only in the user's terminal. Interrupted, it resumes:
+# rerun the same command (bundles already here and intact are skipped).
+cmd_pull() {
+  local kind="${1:-}" target="${2:-}" mid="" use=main machines n tmp o row fo b by mt sh m at i=0 total id kf e
+  [ $# -ge 2 ] || die "pull needs: folder <path>, or rclone <remote:path> [--machine <id>] [--recovery]."
+  shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --machine) mid="${2:-}"; shift 2 ;;
+      --recovery) use=recovery; shift ;;
+      *) die "unknown pull option '$(relevio_safe "$1")'" ;;
+    esac
+  done
+  check_writable; require_tty
+  if is_set_up && [ ! -e "$RH/.pull-in-progress" ]; then
+    die "this machine already has an archive in $RH. pull is for an empty one (a new or reinstalled computer); to check the copy from here, use verify."
+  fi
+  find_deps
+  mkdir -p "$RH/keys" "$RH/archive"; chmod 700 "$RH" "$RH/keys" "$RH/archive"
+  : > "$RH/.pull-in-progress"
+  AGE="$(command -v age)"; AGE_KEYGEN="$(command -v age-keygen)"; SHA="$(sha_tool)"
+  R_KIND="$kind"; R_TARGET="$target"
+  case "$kind" in
+    folder) [ -d "$target" ] || die "'$(target_safe "$target")' is not a folder." ;;
+    rclone) RCLONE="$(command -v rclone)" || die "rclone is not installed: sudo apt install rclone (Linux) or see https://rclone.org/install/" ;;
+    *) die "pull needs: folder <path>, or rclone <remote:path>." ;;
+  esac
+  tmp="$(mktemp -d "$RH/.pull.XXXXXX")"; PUSH_STAGE="$tmp"; trap 'rm -rf "${PUSH_STAGE:-}"' EXIT
+  t_list_machines > "$tmp/machines" || die "$R_ERR"
+  machines="$(grep -E '^[0-9a-f]{12}$' "$tmp/machines" || true)"
+  [ -n "$machines" ] || die "no relevio copy found at $(target_safe "$target") (no machines/ folder in it)."
+  if [ -z "$mid" ]; then
+    n="$(grep -c . <<<"$machines")"
+    [ "$n" -eq 1 ] || die "the copy holds $n machines; pick one with --machine: $(tr '\n' ' ' <<<"$machines")"
+    mid="$machines"
+  fi
+  grep -qx "$mid" <<<"$machines" || die "machine '$(relevio_safe "$mid")' is not in the copy."
+  R_BASE="$R_TARGET/machines/$mid"
+  echo "Bringing back the archive of machine $mid from $(target_safe "$target")."
+  t_get keys/recipients.txt "$RH/keys/recipients.txt" || die "the copy has no keys/recipients.txt: $R_ERR"
+  t_get keys/main.age "$RH/keys/main.age" || { [ "$use" = recovery ] || die "the copy has no keys/main.age, so the passphrase cannot open it: rerun with --recovery and your $NAME_REC."; }
+  t_get catalog.age "$tmp/catalog.age" || die "the copy has no catalog: $R_ERR"
+  { echo "format=$ARCHIVE_FORMAT"; echo "age=$AGE"; echo "age_keygen=$AGE_KEYGEN"; echo "created=$(utc_iso)"; } > "$RH/config"
+  [ "$kind" = rclone ] && config_set rclone "$RCLONE"
+  # The key opens the catalog; then everything else needs no secret.
+  local idn; idn="$(identity_for "$use" "Opening the copy's catalog (the list of what it holds).")"
+  "$AGE" -d -i <(printf '%s\n' "$idn") "$tmp/catalog.age" 2>/dev/null | gzip -dc > "$tmp/catalog.tar" \
+    || { unset idn; die "that key could not open the copy's catalog. Nothing was brought back."; }
+  unset idn
+  tar -tf "$tmp/catalog.tar" > "$tmp/entries" || die "the catalog is damaged."
+  while IFS= read -r e; do
+    case "$e" in ./|./META|./index.tsv|./folders.tsv|./forgotten.tsv|./remote.tsv) ;; *) die "the catalog holds an unexpected entry ($(relevio_safe "$e"))." ;; esac
+  done < "$tmp/entries"
+  mkdir "$tmp/c"; tar -xf "$tmp/catalog.tar" -C "$tmp/c" --no-same-owner
+  [ "$(head -1 "$tmp/c/META")" = "relevio-catalog $CATALOG_FORMAT" ] || die "the catalog was made by a newer relevio (or is damaged). Update relevio."
+  [ "$(sed -n 's/^machine //p' "$tmp/c/META")" = "$mid" ] || die "the catalog names another machine than its folder: the copy is inconsistent. Nothing was brought back."
+  [ ! -f "$tmp/c/index.tsv" ] || [ "$(head -1 "$tmp/c/index.tsv")" = "$INDEX_HEADER" ] || die "the catalog's index is not a format $ARCHIVE_FORMAT index."
+  [ -f "$tmp/c/remote.tsv" ] && [ "$(head -1 "$tmp/c/remote.tsv")" = "$REMOTE_HEADER" ] || die "the catalog has no upload records."
+  for kf in index.tsv folders.tsv forgotten.tsv remote.tsv; do [ -f "$tmp/c/$kf" ] && cp "$tmp/c/$kf" "$RH/$kf"; done
+  config_set machine "$mid"; config_set copy_salt "$(sed -n 's/^copy_salt //p' "$tmp/c/META")"
+  config_set remote_kind "$kind"; config_set remote_target "$target"
+  config_set catalog_seq "$(sed -n 's/^seq //p' "$tmp/c/META")"; config_set catalog_sha "$(sha_of < "$tmp/catalog.age")"; config_set catalog_md5 "$(md5_of < "$tmp/catalog.age")"
+  for kf in main.age recipients.txt; do [ -f "$RH/keys/$kf" ] && config_set "sent_$kf" "$(sha_of < "$RH/keys/$kf")"; done
+  write_canary
+  echo "Catalog #$(config_get catalog_seq), written $(sed -n 's/^written //p' "$tmp/c/META"). Fetching the bundles..."
+  remote_records_load
+  total="${#U_ROW[@]}"
+  for o in "${!U_ROW[@]}"; do
+    i=$((i + 1))
+    IFS="$TAB" read -r fo b by mt sh m at <<<"${U_ROW[$o]}"
+    id="${b:0:36}"
+    index_names_ok "$id" "$fo" "$b" || die "the catalog names an unexpected file ($(relevio_safe "$fo/$b")). Stopped."
+    mkdir -p "$RH/archive/$fo"; chmod 700 "$RH/archive/$fo"
+    if [ ! -f "$RH/archive/$fo/$b" ] || [ "$(sha_of < "$RH/archive/$fo/$b")" != "$sh" ]; then
+      t_get "b/$o.age" "$RH/archive/$fo/$b.part" || die "bundle $i of $total could not be fetched: $R_ERR. Rerun the same pull to resume."
+      [ "$(sha_of < "$RH/archive/$fo/$b.part")" = "$sh" ] || { rm -f "$RH/archive/$fo/$b.part"; die "bundle $i of $total in the copy is not what was sent (sha256). Stopped; the rest are untouched."; }
+      chmod 600 "$RH/archive/$fo/$b.part"; mv "$RH/archive/$fo/$b.part" "$RH/archive/$fo/$b"
+    fi
+    # The local file is new, so its mtime is new: record it, or the next
+    # push would send everything back.
+    read -r by mt <<<"$(file_stat "$RH/archive/$fo/$b")"
+    U_ROW["$o"]="$fo$TAB$b$TAB$by$TAB$mt$TAB$sh$TAB$m$TAB$at"
+    [ $((i % 50)) -eq 0 ] && echo "  $i of $total"
+  done
+  remote_records_save
+  rm -f "$RH/.pull-in-progress"
+  remote_status_write ok "pulled $total"
+  log "pull: machine $mid, $total bundle(s), catalog #$(config_get catalog_seq)"
+  echo "Done: $total bundle(s) back in $RH, every one checked by sha256."
+  echo "Put any conversation back with: bash \"$SELF\" restore <session id>   (list shows them)"
+  echo "This machine now continues the same copy. If the old computer still runs relevio, run 'remote off' there."
 }
