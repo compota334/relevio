@@ -56,7 +56,12 @@ rclone_reason() {  # stdin: rclone's stderr
   case "$e" in
     *"couldn't fetch token"*|*invalid_grant*|*"token expired"*)
       R_ERR="the login to ${R_TARGET%%:*} expired: run in your terminal: rclone config reconnect ${R_TARGET%%:*}:" ;;
-    *storageQuotaExceeded*|*"quota"*|*"Quota"*) R_ERR="the cloud storage is full: quota exceeded" ;;
+    # Google answers "Quota exceeded for quota metric 'Queries'" with
+    # rateLimitExceeded when too many requests reach it (measured
+    # 2026-11-25: rclone's shared app hits it often). Not a full disk.
+    *rateLimitExceeded*|*userRateLimitExceeded*|*"quota metric"*)
+      R_ERR="the provider is limiting requests (rate limit), not out of space: it is retried next time. If it keeps happening, give rclone its own Google client id (README, A copy off this machine)" ;;
+    *storageQuotaExceeded*|*"storage quota"*|*"Quota"*|*"quota"*) R_ERR="the cloud storage is full: quota exceeded" ;;
     *"dial tcp"*|*"no such host"*|*"connection refused"*|*"i/o timeout"*|*"network is unreachable"*|*"TLS handshake timeout"*)
       R_ERR="no connection to the cloud: offline, or the provider is down" ;;
     *"directory not found"*|*"object not found"*|*"file not found"*) R_ERR="not found in the copy" ;;
