@@ -169,13 +169,17 @@ folder_ok() {
   [ -d "$R_TARGET" ] || { R_ERR="the folder $(target_safe "$R_TARGET") is gone: is the drive or the sync client mounted"; return 1; }
 }
 folder_write_err() { R_ERR="could not write into $(target_safe "$R_TARGET"): disk full or no permission"; return 1; }
-# t_put <local file> <relative path>: atomic, through <path>.part.
+# t_put <local file> <relative path>. A folder copy goes through <path>.part
+# and a rename. With rclone it is ONE call: an object store (Drive, S3, B2)
+# only shows an object once its upload completed (measured on Drive: a cut
+# upload leaves nothing), and every call costs requests against the
+# provider's rate limit (Drive's shared rclone app hit it, 2026-11-25).
 t_put() {
   case "$R_KIND" in
     folder)
       folder_ok || return 1
       mkdir -p "$(dirname "$R_BASE/$2")" && cp "$1" "$R_BASE/$2.part" && mv "$R_BASE/$2.part" "$R_BASE/$2" || folder_write_err ;;
-    rclone) rc copyto "$1" "$R_BASE/$2.part" && rc moveto "$R_BASE/$2.part" "$R_BASE/$2" ;;
+    rclone) rc copyto "$1" "$R_BASE/$2" ;;
   esac
 }
 # t_put_dir <local dir of symlinks> <relative dir>: many files at once.
@@ -406,14 +410,21 @@ push_core() {
   done
   [ "$changed" = 1 ] && remote_records_save
   # Keys: sent when they change (a passphrase change rewrites main.age), or
-  # when an audit finds them missing or altered in the copy.
+  # when an audit finds them missing or altered in the copy; all of them in
+  # one call.
+  local -a keys_out=()
+  mkdir "$PUSH_STAGE/keys"
   for f in main.age recipients.txt recipients.mac; do
     [ -f "$RH/keys/$f" ] || continue
     m="$(md5_of < "$RH/keys/$f")"
     [ "$(config_get "sent_$f")" = "$m" ] && { [ "$mode" != audit ] || [ "${ALL[keys/$f]:-}" = "$m" ]; } && continue
-    t_put "$RH/keys/$f" "keys/$f" || return 1
-    config_set "sent_$f" "$m"; changed=1
+    ln -s "$RH/keys/$f" "$PUSH_STAGE/keys/$f"; keys_out+=("$f")
   done
+  if [ "${#keys_out[@]}" -gt 0 ]; then
+    t_put_dir "$PUSH_STAGE/keys" keys || return 1
+    for f in "${keys_out[@]}"; do config_set "sent_$f" "$(md5_of < "$RH/keys/$f")"; done
+    changed=1
+  fi
   # The catalog is rewritten when anything changed (stamps included), and
   # when an audit finds the one in the copy is not the last this machine
   # wrote (replaced, rolled back, deleted).
