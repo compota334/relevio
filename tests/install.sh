@@ -1940,7 +1940,7 @@ git -C "$d14" checkout -q main
 echo m > "$d14/frommain"; git -C "$d14" add -A >/dev/null 2>&1; git -C "$d14" commit -qm other-session >/dev/null 2>&1
 git -C "$d14" checkout -q feat14
 git -C "$d14" merge -q --no-ff --no-edit main >/dev/null 2>&1
-hn14="$( (cd "$d14" && RELEVIO_MAIN=main bash "$HDR" "$id14") 2>/dev/null )"
+hn14="$( (cd "$d14" && bash "$HDR" "$id14") 2>/dev/null )"
 check "header: your own commit that came in from main is not this session's" \
   "$(printf '%s\n' "$hn14" | grep -E '^(Commits|Areas):' | tr '\n' ' ')" "Commits: $first14..$last14 Areas: b, src/a "
 # A start commit that no longer exists is a missing boundary: say so.

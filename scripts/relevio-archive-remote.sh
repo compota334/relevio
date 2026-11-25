@@ -42,6 +42,7 @@ remote_load() {
   fi
 }
 target_safe() { printf '%s' "$1" | safe_msg; }
+rclone_find() { command -v rclone || die "rclone is not installed: sudo apt install rclone (Linux) or see https://rclone.org/install/"; }
 # A target goes into the key=value config: a line break would plant keys.
 target_ok() { case "$1" in *$'\n'*|*$'\r'*|"") die "the copy's target must be one line, not empty." ;; esac; }
 
@@ -85,31 +86,24 @@ rc() {  # run rclone, R_ERR on failure
 #   remote connect b2 <bucket>                       Backblaze B2
 #   remote connect s3 <bucket> <endpoint> [provider] Cloudflare R2, AWS, Wasabi, MinIO...
 #   remote connect gdrive [folder]                   Google Drive (browser login)
-read_secret_line() {  # hidden, from the terminal (stdin under the test gate); spaces trimmed
-  local k
-  if test_gate; then IFS= read -r k || k=""; else IFS= read -rs k < /dev/tty || k=""; echo >&2; fi
-  printf '%s' "$k" | tr -d ' \t\r'
-}
-read_plain_line() {
-  local k
-  if test_gate; then IFS= read -r k || k=""; else IFS= read -r k < /dev/tty || k=""; fi
-  printf '%s' "$k" | tr -d ' \t\r'
-}
 remote_connect() {
-  local kind="${1:-}" bucket="${2:-}" endpoint="${3:-}" provider="${4:-Other}" name conf id key target
+  local kind="${1:-}" bucket="${2:-}" endpoint="${3:-}" provider="${4:-Other}" name conf id key target probe id_label key_label
   require_tty
-  RCLONE="$(command -v rclone)" || die "rclone is not installed: sudo apt install rclone (Linux) or see https://rclone.org/install/"
+  RCLONE="$(rclone_find)"
   conf="$("$RCLONE" config file 2>/dev/null | tail -1)"
   [ -n "$conf" ] || die "rclone does not say where its config lives."
   mkdir -p "$(dirname "$conf")"; touch "$conf"; chmod 600 "$conf"
   case "$kind" in
     b2|s3)
       [[ $bucket =~ ^[a-z0-9][a-z0-9.-]{1,62}$ ]] || die "'$(relevio_safe "$bucket")' is not a bucket name (lower case letters, digits, dots and dashes)."
-      if [ "$kind" = s3 ]; then
+      if [ "$kind" = b2 ]; then
+        id_label="the key ID (keyID, a short code)"; key_label="the application key (applicationKey, shown once when you created it)"
+      else
         [[ $endpoint =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]] || die "the endpoint must be an https:// address, for example https://<account id>.r2.cloudflarestorage.com"
         [[ $provider =~ ^[A-Za-z]+$ ]] || die "the provider is one word, for example Cloudflare, AWS, Wasabi or Minio."
+        id_label="the access key ID"; key_label="the secret access key"
       fi
-      name="relevio-$kind"
+      name="relevio-$kind"; target="$name:$bucket/relevio"
       grep -qx "\[$name\]" "$conf" && die "an rclone remote called $name already exists. Remove it first (rclone config delete $name) or use remote set rclone $name:$bucket/relevio."
       ui_title "☁  connecting the copy off this machine ($kind, bucket $bucket)"
       cat <<EOF
@@ -117,43 +111,43 @@ Use a key that can reach ONLY this bucket: if it ever leaks, nothing else
 of yours is exposed. The key goes into rclone's own config ($conf),
 readable only by you; it is never shown, logged or sent to the assistant.
 EOF
-      if [ "$kind" = b2 ]; then ui_step "1 of 2" "the key ID (keyID, a short code)"; else ui_step "1 of 2" "the access key ID"; fi
-      printf 'Key ID: '; id="$(read_plain_line)"
-      if [ "$kind" = b2 ]; then ui_step "2 of 2" "the application key (applicationKey, shown once when you created it)"; else ui_step "2 of 2" "the secret access key"; fi
-      paste_hint; printf 'Secret (hidden): '; key="$(read_secret_line)"
+      ui_step "1 of 2" "$id_label"
+      printf 'Key ID: '; id="$(read_line shown)"
+      ui_step "2 of 2" "$key_label"
+      paste_hint; printf 'Secret (hidden): '; key="$(read_line hidden)"
       [[ $id =~ ^[A-Za-z0-9]{8,128}$ ]] && [[ $key =~ ^[A-Za-z0-9/+=_-]{8,256}$ ]] || { unset key; die "that does not look like a key ID and a key (letters and digits, no spaces). Nothing was saved; run it again."; }
-      { echo; echo "[$name]"
+      # The remote is proven in a private scratch config first and joins
+      # rclone's real config only once it works: a wrong key is never kept.
+      probe="$(mktemp "$RH/.connect.XXXXXX")"; chmod 600 "$probe"; PUSH_STAGE="$probe"
+      trap 'rm -f "${PUSH_STAGE:?}"; release_lock' EXIT
+      { echo "[$name]"
         if [ "$kind" = b2 ]; then echo "type = b2"; echo "account = $id"; echo "key = $key"; echo "hard_delete = false"
         else echo "type = s3"; echo "provider = $provider"; echo "access_key_id = $id"; echo "secret_access_key = $key"; echo "endpoint = $endpoint"; echo "no_check_bucket = true"; fi
-      } >> "$conf"
+      } > "$probe"
       unset key
-      target="$name:$bucket/relevio" ;;
+      ui_step "Checking" "that the key opens the bucket"
+      R_TARGET="$target"
+      # A listing really asks the provider (a mkdir on S3 can succeed without
+      # asking anything).
+      RCLONE_CONFIG="$probe" rc_list "$probe.out" lsf --max-depth 1 "$target" \
+        || die "$R_ERR. Nothing was kept; check the key and the bucket and run it again."
+      { echo; cat "$probe"; } >> "$conf"
+      rm -f "${probe:?}" "${probe:?}.out" ;;
     gdrive)
       name="relevio-gdrive"; target="$name:${bucket:-relevio}"
       if ! grep -qx "\[$name\]" "$conf"; then
         ui_title "☁  connecting Google Drive"
         echo "Your browser opens: choose your Google account and allow rclone. It sees only the files it creates."
         "$RCLONE" config create "$name" drive scope=drive.file >/dev/null 2>&1 || die "the Google login did not finish. Nothing was saved; run it again."
-      fi ;;
+      fi
+      R_TARGET="$target"
+      rc mkdir "$target" || die "$R_ERR" ;;
     *) die "remote connect needs: b2 <bucket>, s3 <bucket> <endpoint> [provider], or gdrive [folder]." ;;
   esac
-  ui_step "Checking" "that the key opens the bucket"
-  R_TARGET="$target"
-  # A listing really asks the provider (a mkdir on S3 can succeed without
-  # asking anything).
-  if ! rc_list "$RH/.connect.out" lsf --max-depth 1 "$target"; then
-    rm -f "${RH:?}/.connect.out"
-    # A key that does not work stays nowhere: the next try starts clean.
-    [ "$kind" = gdrive ] || "$RCLONE" config delete "$name" >/dev/null 2>&1 || true
-    die "$R_ERR. Nothing was kept; check the key and the bucket and run it again."
-  fi
-  rm -f "${RH:?}/.connect.out"
   ui_ok "The cloud answers with this key."
-  remote_set rclone "$target" >/dev/null
-  ui_step "Sending" "the encrypted archive to $target"
+  remote_set rclone "$target" checked >/dev/null
   lock_or_die PUSH_STAGE
-  if push_core 0 audit; then remote_status_write ok "sent $PUSH_SENT"; ui_ok "Done: $PUSH_SENT bundle(s) in the copy, every name opaque, everything encrypted."
-  else remote_status_write fail "$R_ERR"; ui_warn "Connected, but the first send failed: $R_ERR. It is retried after every session, or now with push."; fi
+  push_report 0
 }
 
 # rc_list <out file> <rclone args>: a listing into the file; a folder that
@@ -413,16 +407,17 @@ push_core() {
   # when an audit finds them missing or altered in the copy; all of them in
   # one call.
   local -a keys_out=()
+  declare -A key_md5=()
   mkdir "$PUSH_STAGE/keys"
   for f in main.age recipients.txt recipients.mac; do
     [ -f "$RH/keys/$f" ] || continue
     m="$(md5_of < "$RH/keys/$f")"
     [ "$(config_get "sent_$f")" = "$m" ] && { [ "$mode" != audit ] || [ "${ALL[keys/$f]:-}" = "$m" ]; } && continue
-    ln -s "$RH/keys/$f" "$PUSH_STAGE/keys/$f"; keys_out+=("$f")
+    ln -s "$RH/keys/$f" "$PUSH_STAGE/keys/$f"; keys_out+=("$f"); key_md5["$f"]="$m"
   done
   if [ "${#keys_out[@]}" -gt 0 ]; then
     t_put_dir "$PUSH_STAGE/keys" keys || return 1
-    for f in "${keys_out[@]}"; do config_set "sent_$f" "$(md5_of < "$RH/keys/$f")"; done
+    for f in "${keys_out[@]}"; do config_set "sent_$f" "${key_md5[$f]}"; done
     changed=1
   fi
   # The catalog is rewritten when anything changed (stamps included), and
@@ -514,7 +509,7 @@ cmd_remote() {
 }
 remote_set() {
   local kind="${1:-}" target="${2:-}" r
-  [ $# -eq 2 ] || die "remote set needs: folder <path>, or rclone <remote:path>."
+  [ $# -ge 2 ] && [ $# -le 3 ] || die "remote set needs: folder <path>, or rclone <remote:path>."
   target_ok "$target"
   case "$kind" in
     folder)
@@ -524,11 +519,13 @@ remote_set() {
       git -C "$target" rev-parse --is-inside-work-tree >/dev/null 2>&1 && die "'$(target_safe "$target")' is inside a git repository: the copy must never be one commit away from a push."
       [ -w "$target" ] || die "'$(target_safe "$target")' is not writable." ;;
     rclone)
-      r="$(command -v rclone)" || die "rclone is not installed: sudo apt install rclone (Linux) or see https://rclone.org/install/"
+      r="$(rclone_find)"
       case "$target" in *:*) ;; *) die "an rclone target looks like <remote>:<path>, for example relevio-gdrive:relevio" ;; esac
       RCLONE="$r"; R_TARGET="$target"
-      echo "Checking access to $(target_safe "$target")..."
-      rc mkdir "$target" || die "$R_ERR"
+      if [ "${3:-}" != checked ]; then
+        echo "Checking access to $(target_safe "$target")..."
+        rc mkdir "$target" || die "$R_ERR"
+      fi
       config_set rclone "$r" ;;
     *) die "remote set needs: folder <path>, or rclone <remote:path>." ;;
   esac
@@ -578,10 +575,14 @@ cmd_push() {
   tools_load
   remote_is_set || die "no off-machine copy is set: remote set folder <path> | remote set rclone <remote:path>"
   lock_or_die PUSH_STAGE
+  push_report "$limit"
+}
+# push_report <limit>: a push the user asked for (lock held), said in words.
+push_report() {
   echo "Sending to the copy ($(target_safe "$(config_get remote_target)"))..."
-  if push_core "$limit" audit; then
+  if push_core "$1" audit; then
     remote_status_write ok "sent $PUSH_SENT"
-    echo "Done: $PUSH_SENT bundle(s) sent, catalog #$(config_get catalog_seq)."
+    ui_ok "Done: $PUSH_SENT bundle(s) sent, catalog #$(config_get catalog_seq). Every name is opaque, everything encrypted."
     [ "$PUSH_PENDING" -eq 0 ] || echo "$PUSH_PENDING more left (--limit); run push again."
   else
     remote_status_write fail "$R_ERR"; log "push: $R_ERR"
@@ -652,7 +653,7 @@ cmd_pull() {
   R_KIND="$kind"; R_TARGET="$target"
   case "$kind" in
     folder) [ -d "$target" ] || die "'$(target_safe "$target")' is not a folder." ;;
-    rclone) RCLONE="$(command -v rclone)" || die "rclone is not installed: sudo apt install rclone (Linux) or see https://rclone.org/install/" ;;
+    rclone) RCLONE="$(rclone_find)" ;;
     *) die "pull needs: folder <path>, or rclone <remote:path>." ;;
   esac
   # The lock keeps a session starting or ending meanwhile from archiving into

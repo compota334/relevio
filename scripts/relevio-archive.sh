@@ -120,11 +120,17 @@ utc_stamp() { date -u +%Y%m%dT%H%M%SZ; }
 # --- Keys -----------------------------------------------------------------------
 # A key typed by the user: hidden, from the terminal (from stdin under the test
 # gate), and normalized as age keys are written (no spaces, upper case).
-read_key_line() {
+# read_line <hidden|shown>: one line from the terminal (stdin under the test
+# gate), spaces, tabs and carriage returns trimmed. Every secret is read here.
+read_line() {
   local k
-  if test_gate; then IFS= read -r k || k=""; else IFS= read -rs k < /dev/tty || k=""; echo >&2; fi
-  printf '%s' "$k" | tr -d ' \t' | tr '[:lower:]' '[:upper:]'
+  if test_gate; then IFS= read -r k || k=""
+  elif [ "$1" = hidden ]; then IFS= read -rs k < /dev/tty || k=""; echo >&2
+  else IFS= read -r k < /dev/tty || k=""; fi
+  printf '%s' "$k" | tr -d ' \t\r'
 }
+# An age key, normalized as age writes them (upper case).
+read_key_line() { read_line hidden | tr '[:lower:]' '[:upper:]'; }
 # The two keys, named the same way on every screen. age's own prompt says only
 # "passphrase", and the passphrase it invents looks like a recovery phrase, so
 # each prompt says which key it wants and what that key looks like.
@@ -135,21 +141,21 @@ LOOK_REC="one long code that starts with AGE-SECRET-KEY-1 (that prefix is only h
 # --- the screens the user sees ------------------------------------------------------
 # Colors and shapes only on a real terminal (never in a pipe, a test or with
 # NO_COLOR set), so every word below reads the same without them.
-C_B=""; C_DIM=""; C_CYAN=""; C_GREEN=""; C_YELLOW=""; C_RED=""; C_0=""
+C_B=""; C_DIM=""; C_CYAN=""; C_GREEN=""; C_YELLOW=""; C_0=""
 if [ -t 1 ] && [ -t 2 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then
-  C_B=$'\e[1m'; C_DIM=$'\e[2m'; C_CYAN=$'\e[36m'; C_GREEN=$'\e[32m'; C_YELLOW=$'\e[33m'; C_RED=$'\e[31m'; C_0=$'\e[0m'
+  C_B=$'\e[1m'; C_DIM=$'\e[2m'; C_CYAN=$'\e[36m'; C_GREEN=$'\e[32m'; C_YELLOW=$'\e[33m'; C_0=$'\e[0m'
 fi
 UI_LINE="────────────────────────────────────────────────────────────────"
-ui_title() {  # <text>: the big header of a command
-  printf '\n%s╭%s╮%s\n%s│%s  %s%s%s\n%s╰%s╯%s\n' "$C_CYAN" "$UI_LINE" "$C_0" "$C_CYAN" "$C_0" "$C_B" "$1" "$C_0" "$C_CYAN" "$UI_LINE" "$C_0"
+ui_box() {  # <color> <indent> <corners: 4 chars> <text>
+  local c="$1" i="$2" k="$3"
+  printf '%s%s%s%s%s%s\n%s%s│%s  %s%s%s\n%s%s%s%s%s%s\n' "$i" "$c" "${k:0:1}" "$UI_LINE" "${k:1:1}" "$C_0" "$i" "$c" "$C_0" "$C_B" "$4" "$C_0" "$i" "$c" "${k:2:1}" "$UI_LINE" "${k:3:1}" "$C_0"
 }
+ui_title() { echo; ui_box "$C_CYAN" "" "╭╮╰╯" "$1"; }  # the big header of a command
 ui_step() { printf '\n%s%s● %s%s  %s%s%s\n' "$C_CYAN" "$C_B" "$1" "$C_0" "$C_B" "$2" "$C_0"; }  # <Step n of m> <what>
 ui_ok() { printf '%s✔ %s%s\n' "$C_GREEN" "$1" "$C_0"; }
 ui_warn() { printf '%s⚠ %s%s\n' "$C_YELLOW" "$1" "$C_0"; }
 ui_dim() { printf '%s%s%s\n' "$C_DIM" "$1" "$C_0"; }
-ui_keybox() {  # <the one line to copy>: framed so it is easy to select
-  printf '\n   %s┌%s┐%s\n   %s│%s  %s%s%s\n   %s└%s┘%s\n\n' "$C_YELLOW" "$UI_LINE" "$C_0" "$C_YELLOW" "$C_0" "$C_B" "$1" "$C_0" "$C_YELLOW" "$UI_LINE" "$C_0"
-}
+ui_keybox() { echo; ui_box "$C_YELLOW" "   " "┌┐└┘" "$1"; echo; }  # the one line to copy, framed
 paste_hint() {
   {
     printf '  %s📋 To paste:%s Linux terminal %sCtrl+Shift+V%s (or right-click > Paste),\n' "$C_DIM" "$C_0" "$C_B" "$C_0"
@@ -290,6 +296,14 @@ seal_write() {  # <main|recovery> <identity> [recipients file] [seal file]
   v="$(seal_of "$2" "$f")"
   { [ -f "$m" ] && grep -v "^$1 " "$m"; printf '%s %s\n' "$1" "$v"; } > "$m.tmp"
   mv "$m.tmp" "$m"
+}
+# install_key_list <main identity> <recovery identity>: recipients.txt.new
+# becomes the key list, sealed fresh with both keys, and the canary follows.
+install_key_list() {
+  mv "$RH/keys/recipients.txt.new" "$RH/keys/recipients.txt"
+  rm -f "${RH:?}/keys/recipients.mac"
+  seal_write main "$1"; seal_write recovery "$2"
+  write_canary
 }
 # seal_check <main|recovery> <identity> [recipients file] [seal file]:
 # 0 sealed and matching, 1 a seal exists and does NOT match, 2 no seal yet.
@@ -585,6 +599,7 @@ index_load() {
   I_STATE=(); I_BYTES=(); I_SHA=(); I_MTIME=(); I_FILES=()
   [ -s "$INDEX" ] || return 0
   [ "$(head -1 "$INDEX")" = "$INDEX_HEADER" ] || die "$INDEX is not a format $ARCHIVE_FORMAT index (first line: '$(relevio_safe "$(head -1 "$INDEX" | cut -c1-60)")')."
+  tsv_valid index "$INDEX" || die "$INDEX line $TSV_BAD is malformed; nothing was archived (it is checked like every record that can come back from a copy)."
   while IFS="$TAB" read -r st id fo cwd ver by sha mt fi _rest; do
     case "$st" in active|deleted-in-claude) ;; *) continue ;; esac
     I_STATE["$fo/$id"]="$st"; I_BYTES["$fo/$id"]="$by"; I_SHA["$fo/$id"]="$sha"
@@ -1193,11 +1208,8 @@ keys_reset() {
   [ -e "$RH/keys/main.key" ] && mv "$RH/keys/main.key" "$RH/keys/old/main.$ts.key"
   mv "$RH/archive" "$RH/archive.old.$ts"
   mv "$RH/archive.new" "$RH/archive"
-  mv "$RH/keys/recipients.txt.new" "$RH/keys/recipients.txt"
   if [ -e "$RH/keys/main.new.key" ]; then mv "$RH/keys/main.new.key" "$RH/keys/main.key"; else mv "$RH/keys/main.new.age" "$RH/keys/main.age"; fi
-  rm -f "${RH:?}/keys/recipients.mac"
-  seal_write main "$main"; seal_write recovery "$rec"; unset rec main
-  write_canary
+  install_key_list "$main" "$rec"; unset rec main
   rm -rf "$RH/archive.old.$ts"
   log "keys reset: $REENC_N bundle(s) re-encrypted to a new main key"
   echo "Done: $REENC_N bundle(s) now open with the new passphrase. The recovery key is the same."
@@ -1222,10 +1234,7 @@ keys_rotate_recovery() {
   mv "$RH/archive" "$RH/archive.old.$ts"
   mv "$RH/archive.new" "$RH/archive"
   mv "$RH/keys/recipients.txt" "$RH/keys/old/recipients.$ts.txt"
-  mv "$RH/keys/recipients.txt.new" "$RH/keys/recipients.txt"
-  rm -f "${RH:?}/keys/recipients.mac"
-  seal_write main "$main"; seal_write recovery "$REC_ENTERED"; unset main; REC_ENTERED=""
-  write_canary
+  install_key_list "$main" "$REC_ENTERED"; unset main; REC_ENTERED=""
   rm -rf "$RH/archive.old.$ts"
   log "keys rotate-recovery: $REENC_N bundle(s) re-encrypted; old recovery ${old_pub:0:12}... removed"
   echo "Done: $REENC_N bundle(s) now open with your passphrase and the NEW recovery key. The old recovery key opens nothing here any more."

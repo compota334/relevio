@@ -113,17 +113,11 @@ ME="$(git config --get user.email 2>/dev/null || true)"
 # merge. Commits pulled from teammates carry their own email; a rebase
 # re-commits yours with a fresh date, so they still count; and a merge commit
 # you made by pulling is yours only in name: its content is the teammates'.
-# Commits already on the integration branch are not this session's either,
-# even under your email: a merge of main into this branch brings another
-# session's commits (yours too, from another conversation). Recording the
-# integration branch itself excludes nothing.
-MAIN_EX="$( (resolve_main >/dev/null 2>&1 && printf '%s' "$MAIN") || true )"
-case "${MAIN_EX#origin/}" in
-  ""|"$BRANCH") MAIN_EX="" ;;
-esac
-[ -n "$MAIN_EX" ] || [ "$BRANCH" = "$(git config --get relevio.main 2>/dev/null || echo main)" ] \
-  || echo "relevio-header: no integration branch found, so commits merged in from it cannot be told apart from yours (set it: git config relevio.main <branch>)" >&2
-OURS="$(git log --reverse --no-merges --format='%h %ct %ce' HEAD ${AT:+"^$AT"} ${MAIN_EX:+"^$MAIN_EX"} 2>/dev/null \
+# Only the branch's own line of history (--first-parent): whatever a merge
+# brought in, from main or from a teammate, sits on the merge's second parent
+# and is not this session's, even under your email (another session of yours
+# that landed on main). A branch you merged into this one is excluded too.
+OURS="$(git log --first-parent --reverse --no-merges --format='%h %ct %ce' HEAD ${AT:+"^$AT"} 2>/dev/null \
   | awk -v me="$ME" -v start="$START" '$2 >= start && $3 == me { print $1 }')" \
   || die "git could not read this branch's history."
 if [ -z "$OURS" ]; then
