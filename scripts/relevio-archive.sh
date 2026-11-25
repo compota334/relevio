@@ -213,12 +213,16 @@ new_recovery_key() {
   unset rec
   cat <<EOF
 
-$1: your $NAME_REC. Save it now as
-"relevio archive recovery key" (it is NOT the passphrase):
+$1: your $NAME_REC. You do not make this one: relevio just CREATED it
+for you, and this is the only time it is shown. It is the line below:
 
   $rec_secret
 
-$2: paste it back, to prove you saved it.
+Copy that whole line now (select it, then Ctrl+Shift+C on Linux, Cmd+C on
+macOS) and save it in your password manager or on paper, as
+"relevio archive recovery key". It is NOT the passphrase.
+
+$2: paste that same AGE-SECRET-KEY-1 line back here, to prove you saved it.
 EOF
   unset rec_secret
   paste_hint
