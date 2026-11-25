@@ -2159,7 +2159,11 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     "$(ls -ld "$arc_t/h2" | cut -c1-10):$(ls -l "$arc_t/h2/keys" | awk 'NR > 1 { print substr($1, 1, 10) }' | sort -u | tr '\n' ' ')" "drwx------:-rw------- "
   check "archive: ... and the recovery secret is not stored anywhere" \
     "$(grep -rl "$(grep '^AGE-SECRET-KEY' "$arc_t/rec.key")" "$arc_t/h2" | grep -c .)" "0"
-  check "archive: setup tells you how to backfill" "$(contains "$out" 'backfill')" "yes"
+  mkdir -p "$arc_t/sb/projects/-sb"; printf '{"cwd":"/tmp","type":"user"}\n' > "$arc_t/sb/projects/-sb/0000000a-aaaa-4bbb-8ccc-dddddddddddd.jsonl"
+  touch -d '1 hour ago' "$arc_t/sb/projects/-sb/"*.jsonl 2>/dev/null
+  out="$(grep '^AGE-SECRET-KEY' "$arc_t/rec.key" | CLAUDE_CONFIG_DIR="$arc_t/sb" RELEVIO_TEST_SETUP_BACKFILL=yes RELEVIO_TEST_QUIET_MIN=0 arcg "$arc_t/hsb" setup 2>&1)"
+  check "archive: setup archives the conversations already there by itself, leaving nothing to run" \
+    "$(contains "$out" 'archived 1'):$(contains "$out" 'All done'):$(grep -c '^active' "$arc_t/hsb/index.tsv")" "yes:yes:1"
   check "archive: setup names both keys, says what each looks like and how to save it" \
     "$(contains "$out" 'PASSPHRASE (your everyday key)'):$(contains "$out" 'RECOVERY KEY (your emergency key)'):$(contains "$out" 'THOSE WORDS ARE YOUR PASSPHRASE'):$(contains "$out" 'relevio archive recovery key')" "yes:yes:yes:yes"
   check "archive: setup says how to paste on Linux, macOS and Windows" \
