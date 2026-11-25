@@ -694,15 +694,22 @@ cmd_pull() {
     seal_check "$use" "$idn" || rc=$?
     [ "$rc" -eq 0 ] || { unset idn; die "the copy's key list does NOT match its seal: someone may have added a key to it. Nothing was brought back; do not use this copy until you know why."; }
   else
-    # A copy made before the seal existed. When the old machine is gone this
-    # is the only way back, so it is a decision for the owner, made seeing
-    # the keys: exactly two, one of them the key just typed.
-    local keys; keys="$(grep -c '^age1' "$RH/keys/recipients.txt" || true)"
-    echo "The copy's key list has no seal (made by a relevio from before the seal). It holds $keys key(s):" >&2
-    grep '^age1' "$RH/keys/recipients.txt" | cut -c1-16 | sed 's/^/  /; s/$/.../' >&2
-    [ "$keys" = 2 ] || { unset idn; die "an archive has exactly two keys; this list has $keys, so someone may have added one. Nothing was brought back."; }
-    [ "$unsealed" = yes ] || { unset idn; die "if both keys above are yours (the one you typed is among them), rerun with --accept-unsealed; this machine then seals the list. Otherwise do not use this copy."; }
-    seal_write "$use" "$idn"
+    # No seal: a copy from before the seal existed, or one someone tampered
+    # with. When the old machine is gone this is the only way back, so it is
+    # the owner's decision, and it needs BOTH secrets: the list must be
+    # exactly the two public keys derived from them (with one secret only, an
+    # attacker could have swapped the other key for theirs).
+    local keys other other_use mine theirs
+    keys="$(grep -c '^age1' "$RH/keys/recipients.txt" || true)"
+    echo "The copy's key list has no seal: either it was made before relevio sealed key lists, or someone removed the seal. It holds $keys key(s)." >&2
+    [ "$unsealed" = yes ] || { unset idn; die "to bring it back anyway you need BOTH keys (passphrase and recovery key): rerun with --accept-unsealed. Otherwise do not use this copy."; }
+    if [ "$use" = main ]; then other_use=recovery; other="$(read_recovery_identity)"
+    else other_use=main; other="$(read_main_identity "The copy has no seal: its key list is checked against BOTH your keys.")"; fi
+    mine="$( { printf '%s\n' "$idn" | "$AGE_KEYGEN" -y; printf '%s\n' "$other" | "$AGE_KEYGEN" -y; } 2>/dev/null | sort)"
+    theirs="$(grep '^age1' "$RH/keys/recipients.txt" | sort)"
+    [ "$(grep -c . <<<"$mine")" = 2 ] && [ "$mine" = "$theirs" ] \
+      || { unset idn other; die "the copy's key list is NOT exactly your two keys: someone may have changed it. Nothing was brought back."; }
+    seal_write "$use" "$idn"; seal_write "$other_use" "$other"; unset other
   fi
   "$AGE" -d -i <(printf '%s\n' "$idn") "$tmp/catalog.age" 2>/dev/null | gzip -dc > "$tmp/catalog.tar" \
     || { unset idn; die "that key could not open the copy's catalog. Nothing was brought back."; }

@@ -2815,6 +2815,9 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
         tar -cf - -C "$1" . | gzip -c | age -e -R "$mb/keys/recipients.txt" -o "$mb/catalog.age"
       }
       fresh() { rm -rf "${cp_t:?}/new"; mkdir -p "$cp_t/cc-new/projects"; }
+      # Under the test gate the main key is a plain file instead of the
+      # passphrase: having it on the new machine stands for typing it.
+      fresh_main() { fresh; mkdir -p "$cp_t/new/keys"; cp "$cp_t/h/keys/main.key" "$cp_t/new/keys/main.key"; }
       mkdir -p "$cp_t/forge"
       printf 'relevio-catalog 1\nseq a[$(touch %s/PWNED)]\nmachine %s\ncopy_salt %s\n' "$cp_t" "$mid" "$(printf x | sha256sum | cut -c1-64)" > "$cp_t/forge/META"
       head -1 "$cp_t/h/remote.tsv" > "$cp_t/forge/remote.tsv"
@@ -2840,15 +2843,20 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
         "$(contains "$out" 'does NOT match its seal'):$(find "$cp_t/new/archive" -name '*.age' 2>/dev/null | grep -c .)" "yes:0"
       rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"; rm -f "$mb/keys/recipients.mac"; fresh
       check "copy: a copy whose key list has no seal shows its keys and asks for the owner's decision" \
-        "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery 2>&1)" 'rerun with --accept-unsealed'):$(find "$cp_t/new/archive" -name '*.age' 2>/dev/null | grep -c .)" "yes:0"
-      fresh
+        "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery 2>&1)" 'need BOTH keys'):$(find "$cp_t/new/archive" -name '*.age' 2>/dev/null | grep -c .)" "yes:0"
+      fresh_main
       out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery --accept-unsealed 2>&1)"; rc=$?
-      check "copy: ... and with --accept-unsealed it comes back, sealed on the new machine" \
-        "$rc:$(grep -c '^recovery ' "$cp_t/new/keys/recipients.mac")" "0:1"
+      check "copy: ... and with --accept-unsealed and both keys it comes back, sealed with both" \
+        "$rc:$(grep -c '^\(main\|recovery\) ' "$cp_t/new/keys/recipients.mac")" "0:2"
       rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"; rm -f "$mb/keys/recipients.mac"
-      age-keygen 2>/dev/null | age-keygen -y >> "$mb/keys/recipients.txt"; fresh
+      age-keygen 2>/dev/null | age-keygen -y >> "$mb/keys/recipients.txt"; fresh_main
       check "copy: an unsealed copy with a third key is refused even with --accept-unsealed" \
-        "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery --accept-unsealed 2>&1)" 'exactly two keys; this list has 3')" "yes"
+        "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery --accept-unsealed 2>&1)" 'NOT exactly your two keys')" "yes"
+      rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"; rm -f "$mb/keys/recipients.mac"
+      { grep '^age1' "$mb/keys/recipients.txt" | head -1; age-keygen 2>/dev/null | age-keygen -y; } > "$cp_t/swapped"; cp "$cp_t/swapped" "$mb/keys/recipients.txt"
+      fresh_main
+      check "copy: an unsealed copy whose second key was swapped for another is refused" \
+        "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery --accept-unsealed 2>&1)" 'NOT exactly your two keys\|not one of this archive.s keys')" "yes"
       cp "$cp_t/h/keys/recipients.mac" "$cp_t/mac.bak"; rm -f "$cp_t/h/keys/recipients.mac"
       check "copy: push says a copy is not ok while the key list is not sealed with both keys" \
         "$(cpa push >/dev/null 2>&1; echo $?):$(contains "$(cpa remote status 2>&1)" 'not sealed with both keys')" "2:yes"
