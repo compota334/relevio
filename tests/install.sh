@@ -1934,6 +1934,15 @@ check "header: a merge you made by pulling is not one of your commits" \
   "$(printf '%s\n' "$hm14" | grep '^Commits:')" "Commits: $first14..$last14"
 check "header: ... and the files it brought in are not your Areas" \
   "$(printf '%s\n' "$hm14" | grep '^Areas:')" "Areas: b, src/a"
+# Main moved on with a commit under YOUR email (another session of yours),
+# merged into this branch: it is main's, not this session's.
+git -C "$d14" checkout -q main
+echo m > "$d14/frommain"; git -C "$d14" add -A >/dev/null 2>&1; git -C "$d14" commit -qm other-session >/dev/null 2>&1
+git -C "$d14" checkout -q feat14
+git -C "$d14" merge -q --no-ff --no-edit main >/dev/null 2>&1
+hn14="$( (cd "$d14" && RELEVIO_MAIN=main bash "$HDR" "$id14") 2>/dev/null )"
+check "header: your own commit that came in from main is not this session's" \
+  "$(printf '%s\n' "$hn14" | grep -E '^(Commits|Areas):' | tr '\n' ' ')" "Commits: $first14..$last14 Areas: b, src/a "
 # A start commit that no longer exists is a missing boundary: say so.
 printf '%s %s\n' "$(cut -d' ' -f1 "$rec14")" 0123456789abcdef0123456789abcdef01234567 > "$rec14.gone"
 cp "$rec14" "$rec14.keep"; cp "$rec14.gone" "$rec14"
