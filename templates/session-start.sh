@@ -388,7 +388,7 @@ ensure_user_settings() {
       *)  # every compaction key in NO_COMPACTION
         pairs="${pairs:+$pairs and} \"$k\": false"
         parts="${parts:+$parts and} \"$k\": false${was:+ (it was $was)}"
-        why_compact=" Compaction summarizes a conversation away, so relevio turns off every automatic compaction; manual /compact still works." ;;
+        why_compact=" Automatic compaction summarizes conversations away; manual /compact still works." ;;
     esac
   done <<EOF
 $todo
