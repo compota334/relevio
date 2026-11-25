@@ -106,6 +106,11 @@ require_tty() {
 }
 
 SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/relevio-archive.sh"
+# The command to show the user: with this run's archive home and Claude folder
+# when they are not the defaults, so a hint never points at another archive.
+printf -v SELF_CMD 'bash %q' "$SELF"
+[ -z "${CLAUDE_CONFIG_DIR:-}" ] || printf -v SELF_CMD 'CLAUDE_CONFIG_DIR=%q %s' "$CLAUDE_CONFIG_DIR" "$SELF_CMD"
+[ -z "${RELEVIO_HOME:-}" ] || printf -v SELF_CMD 'RELEVIO_HOME=%q %s' "$RELEVIO_HOME" "$SELF_CMD"
 utc_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 utc_stamp() { date -u +%Y%m%dT%H%M%SZ; }
 
@@ -353,13 +358,13 @@ Your two keys, and when each one is used:
   RECOVERY KEY  emergency only, with --recovery (and keys reset, to choose a
                 new passphrase when the old one is lost). Starts AGE-SECRET-KEY-1.
 To test them later without opening anything:
-  bash "$SELF" keys check
-  bash "$SELF" keys check --recovery
+  $SELF_CMD keys check
+  $SELF_CMD keys check --recovery
 
 New sessions are archived as they end. To archive the $n conversations already
 on this machine now, run:
 
-  bash "$SELF" backfill
+  $SELF_CMD backfill
 EOF
   unset main
 }
@@ -373,7 +378,7 @@ cmd_status() {
   check_home
   if ! is_set_up; then
     echo "archive: NOT SET UP. Conversations are not being archived."
-    echo "  Set it up in your own terminal: bash \"$SELF\" setup"
+    echo "  Set it up in your own terminal: $SELF_CMD setup"
     [ -e "$RH/off" ] && echo "  (turned off: the start-of-session notice is silenced)"
     exit 1
   fi
@@ -948,7 +953,7 @@ read_main_identity() {
   if test_gate && [ -r "$RH/keys/main.key" ]; then cat "$RH/keys/main.key"; return 0; fi
   [ -r "$RH/keys/main.age" ] || die "$RH/keys/main.age is missing, so the passphrase cannot open anything. Rerun the same command with --recovery and your $NAME_REC."
   passphrase_banner "${1:-This step needs one of your two keys.}"
-  "$AGE" -d "$RH/keys/main.age" || die "the passphrase did not open the archive. Try again. If you typed the long AGE-SECRET-KEY-1 code, that is your recovery key: rerun the same command with --recovery. If you lost the passphrase, run: bash \"$SELF\" keys reset"
+  "$AGE" -d "$RH/keys/main.age" || die "the passphrase did not open the archive. Try again. If you typed the long AGE-SECRET-KEY-1 code, that is your recovery key: rerun the same command with --recovery. If you lost the passphrase, run: $SELF_CMD keys reset"
 }
 read_recovery_identity() {
   local k pub
@@ -1263,7 +1268,7 @@ cmd_guide() {
   cat <<EOF
 relevio archive: guide for the AI assistant
 ===========================================
-Script: bash "$SELF" <command>     Archive: $RH
+Script: $SELF_CMD <command>     Archive: $RH
 
 WHAT IT IS, in words for the user: an encrypted copy of every Claude Code
 conversation on this machine, kept outside every repository, so a conversation
@@ -1364,7 +1369,7 @@ cmd_notice() {
     mark="$mark/archive-notice-$(date +%Y%m%d)"
     [ ! -e "$mark" ] || return 0
     : > "$mark" 2>/dev/null || return 0
-    echo "ARCHIVE NOT SET UP: relevio is not archiving this machine's conversations yet. Tell the user in one line that they can set it up in their own terminal with: bash \"$SELF\" setup (or 'off' to stop this notice). Never run setup yourself: it asks for a passphrase."
+    echo "ARCHIVE NOT SET UP: relevio is not archiving this machine's conversations yet. Tell the user in one line that they can set it up in their own terminal with: $SELF_CMD setup (or 'off' to stop this notice). Never run setup yourself: it asks for a passphrase."
     return 0
   fi
   if [ -r "$RH/keys/main.key" ]; then
@@ -1379,17 +1384,17 @@ cmd_notice() {
   case "$pid" in ""|*[!0-9]*) pid=0 ;; esac
   # The copy off this machine, only when the archive itself has nothing to say.
   if [ "$st" = ok ] && [ "$(remote_status_field state)" = fail ]; then
-    echo "ARCHIVE COPY FAILING: $(printf '%s' "$(remote_status_field message)" | safe_msg | cut -c1-150). Tell the user in one line; details: bash \"$SELF\" remote status"
+    echo "ARCHIVE COPY FAILING: $(printf '%s' "$(remote_status_field message)" | safe_msg | cut -c1-150). Tell the user in one line; details: $SELF_CMD remote status"
     return 0
   fi
   case "$st" in
     fail)
-      echo "ARCHIVE FAILING since $(fmt_time "$at"): $(printf '%s' "$msg" | safe_msg | cut -c1-150). Tell the user in one line; the details are in: bash \"$SELF\" status" ;;
+      echo "ARCHIVE FAILING since $(fmt_time "$at"): $(printf '%s' "$msg" | safe_msg | cut -c1-150). Tell the user in one line; the details are in: $SELF_CMD status" ;;
     running)
       kill -0 "$pid" 2>/dev/null || echo "ARCHIVE INTERRUPTED: the last archiving run stopped before finishing; the next one resumes it. Tell the user in one line only if they ask about the archive." ;;
     ok)
       [ $(( $(date +%s) - at )) -le $((7 * 86400)) ] \
-        || echo "ARCHIVE STALE: no archiving run has succeeded in over a week. Tell the user in one line; the details are in: bash \"$SELF\" status" ;;
+        || echo "ARCHIVE STALE: no archiving run has succeeded in over a week. Tell the user in one line; the details are in: $SELF_CMD status" ;;
   esac
   return 0
 }

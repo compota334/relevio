@@ -2477,7 +2477,7 @@ ans() {  # $1 source, $2 transcript path, $3 model -> message
 }
 out="$(ans startup)"
 check "archive notice: not set up is said, with the setup command and a warning not to run it" \
-  "$(contains "$out" 'ARCHIVE NOT SET UP'):$(contains "$out" 'relevio-archive.sh" setup'):$(contains "$out" 'Never run setup yourself')" "yes:yes:yes"
+  "$(contains "$out" 'ARCHIVE NOT SET UP'):$(contains "$out" 'relevio-archive.sh setup'):$(contains "$out" 'Never run setup yourself')" "yes:yes:yes"
 check "archive notice: ... at most once a day" "$(contains "$(ans startup)" 'ARCHIVE')" "no"
 rm -rf "$anx"
 mkdir -p "$anh"; : > "$anh/off"

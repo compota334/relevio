@@ -235,7 +235,7 @@ stamp_setup() {
   "$venv/bin/ots" --version >/dev/null 2>&1 || die "the client was installed but does not run; nothing changed."
   config_set ots_venv "$venv"; config_set stamping on
   echo "Timestamping is on. Every archived conversation is stamped within a day;"
-  echo "Bitcoin confirms each batch a few hours later. Stamp what is queued now with: bash \"$SELF\" stamp now"
+  echo "Bitcoin confirms each batch a few hours later. Stamp what is queued now with: $SELF_CMD stamp now"
 }
 stamp_now() {
   stamping_on || die "timestamping is off: run stamp setup first."
@@ -252,7 +252,7 @@ stamp_show() {
   declare -A C=([pending]=0 [stamped]=0 [complete]=0 [needs-key]=0)
   for k in "${!S_ROW[@]}"; do st="${S_ROW[$k]%%$TAB*}"; C[$st]=$(( ${C[$st]:-0} + 1 )); done
   echo "stamps: ${C[complete]} proven in Bitcoin, ${C[stamped]} waiting for Bitcoin, ${C[pending]} queued for the next batch"
-  [ "${C[needs-key]}" -eq 0 ] || echo "  ${C[needs-key]} need a key: their transcript is gone from this machine. Run in your terminal: bash \"$SELF\" stamp backfill"
+  [ "${C[needs-key]}" -eq 0 ] || echo "  ${C[needs-key]} need a key: their transcript is gone from this machine. Run in your terminal: $SELF_CMD stamp backfill"
   [ "$(stamps_status_field state)" = fail ] && echo "  last try FAILED: $(relevio_safe "$(stamps_status_field message)")"
   return 0
 }
@@ -343,7 +343,7 @@ cmd_proof() {
   echo "  conversation.jsonl  the conversation, in clear: it holds EVERYTHING that passed through the tools."
   echo "                      Read it for secrets (keys, passwords) before you share this folder."
   echo "  salt.txt, leaf.txt, leaf.txt.ots, VERIFY.txt  what the other person needs to check it."
-  echo "Check it yourself first: bash \"$SELF\" proof-check \"$out\""
+  echo "Check it yourself first: $SELF_CMD proof-check $(printf %q "$out")"
 }
 proof_readme() {
   cat <<EOF

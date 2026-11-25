@@ -33,7 +33,7 @@ remote_is_set() { [ -n "$(config_get remote_kind)" ]; }
 remote_load() {
   R_KIND="$(config_get remote_kind)"; R_TARGET="$(config_get remote_target)"
   local m; m="$(config_get machine)"
-  [ -n "$R_KIND" ] || die "no off-machine copy is set. Set one with: bash \"$SELF\" remote set folder <path> (or rclone <remote:path>)."
+  [ -n "$R_KIND" ] || die "no off-machine copy is set. Set one with: $SELF_CMD remote set folder <path> (or rclone <remote:path>)."
   [[ $m =~ ^[0-9a-f]{12}$ ]] || die "$RH/config has no valid machine id; run remote set again."
   R_BASE="$R_TARGET/machines/$m"
   if [ "$R_KIND" = rclone ]; then
@@ -438,7 +438,7 @@ remote_set() {
   remote_reset_state
   echo "Off-machine copy set: $kind $(target_safe "$target")."
   echo "Every bundle, the keys and an encrypted catalog go there; names are opaque."
-  echo "Send everything now with: bash \"$SELF\" push   (later runs send only what is new)"
+  echo "Send everything now with: $SELF_CMD push   (later runs send only what is new)"
 }
 remote_show() {
   remote_is_set || { echo "copy: none set. Set one with: remote set folder <path> | remote set rclone <remote:path>"; return 0; }
@@ -646,6 +646,6 @@ cmd_pull() {
   remote_status_write ok "pulled $total"
   log "pull: machine $mid, $total bundle(s), catalog #$(config_get catalog_seq)"
   echo "Done: $total bundle(s) back in $RH, every one checked by sha256."
-  echo "Put any conversation back with: bash \"$SELF\" restore <session id>   (list shows them)"
+  echo "Put any conversation back with: $SELF_CMD restore <session id>   (list shows them)"
   echo "This machine now continues the same copy. If the old computer still runs relevio, run 'remote off' there."
 }
