@@ -227,8 +227,15 @@ EOF
     printf 'Recovery key (hidden): '
     entered="$(read_key_line)"
     [ "$(printf '%s\n' "$entered" | "$AGE_KEYGEN" -y 2>/dev/null)" = "$REC_PUB" ] && break
+    # Say what was pasted instead, so the next try is the right one.
+    case "$entered" in
+      "") echo "Nothing was pasted (only Enter)." ;;
+      AGE-SECRET-KEY-1*) echo "That is an age key, but not the one shown above (a key from another setup, or cut short?)." ;;
+      *-*) echo "That looks like words joined by dashes: your PASSPHRASE, not the recovery key. Copy the AGE-SECRET-KEY-1 line shown above." ;;
+      *) echo "That is not a recovery key: it must be the single line starting AGE-SECRET-KEY-1 shown above." ;;
+    esac
     [ "$tries" -ge 3 ] && { unset entered; return 1; }
-    echo "That does not match. Try again ($tries of 3)."
+    echo "Try again ($tries of 3)."
   done
   # Kept in memory only, for the caller to seal the key list; it unsets it.
   REC_ENTERED="$entered"; unset entered
@@ -300,7 +307,8 @@ archive is gone for good. Never paste either key into Claude or any chat: it
 would be stored in a plaintext transcript. Clear this terminal's scrollback
 when you are done.
 
-Step 1 of 3: your $NAME_PASS. age asks next, in its own words.
+Step 1 of 3: your $NAME_PASS. age asks next, in its own words, and
+erases its question once you answer: that is normal.
 EOF
   paste_hint
   # The main key: generated and encrypted in memory, never on disk in clear.

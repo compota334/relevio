@@ -2145,6 +2145,9 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     local h="$1"; shift
     RELEVIO_HOME="$h" RELEVIO_TEST_INSECURE_KEYS=1 RELEVIO_TEST_RECOVERY_IDENTITY="$arc_t/rec.key" bash "$ARC" "$@"
   }
+  out="$(printf '\nmy-pass-phrase\nAGE-SECRET-KEY-1QQQ\n' | arcg "$arc_t/h2" setup 2>&1)"
+  check "archive: a wrong recovery key at setup says what was pasted instead" \
+    "$(contains "$out" 'Nothing was pasted'):$(contains "$out" 'your PASSPHRASE, not the recovery key'):$(contains "$out" 'not the one shown above')" "yes:yes:yes"
   printf 'wrong\nwrong\nwrong\n' | arcg "$arc_t/h2" setup >/dev/null 2>&1; rc=$?
   check "archive: a recovery key typed wrong three times sets nothing up" \
     "$rc:$(yesno "$([ -e "$arc_t/h2/keys" ]; echo $?)")" "2:no"
