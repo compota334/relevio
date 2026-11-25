@@ -645,6 +645,20 @@ Two ways to send it, one code path:
 
    then `remote set rclone relevio-gdrive:relevio`.
 
+**For a team, use an S3-compatible bucket** (Backblaze B2, Cloudflare R2,
+AWS S3, Wasabi, a MinIO server): it is what backup tools use (restic, kopia),
+it has no per-app request limit like Google Drive's (rclone's shared Google
+app gets rate-limited: measured 2026-11-25), and an access key limited to one
+bucket is the least privilege there is. Create the bucket and a key for that
+bucket only, connect rclone once, and point relevio at it:
+
+    rclone config        # n, a name such as relevio-b2, type b2 (or s3), the key
+    remote set rclone relevio-b2:<bucket>/relevio
+
+Google Drive with rclone works, but for daily use give rclone its own Google
+client id (rclone's docs: "Making your own client_id"); a native "Connect
+Google Drive" for relevio is planned.
+
 What can go wrong, and what happens:
 
 | Case | What relevio does |

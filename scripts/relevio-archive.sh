@@ -1298,7 +1298,10 @@ THE COPY OFF THIS MACHINE (everything in it is encrypted, names included)
   remote set rclone <r:path>  any rclone remote; the user first connects it
                               once with rclone config (a browser login). That
                               screen shows the provider's token: never read it.
-                              Least privilege on Google Drive: scope=drive.file
+                              Least privilege on Google Drive: scope=drive.file.
+                              For teams prefer an S3-compatible bucket (B2, R2,
+                              S3) with a key limited to that bucket: Google
+                              rate-limits rclone's shared app.
   push / verify / remote status   send what is new / check the copy / its state
   pull folder|rclone <target>     a NEW computer brings everything back
 
