@@ -605,6 +605,7 @@ that terminal during `setup`, whose screen shows the keys.
 | `keys reset` | Lost the passphrase: with the recovery key, re-encrypts everything to a new main key, touching nothing old until every new copy is proven to open. |
 | `keys rotate-recovery` | The recovery key leaked: shows a new one once, re-encrypts everything to the passphrase's key plus the new one (same safety as `reset`), and replaces the off-machine copy. The old recovery key then opens nothing. |
 | `forget <id>` | Removes a session from the archive for good, and keeps it from being archived again. |
+| `remote connect b2 <bucket>` / `s3 <bucket> <endpoint> <provider>` / `gdrive` | Connects a cloud account in one step: asks only the key (hidden, never on a command line), checks it, sets the copy and sends everything. |
 | `remote set folder <path>` / `remote set rclone <remote:path>` | Sets the copy off this machine (see below). `remote status` shows it; `remote off` stops updating it. |
 | `push` | Sends what is new to the copy. Runs by itself after every archiving run once a copy is set. |
 | `verify` | Checks the copy: every bundle by the provider's own md5 (nothing downloaded), a random sample downloaded and checked by sha256, and the catalog. |
@@ -650,10 +651,15 @@ AWS S3, Wasabi, a MinIO server): it is what backup tools use (restic, kopia),
 it has no per-app request limit like Google Drive's (rclone's shared Google
 app gets rate-limited: measured 2026-11-25), and an access key limited to one
 bucket is the least privilege there is. Create the bucket and a key for that
-bucket only, connect rclone once, and point relevio at it:
+bucket only; then one command asks for the key (hidden), writes it into
+rclone's own config, proves it works and sends everything:
 
-    rclone config        # n, a name such as relevio-b2, type b2 (or s3), the key
-    remote set rclone relevio-b2:<bucket>/relevio
+    remote connect b2 <bucket>                          # Backblaze B2
+    remote connect s3 <bucket> <https endpoint> <provider>  # R2, AWS, Wasabi, MinIO
+    remote connect gdrive                               # Google Drive (browser login)
+
+Your AI assistant runs all of this for you: it asks in a form where the copy
+goes and the bucket name, and opens your terminal only where you paste the key.
 
 Google Drive with rclone works, but for daily use give rclone its own Google
 client id (rclone's docs: "Making your own client_id"); a native "Connect

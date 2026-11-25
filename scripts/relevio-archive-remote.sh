@@ -64,6 +64,8 @@ rclone_reason() {  # stdin: rclone's stderr
     *storageQuotaExceeded*|*"storage quota"*|*"Quota"*|*"quota"*) R_ERR="the cloud storage is full: quota exceeded" ;;
     *"dial tcp"*|*"no such host"*|*"connection refused"*|*"i/o timeout"*|*"network is unreachable"*|*"TLS handshake timeout"*)
       R_ERR="no connection to the cloud: offline, or the provider is down" ;;
+    *InvalidAccessKeyId*|*SignatureDoesNotMatch*|*AccessDenied*|*bad_auth_token*|*unauthorized*|*"401"*|*"403 Forbidden"*)
+      R_ERR="the cloud refused the key: check the key ID, the secret, and that the key may use this bucket" ;;
     *"directory not found"*|*"object not found"*|*"file not found"*) R_ERR="not found in the copy" ;;
     *) R_ERR="rclone failed: $(printf '%s' "$e" | tail -1 | safe_msg | cut -c1-160)" ;;
   esac
@@ -73,6 +75,87 @@ rc() {  # run rclone, R_ERR on failure
   if err="$("$RCLONE" "${RCLONE_OPTS[@]}" "$@" 2>&1 >/dev/null)"; then return 0; fi
   rclone_reason <<<"$err"; return 1
 }
+# --- connect: the cloud account, in one guided step -------------------------------------
+# What the assistant cannot do for the user is typing the cloud key: it is a
+# secret. Everything else (which provider, the bucket, the endpoint) comes as
+# arguments, asked by the assistant in a form. This writes the rclone remote
+# itself (never on a command line, where other processes could see the key),
+# proves access, points the copy at it and sends everything.
+#
+#   remote connect b2 <bucket>                       Backblaze B2
+#   remote connect s3 <bucket> <endpoint> [provider] Cloudflare R2, AWS, Wasabi, MinIO...
+#   remote connect gdrive [folder]                   Google Drive (browser login)
+read_secret_line() {  # hidden, from the terminal (stdin under the test gate); spaces trimmed
+  local k
+  if test_gate; then IFS= read -r k || k=""; else IFS= read -rs k < /dev/tty || k=""; echo >&2; fi
+  printf '%s' "$k" | tr -d ' \t\r'
+}
+read_plain_line() {
+  local k
+  if test_gate; then IFS= read -r k || k=""; else IFS= read -r k < /dev/tty || k=""; fi
+  printf '%s' "$k" | tr -d ' \t\r'
+}
+remote_connect() {
+  local kind="${1:-}" bucket="${2:-}" endpoint="${3:-}" provider="${4:-Other}" name conf id key target
+  require_tty
+  RCLONE="$(command -v rclone)" || die "rclone is not installed: sudo apt install rclone (Linux) or see https://rclone.org/install/"
+  conf="$("$RCLONE" config file 2>/dev/null | tail -1)"
+  [ -n "$conf" ] || die "rclone does not say where its config lives."
+  mkdir -p "$(dirname "$conf")"; touch "$conf"; chmod 600 "$conf"
+  case "$kind" in
+    b2|s3)
+      [[ $bucket =~ ^[a-z0-9][a-z0-9.-]{1,62}$ ]] || die "'$(relevio_safe "$bucket")' is not a bucket name (lower case letters, digits, dots and dashes)."
+      if [ "$kind" = s3 ]; then
+        [[ $endpoint =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?/?$ ]] || die "the endpoint must be an https:// address, for example https://<account id>.r2.cloudflarestorage.com"
+        [[ $provider =~ ^[A-Za-z]+$ ]] || die "the provider is one word, for example Cloudflare, AWS, Wasabi or Minio."
+      fi
+      name="relevio-$kind"
+      grep -qx "\[$name\]" "$conf" && die "an rclone remote called $name already exists. Remove it first (rclone config delete $name) or use remote set rclone $name:$bucket/relevio."
+      ui_title "☁  connecting the copy off this machine ($kind, bucket $bucket)"
+      cat <<EOF
+Use a key that can reach ONLY this bucket: if it ever leaks, nothing else
+of yours is exposed. The key goes into rclone's own config ($conf),
+readable only by you; it is never shown, logged or sent to the assistant.
+EOF
+      if [ "$kind" = b2 ]; then ui_step "1 of 2" "the key ID (keyID, a short code)"; else ui_step "1 of 2" "the access key ID"; fi
+      printf 'Key ID: '; id="$(read_plain_line)"
+      if [ "$kind" = b2 ]; then ui_step "2 of 2" "the application key (applicationKey, shown once when you created it)"; else ui_step "2 of 2" "the secret access key"; fi
+      paste_hint; printf 'Secret (hidden): '; key="$(read_secret_line)"
+      [[ $id =~ ^[A-Za-z0-9]{8,128}$ ]] && [[ $key =~ ^[A-Za-z0-9/+=_-]{8,256}$ ]] || { unset key; die "that does not look like a key ID and a key (letters and digits, no spaces). Nothing was saved; run it again."; }
+      { echo; echo "[$name]"
+        if [ "$kind" = b2 ]; then echo "type = b2"; echo "account = $id"; echo "key = $key"; echo "hard_delete = false"
+        else echo "type = s3"; echo "provider = $provider"; echo "access_key_id = $id"; echo "secret_access_key = $key"; echo "endpoint = $endpoint"; echo "no_check_bucket = true"; fi
+      } >> "$conf"
+      unset key
+      target="$name:$bucket/relevio" ;;
+    gdrive)
+      name="relevio-gdrive"; target="$name:${bucket:-relevio}"
+      if ! grep -qx "\[$name\]" "$conf"; then
+        ui_title "☁  connecting Google Drive"
+        echo "Your browser opens: choose your Google account and allow rclone. It sees only the files it creates."
+        "$RCLONE" config create "$name" drive scope=drive.file >/dev/null 2>&1 || die "the Google login did not finish. Nothing was saved; run it again."
+      fi ;;
+    *) die "remote connect needs: b2 <bucket>, s3 <bucket> <endpoint> [provider], or gdrive [folder]." ;;
+  esac
+  ui_step "Checking" "that the key opens the bucket"
+  R_TARGET="$target"
+  # A listing really asks the provider (a mkdir on S3 can succeed without
+  # asking anything).
+  if ! rc_list "$RH/.connect.out" lsf --max-depth 1 "$target"; then
+    rm -f "${RH:?}/.connect.out"
+    # A key that does not work stays nowhere: the next try starts clean.
+    [ "$kind" = gdrive ] || "$RCLONE" config delete "$name" >/dev/null 2>&1 || true
+    die "$R_ERR. Nothing was kept; check the key and the bucket and run it again."
+  fi
+  rm -f "${RH:?}/.connect.out"
+  ui_ok "The cloud answers with this key."
+  remote_set rclone "$target" >/dev/null
+  ui_step "Sending" "the encrypted archive to $target"
+  lock_or_die PUSH_STAGE
+  if push_core 0 audit; then remote_status_write ok "sent $PUSH_SENT"; ui_ok "Done: $PUSH_SENT bundle(s) in the copy, every name opaque, everything encrypted."
+  else remote_status_write fail "$R_ERR"; ui_warn "Connected, but the first send failed: $R_ERR. It is retried after every session, or now with push."; fi
+}
+
 # rc_list <out file> <rclone args>: a listing into the file; a folder that
 # does not exist yet is an empty listing, not an error.
 rc_list() {
@@ -408,13 +491,14 @@ cmd_remote() {
   tools_load
   case "$sub" in
     set) remote_set "$@" ;;
+    connect) remote_connect "$@" ;;
     status) remote_show ;;
     off)
       remote_is_set || { echo "No off-machine copy is set."; return 0; }
       local k; for k in remote_kind remote_target rclone; do config_unset "$k"; done
       remote_reset_state
       echo "The off-machine copy is no longer updated. What is already there stays; delete it from the provider yourself if you want it gone." ;;
-    *) die "remote needs: set folder <path> | set rclone <remote:path> | status | off" ;;
+    *) die "remote needs: connect b2|s3|gdrive ... | set folder <path> | set rclone <remote:path> | status | off" ;;
   esac
 }
 remote_set() {

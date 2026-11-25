@@ -2718,6 +2718,20 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
         "$rc:$(contains "$out" 'copy: CANNOT READ: rclone is missing'):$(contains "$out" 'Claude Code keeps conversations')" "1:yes:yes"
       sed -i "s|^rclone=.*|rclone=$(command -v rclone)|" "$cp_t/h/config"
     fi
+    if [ "$kind" = rclone ]; then
+      # remote connect: the key is read hidden and written to rclone's config
+      # (never on a command line); a key that does not work is not kept.
+      rcfg="$cp_t/rclone.conf"
+      out="$(printf 'AKIDEXAMPLE123\nsecretKEY/abc+123=\n' | RCLONE_CONFIG="$rcfg" cpa remote connect s3 mybucket https://127.0.0.1:9 Minio 2>&1)"; rc=$?
+      check "copy: remote connect with an unreachable cloud fails loud and keeps nothing" \
+        "$rc:$(contains "$out" 'no connection to the cloud'):$(grep -c 'relevio-s3' "$rcfg")" "2:yes:0"
+      check "copy: ... and the secret never reaches the screen" "$(contains "$out" 'secretKEY')" "no"
+      out="$(printf 'short\nx\n' | RCLONE_CONFIG="$rcfg" cpa remote connect s3 mybucket https://127.0.0.1:9 2>&1)"
+      check "copy: remote connect refuses something that is not a key, saving nothing" \
+        "$(contains "$out" 'does not look like a key ID'):$(grep -c 'relevio-s3' "$rcfg")" "yes:0"
+      check "copy: remote connect refuses a bad bucket name or a plain http endpoint" \
+        "$(contains "$(RCLONE_CONFIG="$rcfg" cpa remote connect b2 'My Bucket' 2>&1 </dev/null)" 'not a bucket name'):$(contains "$(RCLONE_CONFIG="$rcfg" cpa remote connect s3 bb http://x 2>&1 </dev/null)" 'https://')" "yes:yes"
+    fi
     if [ "$kind" = folder ]; then
       # An archiving run with nothing new trusts the upload records: no call
       # to the copy at all, until the daily audit is due.

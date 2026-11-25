@@ -25,6 +25,9 @@
 #             recovery key when the passphrase is lost, or replace a leaked
 #             recovery key (your terminal only)
 #   forget <id>  remove a session from the archive for good (your terminal only)
+#   remote connect b2 <bucket> | s3 <bucket> <endpoint> [provider] | gdrive [folder]
+#             connect a cloud account in one step (your terminal: asks only
+#             the cloud key), then send everything
 #   remote set folder <path> | set rclone <remote:path> | status | off
 #             an encrypted copy off this machine: a folder a sync client
 #             mirrors (Drive, Dropbox, OneDrive...), or any rclone remote
@@ -1342,7 +1345,23 @@ YOU MAY RUN THESE YOURSELF (no secret involved)
 
 ONLY THE USER TYPES THESE (they ask for a key or a confirmation)
   setup, restore <id>, keys check [--recovery], keys passphrase, keys reset,
-  keys rotate-recovery, forget <id>, pull, stamp backfill, rclone config. They refuse to run without a real terminal, on purpose.
+  keys rotate-recovery, forget <id>, pull, stamp backfill, remote connect,
+  rclone config. They refuse to run without a real terminal, on purpose.
+
+SETTING IT ALL UP FOR THE USER (they should type only keys)
+  1. setup: open their terminal running it (it asks the passphrase and shows
+     the recovery key; it archives what is already here by itself).
+  2. Ask in a form (your question tool), never as commands to copy: where the
+     copy goes (Backblaze B2 recommended for teams and simplest; Cloudflare R2
+     or another S3; Google Drive; a synced folder; or none), the bucket name,
+     and for S3 the endpoint. Explain how to create the bucket and a key
+     limited to that bucket, step by step, in plain words.
+  3. remote connect b2 <bucket> (or s3 <bucket> <endpoint> <provider>, or
+     gdrive): open their terminal running it; they paste the key ID and the
+     secret. A synced folder needs no secret: run remote set folder yourself.
+  4. Ask in a form whether they want timestamps; if yes, run stamp setup and
+     stamp now yourself (stamp setup downloads the client: say so first).
+  5. Run status and verify yourself, and tell them in plain words what is on.
 
 HOW TO MAKE THE USER'S PART SMALL
   1. Do every step you can first: status, list, finding the session id.
