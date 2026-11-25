@@ -1154,7 +1154,10 @@ keys_check() {
   seal_check "$1" "$idn" || rc=$?
   case "$rc" in
     0) echo "The key list is sealed and intact." ;;
-    2) seal_write "$1" "$idn"; echo "The key list is now sealed with this key (an off-machine copy needs it)." ;;
+    2) seal_write "$1" "$idn"
+       echo "The key list is now sealed with this key (an off-machine copy needs it). It holds:"
+       grep '^age1' "$RH/keys/recipients.txt" | cut -c1-16 | sed 's/^/  /; s/$/.../'
+       echo "An archive has exactly two keys (status shows them the same way). If you see more, or one you do not recognize, run keys rotate-recovery." ;;
     *) unset idn; echo "WARNING: the key list (keys/recipients.txt) does NOT match its seal: a key may have been added behind your back. Do not push; compare it with status and run keys rotate-recovery." >&2; exit 1 ;;
   esac
   unset idn

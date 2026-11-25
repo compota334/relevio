@@ -119,7 +119,7 @@ EOF
       # The remote is proven in a private scratch config first and joins
       # rclone's real config only once it works: a wrong key is never kept.
       probe="$(mktemp "$RH/.connect.XXXXXX")"; chmod 600 "$probe"; PUSH_STAGE="$probe"
-      trap 'rm -f "${PUSH_STAGE:?}"; release_lock' EXIT
+      trap 'rm -f "${PUSH_STAGE:?}" "${PUSH_STAGE:?}.out"; release_lock' EXIT
       { echo "[$name]"
         if [ "$kind" = b2 ]; then echo "type = b2"; echo "account = $id"; echo "key = $key"; echo "hard_delete = false"
         else echo "type = s3"; echo "provider = $provider"; echo "access_key_id = $id"; echo "secret_access_key = $key"; echo "endpoint = $endpoint"; echo "no_check_bucket = true"; fi
@@ -147,7 +147,7 @@ EOF
   ui_ok "The cloud answers with this key."
   remote_set rclone "$target" checked >/dev/null
   lock_or_die PUSH_STAGE
-  push_report 0
+  push_report 0 || ui_warn "Connected and kept; the first send did not finish. It is retried after every session, or now with push."
 }
 
 # rc_list <out file> <rclone args>: a listing into the file; a folder that
@@ -431,6 +431,12 @@ push_core() {
     config_set catalog_md5 "$(md5_of < "$PUSH_STAGE/catalog.age")"; config_set catalog_stamps "$st_md5"
   fi
   [ "$(config_get readme_sent)" = 1 ] || { readme_write "$PUSH_STAGE/README.txt"; readme_put "$PUSH_STAGE/README.txt" && config_set readme_sent 1; }
+  # Everything is in the copy, but a copy whose key list is not sealed with
+  # both keys cannot be pulled safely on a new machine: not "ok".
+  if [ "$(grep -c '^\(main\|recovery\) ' "$RH/keys/recipients.mac" 2>/dev/null || echo 0)" != 2 ]; then
+    R_ERR="sent, but the key list is not sealed with both keys, so a new machine could not trust this copy: run keys check and keys check --recovery once"
+    return 1
+  fi
   return 0
 }
 # The catalog: everything a new machine needs to know what the copy holds,
@@ -509,7 +515,7 @@ cmd_remote() {
 }
 remote_set() {
   local kind="${1:-}" target="${2:-}" r
-  [ $# -ge 2 ] && [ $# -le 3 ] || die "remote set needs: folder <path>, or rclone <remote:path>."
+  { [ $# -eq 2 ] || { [ $# -eq 3 ] && [ "$1" = rclone ] && [ "$3" = checked ]; }; } || die "remote set needs: folder <path>, or rclone <remote:path>."
   target_ok "$target"
   case "$kind" in
     folder)
@@ -575,7 +581,7 @@ cmd_push() {
   tools_load
   remote_is_set || die "no off-machine copy is set: remote set folder <path> | remote set rclone <remote:path>"
   lock_or_die PUSH_STAGE
-  push_report "$limit"
+  push_report "$limit" || exit 2
 }
 # push_report <limit>: a push the user asked for (lock held), said in words.
 push_report() {
@@ -586,7 +592,8 @@ push_report() {
     [ "$PUSH_PENDING" -eq 0 ] || echo "$PUSH_PENDING more left (--limit); run push again."
   else
     remote_status_write fail "$R_ERR"; log "push: $R_ERR"
-    die "$R_ERR. Nothing is lost: what was not sent is sent next time."
+    echo "ERROR: $R_ERR. Nothing is lost: what was not sent is sent next time." >&2
+    return 1
   fi
 }
 # verify: path 1, the provider's md5 of EVERY bundle against what was sent
@@ -631,13 +638,14 @@ cmd_verify() {
 # catalog, so it runs only in the user's terminal. Interrupted, it resumes:
 # rerun the same command (bundles already here and intact are skipped).
 cmd_pull() {
-  local kind="${1:-}" target="${2:-}" mid="" use=main machines n tmp o row fo b by mt sh m at i=0 total id kf e
-  [ $# -ge 2 ] || die "pull needs: folder <path>, or rclone <remote:path> [--machine <id>] [--recovery]."
+  local kind="${1:-}" target="${2:-}" mid="" use=main unsealed=no machines n tmp o row fo b by mt sh m at i=0 total id kf e
+  [ $# -ge 2 ] || die "pull needs: folder <path>, or rclone <remote:path> [--machine <id>] [--recovery] [--accept-unsealed]."
   shift 2
   while [ $# -gt 0 ]; do
     case "$1" in
       --machine) mid="${2:-}"; shift 2 ;;
       --recovery) use=recovery; shift ;;
+      --accept-unsealed) unsealed=yes; shift ;;
       *) die "unknown pull option '$(relevio_safe "$1")'" ;;
     esac
   done
@@ -682,10 +690,20 @@ cmd_pull() {
   # who can write to the copy could have added a key of their own).
   [ -n "$(printf '%s\n' "$idn" | "$AGE_KEYGEN" -y 2>/dev/null | grep -xFf - "$RH/keys/recipients.txt")" ] \
     || { unset idn; die "the copy's key list does not contain the key you typed: it is not this archive's. Nothing was brought back."; }
-  t_get keys/recipients.mac "$RH/keys/recipients.mac" \
-    || { unset idn; die "the copy has no seal for its key list (keys/recipients.mac), so it cannot be trusted. On the old machine, run keys check and keys check --recovery, then push; or rerun here if the copy was made by an older relevio."; }
-  seal_check "$use" "$idn" || rc=$?
-  [ "$rc" -eq 0 ] || { unset idn; die "the copy's key list does NOT match its seal: someone may have added a key to it. Nothing was brought back; do not use this copy until you know why."; }
+  if t_get keys/recipients.mac "$RH/keys/recipients.mac"; then
+    seal_check "$use" "$idn" || rc=$?
+    [ "$rc" -eq 0 ] || { unset idn; die "the copy's key list does NOT match its seal: someone may have added a key to it. Nothing was brought back; do not use this copy until you know why."; }
+  else
+    # A copy made before the seal existed. When the old machine is gone this
+    # is the only way back, so it is a decision for the owner, made seeing
+    # the keys: exactly two, one of them the key just typed.
+    local keys; keys="$(grep -c '^age1' "$RH/keys/recipients.txt" || true)"
+    echo "The copy's key list has no seal (made by a relevio from before the seal). It holds $keys key(s):" >&2
+    grep '^age1' "$RH/keys/recipients.txt" | cut -c1-16 | sed 's/^/  /; s/$/.../' >&2
+    [ "$keys" = 2 ] || { unset idn; die "an archive has exactly two keys; this list has $keys, so someone may have added one. Nothing was brought back."; }
+    [ "$unsealed" = yes ] || { unset idn; die "if both keys above are yours (the one you typed is among them), rerun with --accept-unsealed; this machine then seals the list. Otherwise do not use this copy."; }
+    seal_write "$use" "$idn"
+  fi
   "$AGE" -d -i <(printf '%s\n' "$idn") "$tmp/catalog.age" 2>/dev/null | gzip -dc > "$tmp/catalog.tar" \
     || { unset idn; die "that key could not open the copy's catalog. Nothing was brought back."; }
   unset idn

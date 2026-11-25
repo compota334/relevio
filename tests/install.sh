@@ -2839,8 +2839,20 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
       check "copy: a key added to the copy's key list is caught by its seal, and nothing is brought back" \
         "$(contains "$out" 'does NOT match its seal'):$(find "$cp_t/new/archive" -name '*.age' 2>/dev/null | grep -c .)" "yes:0"
       rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"; rm -f "$mb/keys/recipients.mac"; fresh
-      check "copy: a copy whose key list has no seal is refused" \
-        "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery 2>&1)" 'no seal for its key list')" "yes"
+      check "copy: a copy whose key list has no seal shows its keys and asks for the owner's decision" \
+        "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery 2>&1)" 'rerun with --accept-unsealed'):$(find "$cp_t/new/archive" -name '*.age' 2>/dev/null | grep -c .)" "yes:0"
+      fresh
+      out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery --accept-unsealed 2>&1)"; rc=$?
+      check "copy: ... and with --accept-unsealed it comes back, sealed on the new machine" \
+        "$rc:$(grep -c '^recovery ' "$cp_t/new/keys/recipients.mac")" "0:1"
+      rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"; rm -f "$mb/keys/recipients.mac"
+      age-keygen 2>/dev/null | age-keygen -y >> "$mb/keys/recipients.txt"; fresh
+      check "copy: an unsealed copy with a third key is refused even with --accept-unsealed" \
+        "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery --accept-unsealed 2>&1)" 'exactly two keys; this list has 3')" "yes"
+      cp "$cp_t/h/keys/recipients.mac" "$cp_t/mac.bak"; rm -f "$cp_t/h/keys/recipients.mac"
+      check "copy: push says a copy is not ok while the key list is not sealed with both keys" \
+        "$(cpa push >/dev/null 2>&1; echo $?):$(contains "$(cpa remote status 2>&1)" 'not sealed with both keys')" "2:yes"
+      cp "$cp_t/mac.bak" "$cp_t/h/keys/recipients.mac"
       rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"; rm -rf "${cp_t:?}/new"
       cp "$cp_t/h/keys/recipients.txt" "$cp_t/rcp.bak"; age-keygen 2>/dev/null | age-keygen -y >> "$cp_t/h/keys/recipients.txt"
       check "copy: keys check catches a key added to the local key list" \
