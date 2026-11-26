@@ -2678,14 +2678,24 @@ done
 
 # --- Case 21: the copy off this machine (remote, push, verify) --------------
 # What leaves the machine is encrypted, names included, and the copy is
-# proven by the provider's own md5. Same code for both transports: a synced
-# folder, and rclone (here on a local path, when rclone is installed).
+# proven by the provider's own checksum. Same code for both transports: a
+# synced folder, and rclone (here on a local path, when rclone is installed).
+# rclone-sha1 is rclone behind a provider that keeps only sha1, as Backblaze B2
+# does (measured 2026-11-26: it answers "hash unsupported" to md5).
 if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
-  for kind in folder rclone; do
-    if [ "$kind" = rclone ] && ! command -v rclone >/dev/null 2>&1; then
-      echo "  SKIP  copy (rclone): rclone is not installed"; SKIPS=$((SKIPS + 1)); continue
+  cp_path="$PATH"
+  for kind in folder rclone rclone-sha1; do
+    tport="${kind%-sha1}"; PATH="$cp_path"
+    if [ "$tport" = rclone ] && ! command -v rclone >/dev/null 2>&1; then
+      echo "  SKIP  copy ($kind): rclone is not installed"; SKIPS=$((SKIPS + 1)); continue
     fi
     cp_t="$(mktemp -d)"; mkdir -p "$cp_t/cc/projects/-p1" "$cp_t/cloud" "$cp_t/p1"
+    if [ "$kind" = rclone-sha1 ]; then
+      mkdir "$cp_t/bin"
+      printf '#!/usr/bin/env bash\nfor a in "$@"; do\n  [ "$a" = features ] && { echo %s; exit 0; }\n  [ "$a" = md5 ] && { echo "hash unsupported: hash type not supported" >&2; exit 1; }\ndone\nexec %q "$@"\n' \
+        "'{\"Hashes\":[\"sha1\"]}'" "$(command -v rclone)" > "$cp_t/bin/rclone"
+      chmod +x "$cp_t/bin/rclone"; PATH="$cp_t/bin:$cp_path"
+    fi
     age-keygen 2>/dev/null > "$cp_t/rec.key"
     for i in 1 2 3; do
       printf '{"cwd":"%s","type":"user","timestamp":"2026-01-0%dT00:00:00Z","secret":"plain-text-%d"}\n' "$cp_t/p1" "$i" "$i" \
@@ -2698,10 +2708,13 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     }
     grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpa setup >/dev/null 2>&1
     cpa backfill >/dev/null 2>&1
-    if [ "$kind" = folder ]; then tgt="$cp_t/cloud"; else tgt=":local:$cp_t/cloud"; fi
+    if [ "$tport" = folder ]; then tgt="$cp_t/cloud"; else tgt=":local:$cp_t/cloud"; fi
     check "copy ($kind): push before a copy is set fails loud" \
       "$(contains "$(cpa push 2>&1)" 'no off-machine copy is set')" "yes"
-    cpa remote set "$kind" "$tgt" >/dev/null 2>&1
+    cpa remote set "$tport" "$tgt" >/dev/null 2>&1
+    want_hash=md5; [ "$kind" = rclone-sha1 ] && want_hash=sha1
+    check "copy ($kind): remote set records the checksum the provider keeps ($want_hash)" \
+      "$(sed -n 's/^remote_hash=//p' "$cp_t/h/config")" "$want_hash"
     out="$(cpa push 2>&1)"; rc=$?
     check "copy ($kind): the first push sends every bundle and a catalog" \
       "$rc:$(contains "$out" '3 bundle(s) sent, catalog #1')" "0:yes"
@@ -2800,15 +2813,15 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     cpa push >/dev/null 2>&1
     cpn() { RELEVIO_HOME="$cp_t/new" CLAUDE_CONFIG_DIR="$cp_t/cc-new" RELEVIO_TEST_INSECURE_KEYS=1 RELEVIO_TEST_STABLE_WAIT=0 bash "$ARC" "$@"; }
     mkdir -p "$cp_t/cc-new/projects"
-    out="$(age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY' | cpn pull "$kind" "$tgt" --recovery 2>&1)"; rc=$?
+    out="$(age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY' | cpn pull "$tport" "$tgt" --recovery 2>&1)"; rc=$?
     check "copy ($kind): pull with a key that is not the archive's brings nothing back" \
       "$rc:$(contains "$out" "not one of this archive's keys"):$(find "$cp_t/new/archive" -name '*.age' 2>/dev/null | grep -c .)" "2:yes:0"
     f="$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | head -1)"; cp "$f" "$cp_t/good.age"; echo tamper >> "$f"
-    out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$kind" "$tgt" --recovery 2>&1)"; rc=$?
+    out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$tport" "$tgt" --recovery 2>&1)"; rc=$?
     check "copy ($kind): pull stops on a bundle altered in the copy, and says how to resume" \
       "$rc:$(contains "$out" 'is not what was sent (sha256)')" "2:yes"
     cp "$cp_t/good.age" "$f"
-    out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$kind" "$tgt" --recovery 2>&1)"; rc=$?
+    out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$tport" "$tgt" --recovery 2>&1)"; rc=$?
     n_src="$(find "$cp_t/h/archive" -name '*.age' | grep -c .)"
     check "copy ($kind): rerunning pull resumes and brings every bundle back" \
       "$rc:$(find "$cp_t/new/archive" -name '*.age' | grep -c .)" "0:$n_src"
@@ -2821,7 +2834,7 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     check "copy ($kind): ... the new machine continues the copy without sending anything again" \
       "$(contains "$(cpn push 2>&1)" '0 bundle(s) sent'):$(cpn verify >/dev/null 2>&1; echo $?)" "yes:0"
     check "copy ($kind): pull refuses a machine that already has an archive" \
-      "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$kind" "$tgt" --recovery 2>&1)" 'already has an archive')" "yes"
+      "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$tport" "$tgt" --recovery 2>&1)" 'already has an archive')" "yes"
     # A copy someone else can write to: age proves nothing about who wrote a
     # file, so a forged catalog opens with the owner's key. pull must refuse
     # every field it cannot trust, never run or follow it.
@@ -2903,6 +2916,7 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
       "$rc:$(contains "$out" 'nothing changed'):$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | cpa keys check --recovery 2>/dev/null | head -1)" "2:yes:recovery key works."
     rm -rf "$cp_t"
   done
+  PATH="$cp_path"
 else
   echo "  SKIP  copy: remote, push and verify (age is not installed)"; SKIPS=$((SKIPS + 1))
 fi

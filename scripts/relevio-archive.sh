@@ -33,7 +33,7 @@
 #             mirrors (Drive, Dropbox, OneDrive...), or any rclone remote
 #   push [--limit n]   send what is new to the copy (runs by itself after
 #             every archiving run once a copy is set)
-#   verify [--sample n]  check the copy: every bundle by the provider's md5,
+#   verify [--sample n]  check the copy: every bundle by the provider's checksum,
 #             a random sample downloaded, and the catalog
 #   pull folder <path> | rclone <remote:path> [--machine id] [--recovery]
 #             a new computer: bring the whole archive back from the copy

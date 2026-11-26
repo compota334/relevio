@@ -608,7 +608,7 @@ that terminal during `setup`, whose screen shows the keys.
 | `remote connect b2 <bucket>` / `s3 <bucket> <endpoint> <provider>` / `gdrive` | Connects a cloud account in one step: asks only the key (hidden, never on a command line), checks it, sets the copy and sends everything. |
 | `remote set folder <path>` / `remote set rclone <remote:path>` | Sets the copy off this machine (see below). `remote status` shows it; `remote off` stops updating it. |
 | `push` | Sends what is new to the copy. Runs by itself after every archiving run once a copy is set. |
-| `verify` | Checks the copy: every bundle by the provider's own md5 (nothing downloaded), a random sample downloaded and checked by sha256, and the catalog. |
+| `verify` | Checks the copy: every bundle by the provider's own checksum, md5 or sha1 (nothing downloaded), a random sample downloaded and checked by sha256, and the catalog. |
 | `pull folder <path>` / `pull rclone <remote:path>` | On a new computer: brings the whole archive back from the copy into an empty `~/.relevio` (your terminal: asks for a key). Interrupted, it resumes. |
 | `stamp setup` / `status` / `now` / `backfill` / `off` | Timestamps (see below). |
 | `proof <id>` | Builds the folder you hand someone to prove a conversation existed at a date. |
@@ -679,7 +679,9 @@ What can go wrong, and what happens:
 Measured on Google Drive (rclone 1.60.1): a cut upload leaves nothing behind,
 uploading the same name twice keeps one file, deletions go to Drive's trash,
 and Drive reports each file's md5 itself, which is how `verify` checks every
-bundle without downloading it.
+bundle without downloading it. Backblaze B2 keeps a sha1 instead of an md5
+(measured 2026-11-26): `remote set` asks the provider which checksum it keeps
+and the copy is checked by that one from then on.
 
 Who can write to the copy is a different question from who can read it:
 age encrypts but does not sign, so anyone holding the public keys could make
