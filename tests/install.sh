@@ -2125,6 +2125,11 @@ rm -rf "$c2" "$d7"
 ARC="$REPO/scripts/relevio-archive.sh"
 check "install: the archive script is shipped" \
   "$(grep -c '^SCRIPTS=.*relevio-archive.sh' "$REPO/install.sh")" "1"
+# The screen boxes keep whole corners under a non-UTF-8 locale (a terminal with
+# LANG unset): slicing a string of corners would cut each 3-byte one in half.
+arc_box="$(LC_ALL=C bash -c 'C_CYAN= C_YELLOW= C_B= C_0=; eval "$(sed -n "/^UI_LINE=/,/^ui_keybox()/p" "$1")"; ui_title T; ui_keybox K' _ "$ARC")"
+check "archive: screen boxes keep whole corners under LC_ALL=C" \
+  "$(for k in ╭ ╮ ╰ ╯ ┌ ┐ └ ┘; do contains "$arc_box" "$k"; done | sort -u)" "yes"
 arc_t="$(mktemp -d)"
 # Setup and status refuse what could leak or be committed, with or without age.
 check "archive: setup refuses without a terminal, and creates nothing" \
@@ -2179,6 +2184,18 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     "$(contains "$out" 'Ctrl+Shift+V'):$(contains "$out" 'Cmd+V'):$(contains "$out" 'Windows Terminal Ctrl+V'):$(contains "$out" 'Nothing appears while you paste')" "yes:yes:yes:yes"
   check "archive: setup ends with when each key is used and how to test them" \
     "$(contains "$out" 'emergency only, with --recovery'):$(contains "$out" 'keys check --recovery')" "yes:yes"
+  # The real key ceremony, with real age in a pseudo-terminal and no test gate:
+  # the passphrase is asked twice (age's own prompts), never a third time.
+  if command -v python3 >/dev/null 2>&1; then
+    printf 'pty-test-passphrase\n' > "$arc_t/pass"
+    ptyd() { RELEVIO_HOME="$arc_t/hreal" CLAUDE_CONFIG_DIR="$arc_t/creal" python3 "$REPO/tests/pty-drive.py" --pass-file "$arc_t/pass" --log "$arc_t/pty.log" --timeout 60 -- bash "$ARC" "$@" | tail -1; }
+    check "archive: real setup asks the passphrase only twice and the recovery key once" \
+      "$(ptyd setup)" "pty-drive: exit=0 passphrase_prompts=2 recovery_prompts=1"
+    check "archive: ... and that passphrase opens the archive afterwards (keys check)" \
+      "$(ptyd keys check)" "pty-drive: exit=0 passphrase_prompts=1 recovery_prompts=0"
+  else
+    echo "  SKIP  archive: real key ceremony in a pseudo-terminal (no python3)"; SKIPS=$((SKIPS + 1))
+  fi
   out="$(arcg "$arc_t/h2" guide 2>&1)"; rc=$?
   check "archive: guide runs and separates what the assistant may run from what only the user types" \
     "$rc:$(contains "$out" 'YOU MAY RUN THESE YOURSELF'):$(contains "$out" 'ONLY THE USER TYPES THESE'):$(contains "$out" 'NEVER read that terminal while setup runs')" "0:yes:yes:yes"
