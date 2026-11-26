@@ -219,23 +219,27 @@ cmd_stamp() {
 # pinned to a version published long ago (this machine's package cooldown).
 stamp_setup() {
   local venv="$RH/ots-venv" py
-  if [ -n "$TEST_OTS_BIN" ]; then
-    config_set ots_venv "$venv"; config_set stamping on; echo "Timestamping is on (test client)."; return 0
+  if [ -z "$TEST_OTS_BIN" ]; then
+    py="$(command -v python3)" || die "python3 is missing: on Ubuntu, sudo apt install python3 python3-venv."
+    echo "Installing the OpenTimestamps client $OTS_CLIENT_VERSION into $venv (from PyPI, once)..."
+    if command -v uv >/dev/null 2>&1; then
+      uv venv -q "$venv" && uv pip install -q --python "$venv/bin/python" "opentimestamps-client==$OTS_CLIENT_VERSION" \
+        || die "installing the client failed (network, or PyPI is down). Nothing changed; run stamp setup again later."
+    else
+      "$py" -m venv "$venv" || die "python3 cannot make a virtual environment: on Ubuntu, sudo apt install python3-venv."
+      "$venv/bin/pip" install -q "opentimestamps-client==$OTS_CLIENT_VERSION" \
+        || die "installing the client failed (network, or PyPI is down). Nothing changed; run stamp setup again later."
+    fi
+    "$venv/bin/ots" --version >/dev/null 2>&1 || die "the client was installed but does not run; nothing changed."
   fi
-  py="$(command -v python3)" || die "python3 is missing: on Ubuntu, sudo apt install python3 python3-venv."
-  echo "Installing the OpenTimestamps client $OTS_CLIENT_VERSION into $venv (from PyPI, once)..."
-  if command -v uv >/dev/null 2>&1; then
-    uv venv -q "$venv" && uv pip install -q --python "$venv/bin/python" "opentimestamps-client==$OTS_CLIENT_VERSION" \
-      || die "installing the client failed (network, or PyPI is down). Nothing changed; run stamp setup again later."
-  else
-    "$py" -m venv "$venv" || die "python3 cannot make a virtual environment: on Ubuntu, sudo apt install python3-venv."
-    "$venv/bin/pip" install -q "opentimestamps-client==$OTS_CLIENT_VERSION" \
-      || die "installing the client failed (network, or PyPI is down). Nothing changed; run stamp setup again later."
-  fi
-  "$venv/bin/ots" --version >/dev/null 2>&1 || die "the client was installed but does not run; nothing changed."
   config_set ots_venv "$venv"; config_set stamping on
-  echo "Timestamping is on. Every archived conversation is stamped within a day;"
-  echo "Bitcoin confirms each batch a few hours later. Stamp what is queued now with: $SELF_CMD stamp now"
+  # The conversations archived before today join the queue now, so the user
+  # hears how many will be stamped instead of a status that says 0.
+  lock_or_die
+  stamps_load; stamps_queue
+  echo "Timestamping is on. Bitcoin confirms each batch a few hours after it is sent."
+  stamp_show
+  echo "Queued ones go out within a day by themselves, or now with: $SELF_CMD stamp now"
 }
 stamp_now() {
   stamping_on || die "timestamping is off: run stamp setup first."

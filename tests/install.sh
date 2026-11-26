@@ -2974,7 +2974,9 @@ FAKE
   # Session 3's transcript disappears before stamping starts: it needs a key.
   mv "$sp_t/cc/projects/-p1/00000003-aaaa-4bbb-8ccc-dddddddddddd.jsonl" "$sp_t/s3.jsonl"
   check "stamp: status says off before setup" "$(contains "$(spa stamp status 2>&1)" 'stamps: off')" "yes"
-  spa stamp setup >/dev/null 2>&1
+  out="$(spa stamp setup 2>&1)"
+  check "stamp: setup queues what is already archived and says how many, and which need a key" \
+    "$(contains "$out" '2 queued for the next batch'):$(contains "$out" '1 need a key'):$(contains "$(spa stamp status 2>&1)" '2 queued for the next batch')" "yes:yes:yes"
   FAKE_OTS_DOWN=1 spa sync --all >/dev/null 2>&1; rc=$?
   check "stamp: with no calendar answering, the leaves stay queued and the archive run still succeeds" \
     "$rc:$(grep -c '^state ok' "$sp_t/h/status"):$(contains "$(spa stamp status 2>&1)" '2 queued for the next batch'):$(contains "$(spa stamp status 2>&1)" 'last try FAILED: no timestamp calendar answered')" "0:1:yes:yes"
