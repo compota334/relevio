@@ -390,7 +390,8 @@ Your two keys, and when each one is used:
   ${C_B}PASSPHRASE${C_0}    everyday: restore, keys check. Words or text, as saved in step 1.
   ${C_B}RECOVERY KEY${C_0}  emergency only, with --recovery (and keys reset, to choose a
                 new passphrase when the old one is lost). Starts AGE-SECRET-KEY-1.
-To test them later without opening anything:
+Setup did not ask your passphrase a third time, so it has not tested it
+yet. Test both keys once now (nothing is opened or changed):
   $SELF_CMD keys check
   $SELF_CMD keys check --recovery
 EOF
@@ -403,7 +404,6 @@ EOF
   echo
   ui_ok "All done. You can close this terminal (clear its scrollback: it showed your recovery key)."
   ui_dim "  New sessions are archived as they end. A copy off this machine and timestamps are set up by your AI assistant: it asks what it needs."
-  unset main
 }
 
 # --- status ------------------------------------------------------------------------

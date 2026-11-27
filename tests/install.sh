@@ -2184,6 +2184,8 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     "$(contains "$out" 'Ctrl+Shift+V'):$(contains "$out" 'Cmd+V'):$(contains "$out" 'Windows Terminal Ctrl+V'):$(contains "$out" 'Nothing appears while you paste')" "yes:yes:yes:yes"
   check "archive: setup ends with when each key is used and how to test them" \
     "$(contains "$out" 'emergency only, with --recovery'):$(contains "$out" 'keys check --recovery')" "yes:yes"
+  check "archive: ... and says the passphrase is not tested yet, so keys check is the proof" \
+    "$(contains "$out" 'has not tested it')" "yes"
   # The real key ceremony, with real age in a pseudo-terminal and no test gate:
   # the passphrase is asked twice (age's own prompts), never a third time.
   if command -v python3 >/dev/null 2>&1; then
