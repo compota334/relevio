@@ -291,7 +291,10 @@ hash_of() { $HASH | awk '{ print $1 }'; }
 # sha1 (B2 keeps only sha1, measured 2026-11-26). Needs RCLONE for rclone.
 remote_hash_detect() {
   [ "$1" = folder ] && { remote_hash_use md5; return 0; }
-  rc_list "$RH/.features" backend features "$2" || die "could not ask the provider which checksums it keeps: $R_ERR"
+  # rc_list reads "not found" as an empty listing: here that is an error.
+  R_ERR=""
+  { rc_list "$RH/.features" backend features "$2" && [ -s "$RH/.features" ]; } \
+    || { rm -f "${RH:?}/.features"; die "could not ask the provider which checksums it keeps: ${R_ERR:-no answer}"; }
   local hs; hs="$(jq -r '.Hashes[]?' "$RH/.features")"; rm -f "${RH:?}/.features"
   if grep -qx md5 <<<"$hs"; then remote_hash_use md5
   elif grep -qx sha1 <<<"$hs"; then remote_hash_use sha1

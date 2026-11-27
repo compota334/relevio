@@ -15,7 +15,8 @@ person at the terminal, for tests and throwaway test archives only:
   --log F             the full screen goes to F (mode 600) instead of stdout
 
 Last line printed: "pty-drive: exit=<code> passphrase_prompts=<n>
-recovery_prompts=<n>". Exit code: the command's, or 124 on timeout.
+recovery_prompts=<n>". Exit code: the command's, 128+signal when a signal
+ended it, or 124 on timeout.
 """
 import argparse
 import os
@@ -91,7 +92,12 @@ def main():
             os.write(fd, answer + b"\r")
 
     _, status = os.waitpid(pid, 0)
-    code = 124 if timed_out else (os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128)
+    if timed_out:
+        code = 124
+    elif os.WIFEXITED(status):
+        code = os.WEXITSTATUS(status)
+    else:
+        code = 128 + os.WTERMSIG(status)  # the shell's convention: which signal
 
     shown = SECRET_RE.search(screen)
     if a.save_recovery and shown:

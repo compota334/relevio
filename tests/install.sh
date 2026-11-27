@@ -2692,7 +2692,7 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     cp_t="$(mktemp -d)"; mkdir -p "$cp_t/cc/projects/-p1" "$cp_t/cloud" "$cp_t/p1"
     if [ "$kind" = rclone-sha1 ]; then
       mkdir "$cp_t/bin"
-      printf '#!/usr/bin/env bash\nfor a in "$@"; do\n  [ "$a" = features ] && { echo %s; exit 0; }\n  [ "$a" = md5 ] && { echo "hash unsupported: hash type not supported" >&2; exit 1; }\ndone\nexec %q "$@"\n' \
+      printf '#!/usr/bin/env bash\nfor a in "$@"; do\n  [ "$a" = features ] && [ -n "${FAKE_FEATURES_NOTFOUND:-}" ] && { echo "directory not found" >&2; exit 3; }\n  [ "$a" = features ] && { echo %s; exit 0; }\n  [ "$a" = md5 ] && { echo "hash unsupported: hash type not supported" >&2; exit 1; }\ndone\nexec %q "$@"\n' \
         "'{\"Hashes\":[\"sha1\"]}'" "$(command -v rclone)" > "$cp_t/bin/rclone"
       chmod +x "$cp_t/bin/rclone"; PATH="$cp_t/bin:$cp_path"
     fi
@@ -2914,6 +2914,13 @@ if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
     out="$(printf 'x\nx\nx\n' | CP_REC="$cp_t/rec.key" cpa keys rotate-recovery 2>&1)"; rc=$?
     check "copy ($kind): rotate-recovery typed back wrong three times changes nothing" \
       "$rc:$(contains "$out" 'nothing changed'):$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | cpa keys check --recovery 2>/dev/null | head -1)" "2:yes:recovery key works."
+    if [ "$kind" = rclone-sha1 ]; then
+      # rclone answers "not found" when asked which checksums the provider
+      # keeps: that is the reason given, not "keeps neither md5 nor sha1".
+      out="$(FAKE_FEATURES_NOTFOUND=1 cpa remote set rclone "$tgt" 2>&1)"; rc=$?
+      check "copy ($kind): a provider that answers not found is named as such, not as one without checksums" \
+        "$rc:$(contains "$out" 'which checksums it keeps: not found'):$(contains "$out" 'neither an md5')" "2:yes:no"
+    fi
     rm -rf "$cp_t"
   done
   PATH="$cp_path"
@@ -2974,6 +2981,12 @@ FAKE
   # Session 3's transcript disappears before stamping starts: it needs a key.
   mv "$sp_t/cc/projects/-p1/00000003-aaaa-4bbb-8ccc-dddddddddddd.jsonl" "$sp_t/s3.jsonl"
   check "stamp: status says off before setup" "$(contains "$(spa stamp status 2>&1)" 'stamps: off')" "yes"
+  # A run holding the lock stops setup before it turns anything on.
+  mkdir "$sp_t/h/lock"; sleep 30 & lp=$!; echo "$lp" > "$sp_t/h/lock/pid"
+  out="$(RELEVIO_TEST_LOCK_WAIT=2 spa stamp setup 2>&1)"; rc=$?
+  kill "$lp" 2>/dev/null; wait "$lp" 2>/dev/null; rm -rf "$sp_t/h/lock"
+  check "stamp: setup with the lock held fails loud and leaves stamping off" \
+    "$rc:$(contains "$out" 'holds the lock'):$(contains "$(spa stamp status 2>&1)" 'stamps: off')" "2:yes:yes"
   out="$(spa stamp setup 2>&1)"
   check "stamp: setup queues what is already archived and says how many, and which need a key" \
     "$(contains "$out" '2 queued for the next batch'):$(contains "$out" '1 need a key'):$(contains "$(spa stamp status 2>&1)" '2 queued for the next batch')" "yes:yes:yes"

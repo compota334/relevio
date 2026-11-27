@@ -232,10 +232,11 @@ stamp_setup() {
     fi
     "$venv/bin/ots" --version >/dev/null 2>&1 || die "the client was installed but does not run; nothing changed."
   fi
+  # The lock first: if a run holds it, setup stops before turning anything on.
+  lock_or_die
   config_set ots_venv "$venv"; config_set stamping on
   # The conversations archived before today join the queue now, so the user
   # hears how many will be stamped instead of a status that says 0.
-  lock_or_die
   stamps_load; stamps_queue
   echo "Timestamping is on. Bitcoin confirms each batch a few hours after it is sent."
   stamp_show
