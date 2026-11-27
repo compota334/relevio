@@ -30,13 +30,13 @@ RCLONE_OPTS=(--retries 2 --low-level-retries 3 --contimeout 15s --timeout 60s)
 
 remote_is_set() { [ -n "$(config_get remote_kind)" ]; }
 # Sets R_KIND, R_TARGET, R_BASE (this machine's folder in the copy), RCLONE,
-# and R_HASH (the checksum the provider keeps for each file: md5 or sha1).
+# and the checksum the provider keeps for each file (remote_hash_use).
 remote_load() {
-  R_KIND="$(config_get remote_kind)"; R_TARGET="$(config_get remote_target)"; R_HASH="$(config_get remote_hash)"
+  R_KIND="$(config_get remote_kind)"; R_TARGET="$(config_get remote_target)"
   local m; m="$(config_get machine)"
   [ -n "$R_KIND" ] || die "no off-machine copy is set. Set one with: $SELF_CMD remote set folder <path> (or rclone <remote:path>)."
   [[ $m =~ ^[0-9a-f]{12}$ ]] || die "$RH/config has no valid machine id; run remote set again."
-  case "$R_HASH" in md5|sha1) ;; *) die "$RH/config does not say which checksum the copy is checked by; run remote set again." ;; esac
+  remote_hash_use "$(config_get remote_hash)"
   R_BASE="$R_TARGET/machines/$m"
   if [ "$R_KIND" = rclone ]; then
     RCLONE="$(config_get rclone)"
@@ -267,31 +267,34 @@ t_list_machines() {  # <out file>
     rclone) rc_list "$1.raw" lsf --dirs-only "$R_TARGET/machines" || return 1; sed 's|/$||' "$1.raw" > "$1" ;;
   esac
 }
-# hash_of: stdin's checksum by R_HASH, computed here to compare with what the
-# provider reports.
-hash_of() {
-  case "$R_HASH" in
-    md5) if command -v md5sum >/dev/null 2>&1; then md5sum | awk '{ print $1 }'; else md5 -q; fi ;;
-    sha1) if command -v sha1sum >/dev/null 2>&1; then sha1sum | awk '{ print $1 }'; else shasum -a 1 | awk '{ print $1 }'; fi ;;
-    *) die "internal: no checksum kind loaded (R_HASH)." ;;
+# remote_hash_use <md5|sha1>: sets R_HASH, R_HASH_LEN (its hex length) and
+# HASH, the tool that computes it here, resolved once like SHA.
+remote_hash_use() {
+  local t=""
+  case "$1" in
+    md5) R_HASH_LEN=32
+      if command -v md5sum >/dev/null 2>&1; then t="$(command -v md5sum)"
+      elif command -v md5 >/dev/null 2>&1; then t="$(command -v md5) -q"; fi ;;
+    sha1) R_HASH_LEN=40
+      if command -v sha1sum >/dev/null 2>&1; then t="$(command -v sha1sum)"
+      elif command -v shasum >/dev/null 2>&1; then t="$(command -v shasum) -a 1"; fi ;;
+    *) die "$RH/config does not say which checksum the copy is checked by; run remote set again." ;;
   esac
+  [ -n "$t" ] || die "no $1 tool found (${1}sum); install coreutils."
+  R_HASH="$1"; HASH="$t"
 }
-hash_len() { case "$R_HASH" in md5) echo 32 ;; sha1) echo 40 ;; esac; }
-# remote_hash_detect <folder|rclone> <target>: md5 or sha1, the checksum the
-# copy is proven by. A folder is read back here (md5). With rclone, the
-# provider's own list decides: md5 when it keeps it (Drive, S3, R2), else
+# hash_of: stdin's checksum by R_HASH, to compare with what the provider reports.
+hash_of() { $HASH | awk '{ print $1 }'; }
+# remote_hash_detect <folder|rclone> <target>: picks the checksum the copy is
+# proven by (remote_hash_use). A folder is read back here (md5). With rclone,
+# the provider's own list decides: md5 when it keeps it (Drive, S3, R2), else
 # sha1 (B2 keeps only sha1, measured 2026-11-26). Needs RCLONE for rclone.
 remote_hash_detect() {
-  local hs
-  [ "$1" = folder ] && { echo md5; return 0; }
-  R_TARGET="$2"
-  if ! hs="$("$RCLONE" "${RCLONE_OPTS[@]}" backend features "$2" 2>"$RH/.rclone.err" | jq -r '.Hashes[]?')"; then
-    rclone_reason < "$RH/.rclone.err"; rm -f "${RH:?}/.rclone.err"
-    die "could not ask the provider which checksums it keeps: $R_ERR"
-  fi
-  rm -f "${RH:?}/.rclone.err"
-  if grep -qx md5 <<<"$hs"; then echo md5
-  elif grep -qx sha1 <<<"$hs"; then echo sha1
+  [ "$1" = folder ] && { remote_hash_use md5; return 0; }
+  rc_list "$RH/.features" backend features "$2" || die "could not ask the provider which checksums it keeps: $R_ERR"
+  local hs; hs="$(jq -r '.Hashes[]?' "$RH/.features")"; rm -f "${RH:?}/.features"
+  if grep -qx md5 <<<"$hs"; then remote_hash_use md5
+  elif grep -qx sha1 <<<"$hs"; then remote_hash_use sha1
   else die "the provider behind $(target_safe "$2") keeps neither an md5 nor a sha1 of its files, so relevio could not prove the copy is intact without downloading all of it. Use another provider (B2, S3, R2, Google Drive) or a synced folder."
   fi
 }
@@ -397,7 +400,7 @@ push_core() {
     fi
     if [ "$limit" -gt 0 ] && [ "$n" -ge "$limit" ]; then PUSH_PENDING=$((PUSH_PENDING + 1)); continue; fi
     sh="$(sha_of < "$f")"; m="$(hash_of < "$f")"
-    [ ${#sh} -eq 64 ] && [ ${#m} -eq "$(hash_len)" ] && [ ${#o} -eq 32 ] || { R_ERR="could not hash $fo/$b"; return 1; }
+    [ ${#sh} -eq 64 ] && [ ${#m} -eq "$R_HASH_LEN" ] && [ ${#o} -eq 32 ] || { R_ERR="could not hash $fo/$b"; return 1; }
     ln -s "$f" "$PUSH_STAGE/b/$o.age"
     NEW_ROW["$o"]="$fo$TAB$b$TAB$by$TAB$mt$TAB$sh$TAB$m$TAB$(utc_iso)"
     n=$((n + 1))
@@ -454,7 +457,7 @@ push_core() {
   # The catalog is rewritten when anything changed (stamps included), and
   # when an audit finds the one in the copy is not the last this machine
   # wrote (replaced, rolled back, deleted).
-  st_hash=""; [ -f "$RH/stamps.tsv" ] && st_hash="$(hash_of < "$RH/stamps.tsv")"
+  st_hash=""; [ -f "$RH/stamps.tsv" ] && st_hash="$(sha_of < "$RH/stamps.tsv")"
   if [ "$changed" = 1 ] || [ -z "$(config_get catalog_seq)" ] || [ "$st_hash" != "$(config_get catalog_stamps)" ] \
      || { [ "$mode" = audit ] && [ "${ALL[catalog.age]:-}" != "$(config_get catalog_hash)" ]; }; then
     catalog_build "$PUSH_STAGE/catalog.age" || return 1
@@ -566,9 +569,8 @@ remote_set() {
       config_set rclone "$r" ;;
     *) die "remote set needs: folder <path>, or rclone <remote:path>." ;;
   esac
-  # Inside $( ) a die only ends the subshell: stop here too.
-  local h; h="$(remote_hash_detect "$kind" "$target")" || exit 2
-  config_set remote_hash "$h"
+  remote_hash_detect "$kind" "$target"
+  config_set remote_hash "$R_HASH"
   [ -n "$(config_get machine)" ] || config_set machine "$(rand_hex 6)"
   [ -n "$(config_get copy_salt)" ] || config_set copy_salt "$(rand_hex 32)"
   config_set remote_kind "$kind"; config_set remote_target "$target"
@@ -698,7 +700,7 @@ cmd_pull() {
     rclone) RCLONE="$(rclone_find)" ;;
     *) die "pull needs: folder <path>, or rclone <remote:path>." ;;
   esac
-  R_HASH="$(remote_hash_detect "$kind" "$target")" || exit 2
+  remote_hash_detect "$kind" "$target"
   # The lock keeps a session starting or ending meanwhile from archiving into
   # a home whose index this pull is about to replace.
   PUSH_STAGE=""; lock_or_die PUSH_STAGE
@@ -776,7 +778,7 @@ cmd_pull() {
   done
   for kf in "${CATALOG_FILES[@]}"; do [ -f "$tmp/c/$kf" ] && cp -P "$tmp/c/$kf" "$RH/$kf"; done
   [ -d "$tmp/c/stamps" ] && { mkdir -p "$RH/stamps"; chmod 700 "$RH/stamps"; cp -P "$tmp/c/stamps/"* "$RH/stamps/" 2>/dev/null || true; }
-  [ -f "$RH/stamps.tsv" ] && config_set catalog_stamps "$(hash_of < "$RH/stamps.tsv")"
+  [ -f "$RH/stamps.tsv" ] && config_set catalog_stamps "$(sha_of < "$RH/stamps.tsv")"
   config_set machine "$mid"; config_set copy_salt "$salt"
   config_set remote_kind "$kind"; config_set remote_target "$target"; config_set remote_hash "$R_HASH"
   config_set catalog_seq "$seq"; config_set catalog_hash "$(hash_of < "$tmp/catalog.age")"
