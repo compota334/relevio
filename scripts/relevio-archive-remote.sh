@@ -44,7 +44,7 @@ remote_load() {
   fi
 }
 target_safe() { printf '%s' "$1" | safe_msg; }
-rclone_find() { command -v rclone || die "rclone is not installed: sudo apt install rclone (Linux) or see https://rclone.org/install/"; }
+rclone_find() { command -v rclone || die "rclone is not installed: sudo apt install rclone (Linux), brew install rclone (macOS), or see https://rclone.org/install/"; }
 # A target goes into the key=value config: a line break would plant keys.
 target_ok() { case "$1" in *$'\n'*|*$'\r'*|"") die "the copy's target must be one line, not empty." ;; esac; }
 
