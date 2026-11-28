@@ -1,57 +1,80 @@
 # relevio
 
-AI coding agents forget everything when their context window fills. relevio
-is session memory for them: context-usage awareness in real time, a written
-handoff before every close, and a navigable archive of never-compacted,
-reopenable sessions. Each session starts where the last one ended. One
-command (or one plugin install) puts the whole cycle into any project. For
-Claude Code and ZCode.
+Session memory for AI coding agents. An agent forgets everything when its
+context window fills; relevio makes every session end with a written handoff
+and every new session start from it, so nothing one conversation learned is
+lost to the next. For Claude Code and ZCode.
 
-**It also turns off every automatic compaction in Claude Code**
-(`"autoCompactEnabled"`, `"precomputeCompactionEnabled"` and `"idleCompaction"`,
-all `false`), so a conversation is never summarized away behind your back:
-not when its window fills, and not while you are away.
-**And it stops Claude Code from deleting old conversations**
-(`"cleanupPeriodDays": 36500`, 100 years, instead of the default 30 days),
-**and keeps an encrypted copy of every conversation** that it can put back
-when Claude Code loses one (see [Archiving every conversation](#archiving-every-conversation)).
+## Quick start
 
-## The core idea: never lose context again
+1. Install it as a Claude Code plugin (or with the
+   [script installer](#option-2-script-installer-per-repo-team-mode), to
+   commit it into one repo for a team):
 
-Without a methodology, working with Claude Code for months looks like this: a
-pile of conversations named "Untitled", most of them auto-compacted (their
-detail destroyed by summarization), and no record of why anything was done the
-way it was.
+   ```
+   /plugin marketplace add compota334/relevio
+   /plugin install relevio@relevio
+   ```
 
-With relevio, your history becomes a complete, navigable archive:
+2. Open a new session and type `/relevio:kickoff` (`/kickoff` on ZCode or
+   with the script installer). The agent reads the last handoff, shows the
+   board of open work, and asks which branch to continue on.
+3. Work as usual. When you are done, ask for a handoff. The agent writes
+   `docs/handoff/YYYY-MM-DD_<title>.md`, commits it, and gives you the two
+   commands to rename this conversation and open the next one.
 
-- **Every conversation gets closed BEFORE auto-compact**, renamed to
-  `DD-MM-YY short-title`, and ends with a written handoff document. Your
-  session list reads like a project logbook.
-- **Every closed conversation keeps 10-15% of its context window free and is
-  never compacted.** That remaining room is the point: you can REOPEN any old
-  conversation weeks later and ask "why did we choose X here?" or "explain
-  that bug you fixed", and the agent answers with the FULL original context
-  still intact.
-- **Handoffs accumulate in `docs/handoff/`**, dated, never overwritten. Each
-  new session starts by reading the latest one, so no knowledge dies when a
-  conversation ends.
-- **Everything is cataloged.** `docs/handoff/INDEX.md` is the library index:
-  one row per session linking its three records: the handoff file, the
-  conversation name, and the commit range (`git log first..last` narrates the
-  session's work commit by commit, since commit messages are themselves
-  summaries of what was done).
+## What you will see
 
-The result: TOTAL history. The handoff folder is the written memory, the
-index is the catalog, git history is the code trail, and the renamed
-conversation list is the archive of complete, still-queryable sessions.
-Nothing is ever lost to compaction again.
+The agent cannot see how full its own context window is. relevio tells it, on
+its first tool call and then about every 10%:
+
+```
+CONTEXT: 8% of your context window used: 83247 of 1000000 tokens, 916753 still free.
+This is your first report; the next one arrives when you cross 10%, and silence
+until then means you have not. Status update, no action needed.
+```
+
+`/kickoff` opens with the team board, generated from every handoff on every
+branch:
+
+```
+| Branch            | Dev(s) | Last handoff                         | Ahead of main |
+|-------------------|--------|--------------------------------------|---------------|
+| `session-archive` | NICO   | 2026-11-26_relevio-v0250-prueba-...  | 39            |
+```
+
+## What it does
+
+- **Tells the agent how much room it has**, in tokens, so it neither starts a
+  big change it cannot finish nor stops early "to be safe".
+- **Ends every session with a handoff**: what was done (with commit hashes),
+  what is pending and why. Handoffs accumulate in `docs/handoff/`, and
+  `docs/handoff/INDEX.md` catalogs them: one row per session, linking the
+  handoff, the conversation name and the commit range.
+- **Keeps a team's work apart**: one lane per branch, a board of who has open
+  work where, and a trace of who touched a file
+  ([docs/teams.md](docs/teams.md)).
+- **Never summarizes a conversation behind your back**: it turns off Claude
+  Code's automatic compaction (`autoCompactEnabled`,
+  `precomputeCompactionEnabled` and `idleCompaction`, all `false`), so any
+  old conversation can be reopened weeks later with its full detail and
+  asked "why did we choose X here?".
+- **Never lets one be deleted**: `cleanupPeriodDays` goes to 36500 (100
+  years, instead of Claude Code's default 30 days), and an optional
+  [encrypted archive](#archiving-every-conversation) keeps a copy of every
+  conversation, with a copy off the machine and Bitcoin timestamps.
+
+> **About `docs/handoff/` in this repository:** relevio is developed with
+> relevio. Those notes (in Spanish) are this project's own session history,
+> not something the installer ships.
 
 ## The two problems it solves
 
-1. **Auto-compact loses the detail.** When the context window fills up, the
-   conversation is summarized and the fine-grained state of your work (what
-   was tried, what failed, what is half-done) is gone forever.
+1. **Auto-compact loses the detail.** Left on, Claude Code summarizes a
+   conversation when its window fills (or while you are away), and the
+   fine-grained state of your work (what was tried, what failed, what is
+   half-done) is gone forever. relevio turns it off and closes each session
+   with a handoff instead, at 80% of the window, with room to do it well.
 2. **The agent is blind to its own context usage.** You can see the percentage
    in your statusline; the model cannot. It will happily start a large
    refactor at 85% of the window and hit the wall in the middle of it. The
