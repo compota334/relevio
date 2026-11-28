@@ -38,8 +38,10 @@ previous session.
       reachable from this session and STOP. Do NOT conclude the install is out
       of date, and do not hand-edit INDEX.md.
 
-      When the script instead FAILS, it always says why, and the two kinds of
-      failure need different answers. If it names a handoff FILE and a FIELD,
+      When the script instead FAILS, it always says why, and each kind of
+      failure needs a different answer. If it says the folder is not inside a
+      git repository, relay its `git init` advice to the user and STOP: there
+      is nothing to index yet. If it names a handoff FILE and a FIELD,
       that header is malformed: report both, and if it predates v0.22 propose
       `relevio-migrate.sh` (same `$S`) and wait for the user's OK. Never patch
       a handoff header silently, least of all another dev's. If it names a REF

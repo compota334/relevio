@@ -13,7 +13,9 @@
 #
 # A no-op on ZCode (its sessions are not JSONL transcripts) and when relevio's
 # scripts are not beside its hooks; the archive script decides the rest.
-# Requires jq.
+# Requires jq. Without it the session-start hook already told the agent that
+# relevio is off; here, stay quiet.
+command -v jq >/dev/null 2>&1 || { cat >/dev/null; exit 0; }
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)

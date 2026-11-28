@@ -333,6 +333,11 @@ check "session-start: without jq it says relevio is off and how to install jq, i
 out="$(printf '{"transcript_path":"x","session_id":"nojq-2"}' | env -i HOME="$nojq" PATH="$nojq/bin" bash "$REPO/hooks/context-warn.sh" 2>"$nojq/err")"; rc=$?
 check "context-warn: without jq it stays quiet (the session start already said why)" \
   "$rc:${#out}:$(wc -c < "$nojq/err")" "0:0:0"
+out="$(printf '{"transcript_path":"x","session_id":"nojq-3"}' | env -i HOME="$nojq" PATH="$nojq/bin" bash "$REPO/hooks/session-end.sh" 2>"$nojq/err")"; rc=$?
+check "session-end: without jq it stays quiet too" \
+  "$rc:${#out}:$(wc -c < "$nojq/err")" "0:0:0"
+check "kickoff: tells the agent what to do when the folder is not a git repository" \
+  "$(for c in commands templates; do grep -c 'git init` advice to the user and STOP' "$REPO/$c/kickoff.md"; done | sort -u)" "1"
 rm -rf "$nojq"
 # A project folder that is not a git repository: the first command a new user
 # runs (/kickoff regenerates the index) must say what to do.
