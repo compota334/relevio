@@ -317,6 +317,11 @@ header of every handoff found across `git log --all`, and has two parts:
 - **Active lanes**: one row per branch that still has open work (it exists and
   is not merged into `origin/main`), with the dev who owns it, the areas it
   touches and how far ahead of main it is. This is the team board.
+  "Merged" and "ahead" are measured by content (`git cherry`), not by commit
+  hash, so a PR merged with "Rebase and merge" leaves the board even though
+  its commits reached main under new hashes. A squash merge folds the
+  commits into one that matches none of them, so a squashed branch stays on
+  the board until it is deleted.
 - **Catalog**: every session ever closed, on any branch, oldest first.
 - **Needs fixing** (only when there is something to fix): handoffs whose
   header is malformed and that exist only on OTHER developers' branches. They

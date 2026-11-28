@@ -1189,6 +1189,62 @@ out="$( cd "$d" && bash "$TRC" nothing/here 2>&1 )"
 check "trace: an untouched path says so instead of printing an empty table" \
   "$(printf '%s' "$out" | grep -c 'No handoff and no open branch touched')" "1"
 
+# A PR merged with GitHub's "Rebase and merge" lands every commit on main
+# under a NEW hash, so an ancestry test kept the branch on the board forever
+# (measured on this repo: PR #1). Merged is decided by content (patch-id):
+# the rebased branch leaves the board, and one merged by only half of its
+# commits stays, counting the half that is not on main.
+git -C "$d" checkout -q -b feat-rebased main
+mkdir -p "$d/rb"; echo r1 > "$d/rb/r.txt"; git -C "$d" add -A; git -C "$d" commit -qm "rebased work 1"
+# An empty commit (a "trigger CI" one) has no patch-id: it must not keep the
+# branch open once its real work is on main.
+git -C "$d" commit -q --allow-empty -m "trigger ci"
+echo r2 >> "$d/rb/r.txt"; git -C "$d" commit -qam "rebased work 2"
+write_handoff "$d" 2026-09-04_feat-rebased.md "04-09-26 feat rebased" ANA feat-rebased \
+  "$(git -C "$d" rev-parse --short HEAD)..$(git -C "$d" rev-parse --short HEAD)" rb "rebased session"
+git -C "$d" add -A; git -C "$d" commit -qm "handoff feat-rebased"; git -C "$d" push -q origin feat-rebased
+git -C "$d" checkout -q -b feat-half main
+mkdir -p "$d/rb"; echo h1 > "$d/rb/h.txt"; git -C "$d" add -A; git -C "$d" commit -qm "half work 1"
+echo h2 >> "$d/rb/h.txt"; git -C "$d" commit -qam "half work 2"
+write_handoff "$d" 2026-09-05_feat-half.md "05-09-26 feat half" ANA feat-half \
+  "$(git -C "$d" rev-parse --short HEAD)..$(git -C "$d" rev-parse --short HEAD)" rb "half session"
+git -C "$d" add -A; git -C "$d" commit -qm "handoff feat-half"; git -C "$d" push -q origin feat-half
+# main moved on meanwhile: the picked commits get new parents, hence new
+# hashes (picked onto the same parent in the same second, git would rebuild
+# the very same commits and the test would prove nothing).
+git -C "$d" checkout -q main
+echo m > "$d/src/m.txt"; git -C "$d" add -A; git -C "$d" commit -qm "main moves on"
+# Only the three real commits reach main: the empty one stays behind.
+git -C "$d" cherry-pick feat-rebased~3 feat-rebased~1 feat-rebased >/dev/null 2>&1
+git -C "$d" cherry-pick feat-half~2 >/dev/null 2>&1
+git -C "$d" push -q origin main; git -C "$d" fetch -q origin
+( cd "$d" && bash "$IDX" >/dev/null 2>&1 )
+check "index: a branch merged by rebase (new hashes, same changes) leaves the board" \
+  "$?:$(git -C "$d" merge-base --is-ancestor origin/feat-rebased main && echo same-hash || echo new-hash):$(board_of "$idx" | grep -c 'feat-rebased')" "0:new-hash:0"
+check "index: every board row is a branch with a handoff, nothing else leaks into it" \
+  "$(board_of "$idx" | grep '^| `' | grep -vc '^| `feat-')" "0"
+check "index: ... one merged by half stays, ahead by the commits main does not have" \
+  "$(board_of "$idx" | awk -F'|' '/feat-half/ { gsub(/ /, "", $6); print $6 }')" "2"
+out="$( cd "$d" && bash "$TRC" rb 2>&1 )"
+check "trace: ... the rebased one is merged, the half one is open work" \
+  "$(printf '%s' "$out" | grep -c '`feat-rebased`.*merged'):$(printf '%s' "$out" | grep -c 'OPEN WORK | `feat-half`')" "1:1"
+# feat-half touched rb in two commits; one is on main already (picked), so
+# one collision is left, the same count the board uses.
+check "trace: ... counting only the commits on that path that main does not have" \
+  "$(printf '%s' "$out" | awk -F'|' '/OPEN WORK \| `feat-half`/ { gsub(/ /, "", $6); print $6 }')" "1"
+# A git that cannot compare must stop the index and the trace, naming it,
+# never pass for "merged" (a die inside $( ) ends only the subshell).
+mkdir -p "$d/.fakegit"
+printf '#!/usr/bin/env bash\n[ "$1" = cherry ] && { echo "fatal: simulated" >&2; exit 128; }\nexec %q "$@"\n' "$(command -v git)" > "$d/.fakegit/git"
+chmod +x "$d/.fakegit/git"
+out_i="$( cd "$d" && PATH="$d/.fakegit:$PATH" bash "$IDX" 2>&1 )"; rc_i=$?
+out_t="$( cd "$d" && PATH="$d/.fakegit:$PATH" bash "$TRC" rb 2>&1 )"; rc_t=$?
+rm -rf "$d/.fakegit"
+check "index and trace: a failing git cherry stops both and says so" \
+  "$rc_i:$(contains "$out_i" 'git cherry could not compare'):$rc_t:$(contains "$out_t" 'git cherry could not compare')" "2:yes:2:yes"
+git -C "$d" push -q origin --delete feat-half >/dev/null 2>&1
+git -C "$d" branch -qD feat-half feat-rebased >/dev/null 2>&1
+
 # A project with relevio installed but no session closed yet must still be
 # able to build its index, and what it gets must be what templates/INDEX.md
 # promises. The prose is the part users read to learn the file is generated;

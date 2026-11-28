@@ -44,9 +44,12 @@ HERE="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
 # each handoff's commit range. Without this, tracing five paths across forty
 # handoffs re-asks git the same questions two hundred times.
 STATES=""   # branch \t state
+declare -A UNMERGED=()   # branch -> its commits not on main (lane_measure)
 for b in $(catalog_branches); do
-  STATES="${STATES}${b}	$(branch_state "$b")
+  lane_measure "$b"
+  STATES="${STATES}${b}	${LANE_STATE}
 "
+  UNMERGED[$b]="$LANE_UNMERGED"
 done
 state_of() {
   printf '%s' "$STATES" | awk -F'\t' -v b="$1" '$1 == b { print $2; found = 1 }
@@ -102,8 +105,12 @@ EOF
     [ -n "$b" ] || continue
     [ "$state" = open ] || continue
     tip="$(branch_tip "$b")"
-    hits="$(git rev-list --count "$MAIN..$tip" -- "$p" 2>/dev/null || echo 0)"
-    [ "${hits:-0}" -gt 0 ] || continue
+    # Only the commits whose change is not on main yet, as the board counts
+    # them: one already merged by rebase is no collision risk.
+    # shellcheck disable=SC2086  # one hash per word
+    hits="$(git log --no-walk=unsorted --format=%H ${UNMERGED[$b]} -- "$p")" || die "git log could not read the open commits of $(relevio_safe "$b")."
+    hits="$(grep -c . <<<"$hits" || true)"
+    [ "$hits" -gt 0 ] || continue
     note="collision risk"
     [ "$b" = "$HERE" ] && note="your own branch"
     open_rows="${open_rows}OPEN WORK	${b}	${tip}	$(devs_of "$b")	${hits}	${note}
