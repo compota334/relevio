@@ -1,57 +1,85 @@
 # relevio
 
-AI coding agents forget everything when their context window fills. relevio
-is session memory for them: context-usage awareness in real time, a written
-handoff before every close, and a navigable archive of never-compacted,
-reopenable sessions. Each session starts where the last one ended. One
-command (or one plugin install) puts the whole cycle into any project. For
-Claude Code and ZCode.
+Session memory for AI coding agents. An agent forgets everything when its
+context window fills; relevio makes every session end with a written handoff
+and every new session start from it, so nothing one conversation learned is
+lost to the next. For Claude Code and ZCode.
 
-**It also turns off every automatic compaction in Claude Code**
-(`"autoCompactEnabled"`, `"precomputeCompactionEnabled"` and `"idleCompaction"`,
-all `false`), so a conversation is never summarized away behind your back:
-not when its window fills, and not while you are away.
-**And it stops Claude Code from deleting old conversations**
-(`"cleanupPeriodDays": 36500`, 100 years, instead of the default 30 days),
-**and keeps an encrypted copy of every conversation** that it can put back
-when Claude Code loses one (see [Archiving every conversation](#archiving-every-conversation)).
+## Quick start
 
-## The core idea: never lose context again
+1. Install it as a Claude Code plugin (or with the
+   [script installer](#option-2-script-installer-per-repo-team-mode), to
+   commit it into one repo for a team):
 
-Without a methodology, working with Claude Code for months looks like this: a
-pile of conversations named "Untitled", most of them auto-compacted (their
-detail destroyed by summarization), and no record of why anything was done the
-way it was.
+   ```
+   /plugin marketplace add compota334/relevio
+   /plugin install relevio@relevio
+   ```
 
-With relevio, your history becomes a complete, navigable archive:
+2. Open a new session and type `/relevio:kickoff` (`/kickoff` on ZCode or
+   with the script installer). The agent reads the last handoff, shows the
+   board of open work, and asks which branch to continue on.
+3. Work as usual. When you are done, ask for a handoff. The agent writes
+   `docs/handoff/YYYY-MM-DD_<title>.md`, commits it, and gives you the two
+   commands to rename this conversation and open the next one (on ZCode,
+   which has no rename command, it asks you to rename it in the session
+   list).
 
-- **Every conversation gets closed BEFORE auto-compact**, renamed to
-  `DD-MM-YY short-title`, and ends with a written handoff document. Your
-  session list reads like a project logbook.
-- **Every closed conversation keeps 10-15% of its context window free and is
-  never compacted.** That remaining room is the point: you can REOPEN any old
-  conversation weeks later and ask "why did we choose X here?" or "explain
-  that bug you fixed", and the agent answers with the FULL original context
-  still intact.
-- **Handoffs accumulate in `docs/handoff/`**, dated, never overwritten. Each
-  new session starts by reading the latest one, so no knowledge dies when a
-  conversation ends.
-- **Everything is cataloged.** `docs/handoff/INDEX.md` is the library index:
-  one row per session linking its three records: the handoff file, the
-  conversation name, and the commit range (`git log first..last` narrates the
-  session's work commit by commit, since commit messages are themselves
-  summaries of what was done).
+## What you will see
 
-The result: TOTAL history. The handoff folder is the written memory, the
-index is the catalog, git history is the code trail, and the renamed
-conversation list is the archive of complete, still-queryable sessions.
-Nothing is ever lost to compaction again.
+The agent cannot see how full its own context window is. relevio tells it, on
+its first tool call and then about every 10%:
+
+```
+CONTEXT: 8% of your context window used: 83247 of 1000000 tokens, 916753 still free.
+This is your first report; the next one arrives when you cross 10%, and silence
+until then means you have not. Status update, no action needed.
+```
+
+`/kickoff` opens with the team board, generated from every handoff on every
+branch:
+
+```
+| Branch | Dev(s) | Last handoff | Areas | Ahead of main | Note |
+|--------|--------|--------------|-------|---------------|------|
+| `session-archive` | NICO | 2026-11-26_relevio-v0250-prueba-real-con-backblaze-b2.md | .claude-plugin, README.md, VERSION, commands, docs, hooks, +10 more | 39 |  |
+```
+
+## What it does
+
+- **Tells the agent how much room it has**, in tokens, so it neither starts a
+  big change it cannot finish nor stops early "to be safe".
+- **Ends every session with a handoff**: what was done (with commit hashes),
+  what is pending and why. Handoffs accumulate in `docs/handoff/`, and
+  `docs/handoff/INDEX.md` catalogs them: one row per session, linking the
+  handoff, the conversation name and the commit range.
+- **Keeps a team's work apart**: one lane per branch, a board of who has open
+  work where, and a trace of who touched a file
+  ([docs/teams.md](docs/teams.md)).
+- **Stops Claude Code from summarizing a conversation behind your back**: it
+  turns off its automatic compaction (`autoCompactEnabled`,
+  `precomputeCompactionEnabled` and `idleCompaction`, all `false`), so any
+  old conversation can be reopened weeks later with its full detail and
+  asked "why did we choose X here?". (ZCode's own settings are left alone.)
+- **Stops Claude Code from deleting old conversations**: `cleanupPeriodDays`
+  goes to 36500 (100 years, instead of the default 30 days). An open Claude
+  Code bug can still delete some
+  ([details](docs/reference.md#claude-code-no-longer-deletes-old-conversations)),
+  so an optional [encrypted archive](#archiving-every-conversation) keeps a
+  copy of every conversation, with a copy off the machine and Bitcoin
+  timestamps.
+
+> **About `docs/handoff/` in this repository:** relevio is developed with
+> relevio. Those notes (in Spanish) are this project's own session history,
+> not something the installer ships.
 
 ## The two problems it solves
 
-1. **Auto-compact loses the detail.** When the context window fills up, the
-   conversation is summarized and the fine-grained state of your work (what
-   was tried, what failed, what is half-done) is gone forever.
+1. **Auto-compact loses the detail.** Left on, Claude Code summarizes a
+   conversation when its window fills (or while you are away), and the
+   fine-grained state of your work (what was tried, what failed, what is
+   half-done) is gone forever. relevio turns it off and closes each session
+   with a handoff instead, at 80% of the window, with room to do it well.
 2. **The agent is blind to its own context usage.** You can see the percentage
    in your statusline; the model cannot. It will happily start a large
    refactor at 85% of the window and hit the wall in the middle of it. The
@@ -300,193 +328,22 @@ Handoff rules (the agent gets them from the 80% warning and `/handoff`):
 - **Close-out is literal**: the agent ends every session with copy-paste
   instructions for the human, each command in its own one-click-copyable code
   block (rename the session with `/rename`; open a new one whose first message
-  is `/kickoff`). The close-out also names the branch it worked on (see below).
+  is `/kickoff`). The close-out also names the branch it worked on (see [docs/teams.md](docs/teams.md)).
 
-### One lane per branch, and a board for the team
+## Teams
 
-A handoff is committed like any other file, so it lands on whatever branch the
-session was working on. With one dev on one branch that is invisible. With a
-team it is the whole problem: the newest handoff in the repo belongs to
-whoever closed last, which is usually not you, and it is often not even in
-your working tree.
+One lane per branch, the board generated from every handoff on every branch,
+the header that is computed instead of typed, the trace of who touched a file,
+and parallel sessions in worktrees: [docs/teams.md](docs/teams.md).
 
-So relevio does not have "the latest handoff". It has **one lane per branch**,
-plus a board listing the lanes. `docs/handoff/INDEX.md` is generated from the
-header of every handoff found across `git log --all`, and has two parts:
+## How it works inside
 
-- **Active lanes**: one row per branch that still has open work (it exists and
-  is not merged into `origin/main`), with the dev who owns it, the areas it
-  touches and how far ahead of main it is. This is the team board.
-  "Merged" and "ahead" are measured by content (`git cherry`), not by commit
-  hash, so a PR merged with "Rebase and merge" leaves the board even though
-  its commits reached main under new hashes. A squash merge folds the
-  commits into one that matches none of them, so a squashed branch stays on
-  the board until it is deleted.
-- **Catalog**: every session ever closed, on any branch, oldest first.
-- **Needs fixing** (only when there is something to fix): handoffs whose
-  header is malformed and that exist only on OTHER developers' branches. They
-  are left out of the catalog until their owner fixes them, and they do not
-  stop the index. A malformed handoff in your own working tree, on the branch
-  you have checked out, or on main still stops it, naming the file and the
-  field: that one is yours to fix. Before v0.24.5 any malformed handoff anywhere
-  stopped everyone, so one developer's slip froze the board for a whole team.
-
-`/kickoff` reads the row for **your** branch. On a brand new branch there is no
-such row, so it reads main's last handoff and says in plain words that it is
-doing so, instead of handing you a stranger's lane as if it were yours.
-
-Because the file is generated, nobody edits it and nobody resolves merge
-conflicts on it. When git reports a conflict there, the fix is to rerun the
-script and commit the result. The index on a feature branch legitimately lists
-sessions from other branches: it is a view of the repository as you last
-fetched it, not of your branch.
-
-### The header is computed, not typed
-
-Six of the nine header fields are facts, and agents writing them by hand got
-them wrong in ways no parser can catch: copying the previous handoff's header
-as a template, not knowing where their own session began, spelling the dev's
-name differently each time, and taking the session id from "the newest
-transcript in the project folder", which is the OTHER conversation whenever two
-are open in one project. A wrong id is worse than a typo: it makes a live
-session look archived the next time it is resumed.
-
-So the session-start hook tells the agent its session id (the host's payload
-carries it) and records, once per session, the time and the commit it started
-on. The record lives in git's own directory (`.git/relevio/sessions/`), so it
-is never committed and every worktree of the clone sees it; a restart keeps the
-first record. At close-out `relevio-header.sh <session-id>` turns that into:
-
-| Field | Where it comes from |
-|-------|---------------------|
-| `Date` | today |
-| `Dev` | `git config relevio.dev`, set once per clone (the script asks for it, it never guesses) |
-| `Branch` | the branch checked out (a detached HEAD is refused) |
-| `Commits` | the commits on that branch that you committed since the session began; teammates' commits pulled in meanwhile are left out |
-| `Areas` | the paths those commits touched |
-| `Resume` | `claude --resume <id>`, or the `sess_` id on ZCode |
-
-The agent writes only `Session`, `Topics` and `Summary`, which the script
-prints as `<fill in: ...>` placeholders; the index refuses a header that still
-holds one. A session that began before v0.24.5 has no record and no id line:
-the script says so, and the agent asks the user for the start (`--since`) and,
-if needed, records no id (`--no-session-id`) in the open.
-
-One trade-off, stated plainly: a handoff survives only while git can reach it.
-Delete an unmerged branch and its handoff leaves the index with it. Push and
-merge, or lose it. That was already true when the index was hand-written, since
-the row lived on that branch too.
-
-### Repositories without a remote
-
-The board measures "merged" and "ahead" against an integration branch, and by
-default that is `origin/main`. A repository with no remote has none, so relevio
-asks once and the repository remembers:
-
-```bash
-git config relevio.main main
-```
-
-Every later session uses it. relevio never guesses this: which branch the work
-integrates into is a decision, not something to infer from the branch list. It
-also refuses `HEAD` and its relatives as an answer, whichever way they were
-supplied: they name wherever a checkout is standing right now, so the board
-would compare against a different commit each day. This matters here more than
-it sounds, because relevio's own close-out leaves worktrees on a detached HEAD. A
-one-off override is `--main <ref>` or the `RELEVIO_MAIN` environment variable,
-and both win over the recorded value.
-
-### Tracing who touched a surface
-
-The other half of the problem is time, not just branches. When you open a new
-branch you are usually about to edit code that other sessions, on other
-branches, touched weeks ago. Their reasoning is in their handoffs, and you have
-no way to know which ones. `relevio-trace.sh` answers exactly that:
-
-```
-$ bash .claude/scripts/relevio-trace.sh src/auth
-
-## src/auth
-
-| Kind      | Branch      | Handoff / tip                | Dev  | Commits touching | Note           |
-|-----------|-------------|------------------------------|------|------------------|----------------|
-| OPEN WORK | `feat-sso`  | origin/feat-sso              | ANA  | 6                | collision risk |
-| handoff   | `main`      | 2026-08-17_auth-rewrite.md   | NICO | 11               | merged         |
-```
-
-Two kinds of row. `handoff` rows are past sessions whose commit range touched
-that path: read them before you undo their reasoning. `OPEN WORK` rows are
-unmerged branches changing the same surface right now, which is the collision
-you cannot see from your own branch because their commits are not in main and
-therefore not in yours either. `/kickoff` runs this for the areas you say you
-will touch, before any code.
-
-### Worktrees and parallel sessions
-
-Running parallel sessions in git worktrees is fully supported, with one rule:
-git allows a branch to be checked out in only ONE worktree, so a finished
-session must not keep its branch hostage. The close-out handles it: after the
-final commit and push, a session running in a worktree runs `git switch
---detach`. That frees the branch instantly for future sessions, while the
-worktree directory stays alive, pinned at the session's final commit, so the
-closed conversation can still be revisited with its exact code state. If a
-closed session is later asked to write more code anyway, it must not commit on
-that detached HEAD (such commits belong to no branch): it creates a fresh
-worktree or asks first. On the opening side, when `/kickoff` finds the target
-branch held by another worktree it asks whether that session is still alive
-(open the session there) or finished (free the branch with `git worktree
-remove`, never forced), and offers to prune detached leftovers. Before
-choosing a branch at all, `/kickoff` maps every worktree (folder, branch or
-detached, number of uncommitted files) and marks the one the session runs in,
-so a branch still held by an earlier session, or work left uncommitted in
-another folder, shows up at the start instead of at the first failed switch.
-Uncommitted files in someone else's worktree are listed for the user to
-decide about, never discarded.
-
-## How the hook works
-
-> **The design rule that protects you: relevio never guesses a window size.**
-> The model table is a convenience, and a table always lags the next model
-> launch. What does not age is the fallback: a model relevio cannot identify
-> gets a plain running token count, never an invented percentage. That matters
-> because a wrong window is worse than no window at all. It does not fail
-> visibly; it quietly reports a number that looks right, and a session running
-> a 1M model against an assumed 200k will announce "80%, start closing" at a
-> real 17% and end hours early for no reason. A raw token count can never lie
-> that way, which is why an unknown model gets one.
-
-The hook reads the usage through one READER PER HOST AGENT, and everything
-else (window table, bands, messages) is shared. On Claude Code, the reader
-uses the JSONL transcript the host emits per session, which includes
-per-message token usage; on ZCode, it queries ZCode's local usage database
-(see the ZCode section below); on a host it cannot read at all, it says so
-loudly once instead of staying silent. On every tool call (PostToolUse,
-matcher `*`), the hook reads the most recent usage; what it does with it
-depends on whether it can size the window. For a model it recognizes it computes a percentage against that
-model's REAL window (1M for current models, 200k for Haiku 4.5) and, if
-measured usage ever exceeds that window, self-corrects to 1M with a loud
-one-time notice (evidence beats a wrong assumption). For a model it does NOT
-recognize it refuses to guess a size (that would be a silent fallback): it
-reports the running token count on the first tool call and every 100k after
-that. The agent, which knows its own window, reads the count against it and
-tells the user when the window is nearly full; the user decides what happens
-next. No percentage, no close-out and no STOP LAW. An explicit `CLAUDE_CONTEXT_LIMIT` overrides
-detection and forces percentage mode. When a band is crossed it injects a
-notice into the agent's context via `additionalContext`:
-
-- **10, 20, 30, 40, 50, 60%**: informational checkpoints. No action required;
-  they simply keep the agent aware of where it stands (without the hook, the
-  model cannot see its own percentage at all).
-- **70 and 80%** (or the custom `CLAUDE_CONTEXT_WARN` thresholds): the
-  close-out warnings described in the cycle above.
-- **85, 90, 95, 99%**: the revisit guards, ending in the STOP LAW.
-- **Unrecognized model**: none of the above. Instead, a raw token count on the
-  first tool call and every 100k after that; the agent reads it against its
-  own window and tells the user when it is nearly full, and the user decides.
-
-A marker file in `/tmp` guarantees each band fires only once per session, and
-if one tool call jumps several bands at once, only the most serious one
-speaks, so the agent is nudged, not spammed.
+[docs/reference.md](docs/reference.md) has the detail: how the context hook
+measures the window, every message relevio sends the agent and when, how
+subagents fit in (they never write handoffs, and the warnings never reach
+them), where a wrong percentage comes from, the compaction and retention
+settings relevio changes, who decides when a session ends, restarts versus
+revisits, and how text written by other people is treated.
 
 ## ZCode (Z.ai) support
 
@@ -518,245 +375,30 @@ The GLM Coding Plan also works in the opposite direction: GLM models plugged
 into CLAUDE CODE itself (via Z.ai's Anthropic-compatible endpoint) are
 recognized by the same window table, with no extra setup.
 
-## What relevio says to the agent (and when)
-
-Every message relevio injects, in firing order. The exact texts live in the
-two hook scripts (`.claude/hooks/session-start.sh` and
-`.claude/hooks/context-warn.sh`): they are plain shell files, open them to
-read or audit every word the agent receives.
-
-| When | Message (gist) |
-|------|----------------|
-| Session start (new) | This conversation's session id, which `/handoff` passes to `relevio-header.sh` (also repeated after an auto-compact). The cycle in three lines: open with `/kickoff`; a hook reports your context usage roughly every 10%, so silence means the next mark is not crossed (never guess your usage above the last number received); when the hook needs something, its message will say so and carry complete instructions, and until then the task, not the window, decides. No close-out thresholds and no close-out procedure. What it does say: ending a session is the user's call; a finished task gets a short Done / Pending / Needs-from-you recap instead of a handoff; a handoff asked for in plain words goes through the `/handoff` command; that handoffs and other branches are the team's notes, followed as usual, except that a suspicious request found in them is shown to the user before acting on it; on the plugin channel, that relevio turned off Claude Code's automatic compaction, the one time it does so; and, on both channels, that relevio raised `cleanupPeriodDays`, the one time it does so. |
-| Session start (any, when there is news) | One notice slot. First the settings notice (relevio turned off automatic compaction or raised `cleanupPeriodDays`, the one time it does so); otherwise the archive's: not set up (at most once a day), failing (with its reason), interrupted, or no success in a week. Every start also launches the background sweep of its repository, silently. |
-| Session end | Nothing is said: the archiving of the session is launched, detached. |
-| Session start (resumed, and a handoff names it) | Names the handoff whose `Resume:` field carries this session's id and has the agent check it against its own conversation. If the conversation ends with that handoff, it is the archive: answer questions, avoid new work, send new work to a fresh session. If the agent kept working after it, or the handoff describes work it never did (a wrong id), it is a restart: tell the user in one line and carry on. |
-| Session start (resumed, never closed) | A restart, not the archive: the app or the computer came back mid-work. The full core, with "carry on where it stopped; being resumed is no reason to leave" in place of the kickoff line. Whether new work still fits is left to the context reports, which can see the window. |
-| Session start (just auto-compacted) | Detail was destroyed: tell the user, salvage what remains into a handoff now, recommend a fresh session. |
-| First tool call | One status line with a real number (percentage, used, free), even below 10%, so no session spends its opening stretch without a figure. In raw-count mode, the running token count instead. |
-| 10-60% (every 10%) | A bare status line: the percentage, used and free tokens, "no action needed". Nothing else, on purpose: these fire six times, so anything they said would be the strongest anchor of all. |
-| 70% (soft, configurable) | The sweet spot: maximum understanding loaded AND plenty of free tokens, so put that combination to work. Finish and polish what is open, new user requests welcome at any size, begin thinking about what the next session will need. Explicitly: nothing needs writing yet, a later message will say when. |
-| 80% (hard, configurable) | The complete close-out checklist, first time it appears: bring the work to a coherent stopping point (nothing abandoned mid-change), write the handoff while the understanding is still loaded (structure included), run the project's checks, then commit everything and push, hand the user the close-out (on Claude Code two commands, `/rename` plus the kickoff; on ZCode the kickoff command plus a rename-from-the-UI request, since ZCode has no rename command). Explicitly: the free tokens are enough to do it well, no rushing. |
-| 85 / 90 / 95% | Escalating guards: short answers, no new work, remind the user the window is nearly full. |
-| 99% | Full STOP: do not answer the pending request; warn that one more exchange may fill the window (with compaction off the next message fails as too long; with it turned back on, the conversation is summarized) and wait for explicit confirmation. |
-| Unknown model | The raw token count on the first tool call and every 100k after, with the reasoning spelled out (relevio refuses to guess a window size). If the window is nearly full the agent tells the user, and the user decides. |
-| Foreign host, session start | Some Claude-compatible harnesses (e.g. Devin) load `.claude/` hooks but send no transcript path, so usage cannot be measured there. The startup core then does NOT promise the report cadence: it says no usage reports will arrive, silence tells you nothing, and never guess a figure. |
-| Foreign host, first tool call | One loud notice, once per session: usage reporting is OFF, no counts or warnings will come, the agent must use its own knowledge of its window to time the handoff and keep the user informed. Never silence: an agent waiting for reports that structurally cannot arrive is the exact failure relevio exists to prevent. |
-| ZCode sessions | The same checkpoints and warnings, with the usage read from ZCode's local database instead of a transcript, and the close-out adapted to the host: unprefixed `/kickoff`, no `/rename` (the user renames from ZCode's session list). If that database (or python3) is unreachable, the loud OFF notice above fires instead of silence. |
-| Errors | A misconfigured threshold variable, a `CLAUDE_CONTEXT_LIMIT` that is not a whole number, an impossible measured usage or a broken context math are each reported loudly, once, with warnings disabled rather than silently wrong. A private marker directory that is missing, a symlink or another user's turns reporting off with a message on every call. |
-
-The design rule behind the dosing: **an instruction travels inside the
-message that triggers it, never earlier**. The agent cannot anticipate a
-close-out it has never heard of, so it works at full speed until the moment
-the hook actually asks for something.
+The measurements behind the port are in
+[docs/2026-08-26_zcode-investigation.md](docs/2026-08-26_zcode-investigation.md).
 
 ## Archiving every conversation
 
-Claude Code keeps each conversation as a plain file in `~/.claude/projects/`,
-and files can still disappear: its own cleanup, a bug, a deleted folder.
-relevio keeps an **encrypted copy of every conversation** of this machine in
-`~/.relevio/` (or `$RELEVIO_HOME`), outside every repository, and can put a
-lost one back so `claude --resume` opens it again.
+relevio keeps an **encrypted copy of every conversation** in `~/.relevio/`,
+outside every repository, and can put a lost one back so `claude --resume`
+opens it again.
 
-- **When:** each session is archived as it ends (the `SessionEnd` hook), and
-  every session start sweeps its repository in the background, including the
-  folders of its worktrees, so a session whose end was missed is caught at
-  the next start. Both run detached and never slow a session down.
-- **How:** each session (its transcript plus its `subagents/` and
-  `tool-results/`) is packed, compressed and encrypted with
-  [age](https://age-encryption.org) to two keys. Measured on real
-  conversations: 164 MB became 47 MB.
-- **Two keys, no server:**
-  1. a **main key**, protected by your **passphrase** (your everyday key):
-     what `restore` asks for. You choose it at setup; if you leave it empty,
-     age invents one made of words joined by dashes, and those words are the
-     passphrase;
-  2. a **recovery key** (your emergency key), one long code that starts with
-     `AGE-SECRET-KEY-1` (age's marker for a secret key), shown once at setup,
-     that only you keep (a password manager or paper): for when the
-     passphrase is lost.
-
-  Every screen that asks for a key says which of the two it wants, what that
-  key looks like, and how to paste it (Linux Ctrl+Shift+V, macOS Cmd+V,
-  Windows Terminal Ctrl+V).
-
-  Archiving uses only their public halves, so the hooks never hold a secret.
-  **If you lose both the passphrase and the recovery key, the archive is
+- Each session is archived as it ends, and every session start sweeps its
+  repository in the background. Both run detached.
+- It is encrypted with [age](https://age-encryption.org) to two keys: your
+  **passphrase** (everyday) and a **recovery key** (emergency), shown once at
+  setup. **If you lose both the passphrase and the recovery key, the archive is
   gone: nobody, relevio included, can open it.**
-- **What changes are kept:** a conversation that only grew replaces its copy;
-  one that was rewritten keeps the previous copy as an older generation,
-  never deleted automatically. A session you delete on purpose in the Claude
-  desktop app is not archived; a copy archived earlier is kept and marked
-  (`status` shows it), and `forget` removes it for good.
+- Optional: an encrypted copy off this machine (a synced folder, Google Drive,
+  or an S3 bucket such as Backblaze B2), and timestamps in Bitcoin that prove a
+  conversation existed by a given date.
+- Set it up once from your own terminal: `relevio-archive.sh setup` (your AI
+  assistant can open the terminal with the command ready; you type only the
+  passphrase).
 
-### Commands
-
-All in `.claude/scripts/relevio-archive.sh` (in a plugin install, the plugin's
-`scripts/`). The ones that ask for a secret run **only in a real terminal**,
-and the secret is always typed by you, there: a secret typed in a chat would
-be stored in a plaintext transcript. The agent may open your terminal with
-the command ready, so your part is one paste and one Enter; it never reads
-that terminal during `setup`, whose screen shows the keys.
-
-| Command | What it does |
-|---|---|
-| `setup` | Creates the keys (your terminal: asks for the passphrase twice, shows the recovery key once and asks you to type it back). |
-| `backfill` | Archives every conversation already on the machine, with progress. Checks the free disk space first. |
-| `status` | Set up or not, on or off, the keys by prefix, the last run, what is archived, and Claude Code's `cleanupPeriodDays`. Exits 1 when something needs attention. |
-| `list [query]` | What is archived, filtered by id prefix, folder or path. Reads the index only: decrypts nothing. |
-| `restore <id>` | Puts a session back (your terminal). Checks every file against what was archived before moving anything, never creates a second copy of the id (that would break `--resume`), moves a different current copy aside instead of deleting it, and prints the exact `cd ... && claude --resume <id>` line. `--recovery` uses the recovery key; `--generation <file>` an older copy. |
-| `keys check [--recovery]` | Proves a key opens the archive. |
-| `keys passphrase` | Changes the passphrase. |
-| `keys reset` | Lost the passphrase: with the recovery key, re-encrypts everything to a new main key, touching nothing old until every new copy is proven to open. |
-| `keys rotate-recovery` | The recovery key leaked: shows a new one once, re-encrypts everything to the passphrase's key plus the new one (same safety as `reset`), and replaces the off-machine copy. The old recovery key then opens nothing. |
-| `forget <id>` | Removes a session from the archive for good, and keeps it from being archived again. |
-| `remote connect b2 <bucket>` / `s3 <bucket> <endpoint> <provider>` / `gdrive` | Connects a cloud account in one step: asks only the key (hidden, never on a command line), checks it, sets the copy and sends everything. |
-| `remote set folder <path>` / `remote set rclone <remote:path>` | Sets the copy off this machine (see below). `remote status` shows it; `remote off` stops updating it. |
-| `push` | Sends what is new to the copy. Runs by itself after every archiving run once a copy is set. |
-| `verify` | Checks the copy: every bundle by the provider's own checksum, md5 or sha1 (nothing downloaded), a random sample downloaded and checked by sha256, and the catalog. |
-| `pull folder <path>` / `pull rclone <remote:path>` | On a new computer: brings the whole archive back from the copy into an empty `~/.relevio` (your terminal: asks for a key). Interrupted, it resumes. |
-| `stamp setup` / `status` / `now` / `backfill` / `off` | Timestamps (see below). |
-| `proof <id>` | Builds the folder you hand someone to prove a conversation existed at a date. |
-| `proof-check <folder>` | Checks a proof folder here, against two Bitcoin explorers. |
-| `off` / `on` | Stops and resumes archiving. What is archived stays. |
-| `guide` | The instructions for the agent: what it may run itself, what only you type, which key each step asks for, and how to walk you through it one step at a time. `/kickoff` and `/revisit` point the agent to it. |
-
-`/revisit` uses it too: when `claude --resume` no longer finds a session, the
-agent looks it up with `list`, reads `guide`, and has you run `restore`.
-
-### A copy off this machine
-
-Same disk, same failure: the archive alone does not survive a broken disk or
-a stolen laptop. A copy elsewhere does, and **everything in it is encrypted,
-names included**:
-
-- bundles travel under opaque names (a hash of a random salt and the name),
-  so the copy does not show session ids or project names;
-- the index, the folder list and the upload records travel as one encrypted
-  `catalog.age`, written last, so it never names a bundle that is not there;
-- the main key travels locked by your passphrase; the recovery key never
-  travels anywhere.
-
-Two ways to send it, one code path:
-
-1. **A synced folder**: any folder a sync client already mirrors (Google Drive
-   for desktop, Dropbox, OneDrive, iCloud, Syncthing, a NAS mount).
-   `remote set folder <path>`. relevio writes there; the client uploads.
-2. **rclone**: talks to the provider itself (Google Drive, S3, B2, SFTP,
-   WebDAV and about 70 more), which is the way on Linux, where Google has no
-   Drive client. Connect it once in your terminal, for Google Drive with
-   least privilege (rclone then sees only the files it created):
-
-       rclone config create relevio-gdrive drive scope=drive.file
-
-   then `remote set rclone relevio-gdrive:relevio`.
-
-**For a team, use an S3-compatible bucket** (Backblaze B2, Cloudflare R2,
-AWS S3, Wasabi, a MinIO server): it is what backup tools use (restic, kopia),
-it has no per-app request limit like Google Drive's (rclone's shared Google
-app gets rate-limited: measured 2026-11-25), and an access key limited to one
-bucket is the least privilege there is. Create the bucket and a key for that
-bucket only; then one command asks for the key (hidden), writes it into
-rclone's own config, proves it works and sends everything:
-
-    remote connect b2 <bucket>                          # Backblaze B2
-    remote connect s3 <bucket> <https endpoint> <provider>  # R2, AWS, Wasabi, MinIO
-    remote connect gdrive                               # Google Drive (browser login)
-
-Your AI assistant runs all of this for you: it asks in a form where the copy
-goes and the bucket name, and opens your terminal only where you paste the key.
-
-Google Drive with rclone works, but for daily use give rclone its own Google
-client id (rclone's docs: "Making your own client_id"); a native "Connect
-Google Drive" for relevio is planned.
-
-What can go wrong, and what happens:
-
-| Case | What relevio does |
-|---|---|
-| no network, provider down | the archive keeps working; the copy waits and `status` says since when |
-| login expired (rclone) | `status` shows the exact `rclone config reconnect` command |
-| a bundle altered or deleted in the copy | `verify` names it; the next `push` sends it again |
-| an older catalog put back in the copy | `verify` catches it; the next `push` writes the current one |
-| an emptied or damaged local index | nothing is deleted from the copy: only `forget` removes from it |
-| the computer is lost | `pull` on the new one, with the passphrase or `--recovery` |
-
-Measured on Google Drive (rclone 1.60.1): a cut upload leaves nothing behind,
-uploading the same name twice keeps one file, deletions go to Drive's trash,
-and Drive reports each file's md5 itself, which is how `verify` checks every
-bundle without downloading it. Backblaze B2 keeps a sha1 instead of an md5
-(measured 2026-11-26): `remote set` asks the provider which checksum it keeps
-and the copy is checked by that one from then on.
-
-Who can write to the copy is a different question from who can read it:
-age encrypts but does not sign, so anyone holding the public keys could make
-a file your key opens. So `pull` checks every record it brings back field by
-field and refuses links, and the key list is **sealed** with your keys
-(`keys/recipients.mac`, written wherever you type a key): a key someone adds
-to the copy is caught before anything is encrypted to it. Someone who can
-write to your copy can still delete it or plant a fake conversation in it;
-they cannot read yours. An archive set up before the seal existed gets it the
-first time you run `keys check` and `keys check --recovery`.
-
-What the copy still reveals: how many bundles there are and how big each is.
-After `keys reset` or `keys rotate-recovery` the copy is replaced, but your
-provider may keep old versions or a trash folder for a while: empty them if a
-key leaked.
-
-### Timestamps
-
-`stamp setup` installs the [OpenTimestamps](https://opentimestamps.org)
-client (pinned, in its own folder inside `~/.relevio`). From then on every
-archived conversation gets a proof that it existed, byte for byte, **no later
-than a Bitcoin block**, without trusting relevio, you, or this computer's
-clock. It does **not** prove who wrote it, nor that what it says is true.
-
-- What is stamped is a small leaf holding `sha256(salt + transcript)`, with a
-  random salt per conversation. Only the hash of that leaf reaches the public
-  calendar servers: nobody can read or even confirm a guessed conversation
-  from it. The salts and proofs travel inside the encrypted catalog.
-- Leaves go out in batches (one call for thousands): when the oldest has
-  waited a day, when 10 000 wait, or on `stamp now`. Bitcoin confirms a batch
-  a few hours later. With no calendar answering, the leaves stay queued and
-  `status` says so; at least two calendars must answer.
-- Conversations archived before stamping was on are stamped when it is turned
-  on: their proof says "no later than that day", not their original date.
-  Those whose transcript is no longer on the machine need `stamp backfill`
-  (your terminal, a key).
-- `proof <id>` builds a folder for whoever must check it: the conversation
-  (in clear: read it for secrets before sharing), its salt, the leaf, the
-  proof and a `VERIFY.txt` with the steps (one `sha256sum` line, then
-  opentimestamps.org or `ots verify`). `proof-check <folder>` does those
-  steps here, asking two block explorers; one answer that matches is enough,
-  any mismatch fails it.
-
-### What the agent is told
-
-At session start, in the one notice slot after the settings notice: that the
-archive is not set up (at most once a day, silenced by `off`), or that it is
-failing (every session, with the reason), was interrupted, or has not
-succeeded in a week, or that the copy off the machine is failing. The agent
-is told never to run `setup` itself, and the script refuses without a
-terminal anyway. `guide` tells it everything else: which commands it may run,
-which only you type, and how to walk you through them.
-
-### Security and limits
-
-- Protects against losing conversations to Claude Code's cleanup or a
-  deleted folder, and against a copy of `~/.relevio` leaking (a synced folder,
-  a stolen backup): the bundles are encrypted to your keys.
-- Does **not** protect against someone with your account on this machine: the
-  conversations in `~/.claude` are plain files, and the archive's index
-  (`index.tsv`: ids, folder names, paths and sizes, no content) is plain too.
-  Full-disk encryption is still recommended. `status` lists the keys an
-  archive is encrypted to, so a key added behind your back is visible.
-- The archive refuses to live inside a git repository, behind a symbolic
-  link, or in a folder you do not own.
-- Without a copy off the machine (above), same disk, same failure.
-- Not archived: Claude Code's file checkpoints (`file-history/`), and ZCode
-  sessions (they are not transcript files).
-- Whether the Claude desktop app runs the `SessionEnd` hook is not verified
-  yet; its sessions are archived by the next session start's sweep either way.
+Commands, the copy off this machine, timestamps, and security and limits:
+[docs/archive.md](docs/archive.md).
 
 ## Revisiting old conversations
 
@@ -767,7 +409,7 @@ session list (it has the same name as the handoff's `Session` field). The
 `/revisit <topic>` command searches the library and hands you the right
 resume command, built from the session id alone: the rest of the `Resume:`
 line is free text written by whoever closed that session, so it is never
-passed on as a command. An operator agent (see below) reopens sessions the same way,
+passed on as a command. An operator agent ([docs/reference.md](docs/reference.md#agent-operators-when-the-user-is-itself-an-agent)) reopens sessions the same way,
 by running `claude --resume <session-id>`. If Claude Code no longer has the
 conversation, `/revisit` looks for it in the encrypted archive and gives you
 the `restore` command to run in your terminal.
@@ -777,264 +419,6 @@ of its context window. The hook fires guard warnings at 85, 90, 95 and 99%;
 the 99% one is a full STOP: the agent must not answer, must warn (in the
 user's language) that one more exchange may fill the window, and must
 wait for explicit confirmation to continue.
-
-## Subagents
-
-Sub-agents (the Task tool) and the session cycle complement each other, and
-they do NOT interfere:
-
-- Subagents have their own separate, ephemeral context windows. Work delegated
-  to them barely consumes the main session's window (only their returned
-  summary enters it), so delegating actually makes sessions last longer.
-- **Subagents never write handoffs.** The handoff documents the main
-  conversation, which already received every subagent's report. A subagent's
-  context is discarded when it finishes and cannot be revisited, so anything
-  important a subagent finds must come back in its summary to the main
-  thread: that is what the handoff (and the archive) preserves.
-- The context hooks do not reach subagents: warnings are injected into the
-  main agent only, so a subagent will never try to close your session.
-
-### Debugging a wrong context percentage
-
-`RELEVIO_DEBUG=1` makes the PostToolUse hook append one line per session to
-`~/.cache/relevio/markers/claude-ctx-warn-<session>-debug.log` (or under
-`$XDG_CACHE_HOME` when it is set) with the payload's model id, what
-relevio resolved it to, the window it picked and the tokens it read. A model id
-relevio does not recognize fails silently by design (it falls back to raw token
-counts rather than inventing a window), so that line is the fastest way to see
-whether an id is arriving in a shape the window table does not match.
-
-### Hooks run without the executable bit
-
-Some hosts install plugin files read-only: ZCode does, hooks included. relevio's
-manifest therefore invokes its hooks through an interpreter,
-`bash "${CLAUDE_PLUGIN_ROOT}"/hooks/...`, which makes the executable bit
-irrelevant rather than a silent prerequisite. If you see relevio's `.sh` files
-sitting at `644` in a plugin cache, that is expected and nothing is broken. The
-script installer still chmods its own copies, since it owns them.
-
-### Claude Code's automatic compaction is turned off
-
-Claude Code summarizes a conversation away on its own in three ways, all on by
-default, and each destroys exactly what relevio exists to keep: a conversation
-with its full detail, reopenable later.
-
-| Key | What it does when on |
-|---|---|
-| `autoCompactEnabled` | compacts the conversation when the context window fills |
-| `precomputeCompactionEnabled` | writes that summary in the background before it is needed ("Compacted using a summary written while you were away") |
-| `idleCompaction` | since v2.1.290, compacts a long conversation left idle for about an hour, shortly before its prompt cache expires ("Compacted while idle") |
-
-relevio sets all three to `false`, in a different file depending on how it
-was installed:
-
-| Installed as | Where | Why there |
-|---|---|---|
-| Script installer | the project's `.claude/settings.json` | the file the installer already owns; in team mode it reaches every teammate who clones the repository, and it leaves your other projects alone |
-| Plugin | your `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) | a plugin cannot ship these keys, since Claude Code drops every plugin setting except two; and a plugin is enabled for all your projects anyway |
-
-With automatic compaction off, a session that fills its window stops with an
-error instead of being summarized. relevio's context reports are what keep
-that from happening: they tell the agent to close with a handoff well before
-the limit. Manual `/compact` keeps working, since typing it is your own
-decision.
-
-On the plugin channel the session-start hook writes it, and the first session
-that does so tells you, so it is never a silent edit. In both channels:
-
-- each key is written whenever it is not already `false`, **an explicit
-  `true` included**. Installing relevio is the decision not to have
-  conversations compacted, and the two cannot both hold. Whenever relevio
-  switches a `true`, it says so;
-- they are written **whatever your Claude Code version**. Older versions ignore
-  a key they do not know, and leaving it out would let a later update start compacting
-  without warning;
-- a settings file that is not valid JSON, or that is a symbolic link (usually
-  a dotfiles manager's), is never rewritten: relevio tells you to add the key
-  yourself;
-- it never happens on ZCode, which is not Claude Code.
-
-Uninstalling leaves the keys in place: they may be yours as much as relevio's,
-and removing them would quietly turn compaction back on.
-
-### Claude Code no longer deletes old conversations
-
-Claude Code deletes every conversation older than `cleanupPeriodDays` (30 days
-by default) automatically and silently, and a deleted conversation can no longer
-be reopened with `claude --resume`, even though its handoff survives in git.
-relevio raises the setting to `36500` days (100 years) in your
-`~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`), on **both** channels: the
-deletion runs over every project on the machine, so a project-level value
-would not protect the others. The first session that writes it tells you, with
-the value it had before.
-
-- A whole number of at least `36500` is left as it is. Anything else (absent,
-  lower, `0`, a string such as `"30"`, a fraction) is replaced.
-- The same safeguards as compaction: an invalid or symlinked settings
-  file is never rewritten, and every other key is kept with none of its values
-  printed (only the previous value of the key relevio changes is quoted). It
-  happens only on Claude Code: never on ZCode, nor on a host that loads
-  relevio's hooks without being Claude Code.
-- When several keys need changing (the plugin's first session), they are written
-  together and announced in one notice.
-- A settings file relevio rewrites ends up readable only by you (mode `600`),
-  the safer mode for a file that can hold keys in `env`.
-- **Managed settings win.** If your organization sets `cleanupPeriodDays` in
-  `managed-settings.json`, in `managed-settings.d/`, or from the admin console
-  (cached in `~/.claude/remote-settings.json`), that value applies whatever
-  your own file says. relevio cannot change it, and says so in the notice it
-  gives when it writes the key.
-- Sessions started or last continued in the Claude desktop app are already
-  kept at any age since Claude Code v2.1.248; the risk is terminal and IDE
-  sessions.
-
-This removes the routine 30-day deletion, **not every way a conversation can
-disappear**. Claude Code has an open bug in which transcripts were deleted
-even with the setting at 36500 or higher, apparently around updates and
-restarts ([anthropics/claude-code#41458](https://github.com/anthropics/claude-code/issues/41458)).
-relevio's [encrypted archive](#archiving-every-conversation) keeps a copy
-that Claude Code cannot delete.
-
-Uninstalling leaves the key in place, for the same reason as compaction.
-
-### Who decides when a session ends
-
-The user does. relevio tells the agent, in the injected core, never to write a
-handoff or suggest wrapping up on its own initiative: only when the user asks,
-or when one of relevio's own messages says to in those words. Finishing a task
-is explicitly not a reason.
-
-This is the other half of a lesson learned in v0.20. Naming the close-out
-thresholds up front made agents close at 40-60%, so the thresholds came out of
-the core; but silence about WHEN is not silence about WHO, and agents were
-later observed closing at half a window simply because the work was done. The
-core now says nothing about when a session should end and is explicit about
-whose call it is.
-
-### A restart is not a revisit
-
-A conversation can come back for two opposite reasons, and the host reports
-both as a "resume". One is a session from the archive, reopened to ask about
-it: it was closed near the top of its window, and new work would push it into
-auto-compact. The other is a session that was never closed at all, picked up
-again after the app or the computer restarted, possibly at 30% with a task
-half done.
-
-relevio tells them apart by evidence rather than by guessing from the usage: a
-closed session wrote a handoff, and that handoff's `Resume:` field carries the
-session's id. If no handoff names it, the session was never closed, and the
-agent is told to carry on where it stopped instead of sending the user to a new
-session. Only the `Resume:` field counts, so a session merely mentioned in
-another handoff's body is never mistaken for a closed one.
-
-A handoff naming the id is strong evidence, not proof, and it was once treated
-as proof. Two real situations produce it for a session that is still live: a
-handoff written mid-session because the user asked, after which the work went
-on; and a handoff that recorded the wrong id (before v0.24.5 the agent took it
-from the newest transcript in the folder, which is the other conversation
-whenever two are open). Agents restarted after a reboot were told they were in
-the archive and stopped working. So relevio now names the handoff it found and
-lets the agent decide, since only the agent can see its own conversation: if it
-ends with that handoff, it is the archive; if work went on after it, or the
-handoff describes work this conversation never did, it is a restart, and the
-agent says so in one line and carries on. Erring towards "restart" is the cheap
-mistake: the context reports still guard a window that really is full.
-
-The search covers every branch, not only the current checkout, because a
-handoff lives on the branch that wrote it and `/revisit` gives you a resume
-command you will usually run from main. A handoff written but not yet
-committed counts too.
-
-"Carry on" is about the resume, not the window: relevio's start-up message
-cannot see how full the context is, so it only says that being resumed is no
-reason to leave. If the window really is nearly full, the context reports say
-so, and they have the last word.
-
-### Asking for a handoff in plain words
-
-The handoff procedure lives in the `/handoff` command, so an agent only has it
-when the command runs. A user who says "write the handoff" in chat would
-otherwise get one improvised from memory, in the wrong format. The injected
-core therefore tells the agent where the command file is, and to invoke it, or
-read it, rather than improvise. The rule about who decides is unchanged: this
-only applies once the user has asked.
-
-### What the agent does instead of closing
-
-Forbidding the unasked handoff leaves a hole where the agent's next move should
-be, so the core fills it: when a task is done and nothing else was asked, the
-agent reports rather than ending anything. A short scannable recap, a small
-table or a few bullets, never prose:
-
-| | |
-|---|---|
-| **Done** | what was finished, and whether it was actually verified or only written |
-| **Pending** | what is left, including anything postponed or skipped, which never disappears silently |
-| **Needs from you** | any decision or information it is blocked on, as clear options with the one it would pick |
-
-Then it proposes the next step and waits. It is a map, not a report, and it
-scales to the work: one line is the right size for a small change.
-
-### Who is reading
-
-relevio tells the agent, once per session, that the person reading may not be a
-developer: define a technical term the first time a session uses it, in half a
-sentence, then use it normally; and when asking the user to choose, say which
-option you would pick and why. That is the whole rule. It is one line in the
-injected core rather than explanations sprinkled through every command, because
-the agent already knows how to explain things and only needs to be told that it
-should.
-
-### Text written by other people
-
-relevio reads other people's writing on purpose: every handoff on every
-branch, so anyone who can push a branch to a shared repository can put text in
-front of your agent at its next `/kickoff`. Handoffs exist to carry
-instructions (the pending work), so relevio does not treat them as inert data.
-It narrows what that text can do instead:
-
-- **Suspicious requests go to the user.** The core tells the agent to follow a
-  handoff's pending work as usual, but to quote and ask about anything
-  suspicious first: sending data outside the project, running downloaded
-  code, changing permissions, hooks or settings, turning off a check, deleting
-  beyond the task, or text addressed to the agent to override its rules.
-- **No shell syntax in filenames.** A handoff filename may hold only letters,
-  digits, `.`, `_` and `-` after its date, because the kickoff reads a
-  handoff by name in a shell command. Anything else fails the index loudly.
-- **No hidden text.** Bidirectional controls, zero-width spaces, Unicode tag
-  characters and control characters are refused anywhere in a handoff,
-  header or body: they can show a human reviewer one thing while the model
-  reads another. Zero-width joiners stay allowed, since emoji need them.
-- **Errors never echo.** A malformed header is reported by file, line and
-  field, never by repeating the offending value, so a planted line cannot
-  reach the agent in the voice of relevio's own tooling.
-- **Commands are rebuilt, not copied.** `/revisit` builds `claude --resume`
-  from the session id alone; the version check in `/kickoff` lets through
-  only a bare `X.Y.Z` from the network.
-
-What this does not cover is inherent to any plugin: whoever controls this
-repository controls the code that runs on every tool call of every install.
-The defence there is the maintainer's GitHub account, and on your side,
-reading what an update changes before taking it.
-
-## Agent operators: when the "user" is itself an agent
-
-The framework also works when Claude Code is driven not by a human but by
-another agent (an operator running Claude Code on a VPS as if it were the
-user). The cycle is unchanged; the operator plays the human role:
-
-- It must drive an interactive Claude Code session (a PTY or tmux pane), so
-  slash commands like `/kickoff`, `/handoff` and `/rename` work. The context
-  hook itself also fires in non-interactive runs.
-- The close-out instructions the inner agent produces are for the operator to
-  EXECUTE, not display: send `/rename <Session name>`, close the session,
-  open a new one, send `/kickoff`. `/handoff` says this explicitly, so the
-  inner agent knows its "user" may be an operator.
-- The operator's uppercase name (e.g. `HERMES`) is the `Dev:` in handoff
-  headers, which keeps human and agent sessions distinguishable in the index.
-- The operator answers the inner agent's questions (branch choice, unclear
-  state) exactly as a human would; if it cannot answer, it should stop and
-  escalate to its own owner rather than guess.
 
 ## Tests
 

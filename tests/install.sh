@@ -492,6 +492,12 @@ rm -rf "$lnk"
 # at the very start of a session: the stretch where agents, holding no number
 # at all, started rationing their work for fear of the window.
 first="$(cw 30000 first0 claude-opus-5)"
+# The README's "What you will see" shows this first report: same words, any
+# numbers (it is wrapped across lines there), so it cannot drift from the hook.
+norm() { tr -s ' \n' ' ' | sed -E 's/[0-9]+/N/g; s/^ //; s/ $//'; }
+readme_report="$(awk '/^CONTEXT: /{f=1} f&&/^```/{exit} f' "$REPO/README.md" | norm)"
+check "README: its sample context report is the hook's real first report" \
+  "$( [ -n "$readme_report" ] && [ "$readme_report" = "$(printf '%s' "$first" | norm)" ] && echo same)" "same"
 check "context-warn: the first tool call gets a report even below 10%" \
   "$(contains "$first" 'This is your first report')" "yes"
 check "context-warn: ... with a real number, not a vague reassurance" \
@@ -987,10 +993,29 @@ for f in commands/handoff.md templates/handoff.md; do
     "$(contains "$(cat "$REPO/$f")" 'Finishing a task is not one of those')" "yes"
 done
 
-check "README: documents the injected messages" \
-  "$(grep -c 'What relevio says to the agent' "$REPO/README.md")" "1"
-check "README: documents the lane board and the trace" \
-  "$(grep -c 'One lane per branch, and a board for the team' "$REPO/README.md")" "1"
+# The reference and the team guide live in docs/, linked from the README.
+check "docs: the reference documents the injected messages" \
+  "$(grep -c 'What relevio says to the agent' "$REPO/docs/reference.md")" "1"
+check "docs: the team guide documents the lane board and the trace" \
+  "$(grep -c 'One lane per branch, and a board for the team' "$REPO/docs/teams.md")" "1"
+# The links of the docs, of the README, and the repo URLs inside error
+# messages: tests/check_links.py says what it checks. The split moved sections
+# between files, and a dead link or anchor fails silently on GitHub.
+# A failure reason ends up in a status file kept at 200 characters and in the
+# session-start notice kept at 150: a literal reason longer than that loses
+# its end (the part that says what to do).
+check "archive: every literal failure reason fits the 150-character notice" \
+  "$(grep -ho 'R_ERR="[^"$]*"' "$REPO"/scripts/relevio-archive*.sh | awk '{ l = length($0) - 8; if (l > 150) print l }' | head -1)" ""
+# The README's sample board uses the generator's own header row, so the
+# example cannot show columns the board does not have.
+check "README: its sample board has the generator's exact header" \
+  "$(grep -cxF "$(sed -n "s/^ *echo '\(| Branch | Dev(s) |.*\)'$/\1/p" "$REPO/scripts/relevio-index.sh")" "$REPO/README.md")" "1"
+if command -v python3 >/dev/null 2>&1; then
+  check "docs: every link resolves, every doc is linked from the README" \
+    "$(python3 -I "$REPO/tests/check_links.py" "$REPO")" "ok"
+else
+  echo "  SKIP  docs: links (no python3)"; SKIPS=$((SKIPS + 1))
+fi
 check "README: documents the one-time migration for older installs" \
   "$(grep -c 'Upgrading from v0.21 or older' "$REPO/README.md")" "1"
 check "README: no longer lists relevio.md as an installed file" \
@@ -2734,10 +2759,11 @@ check "README: ... and lists both new files" \
   "$(contains "$rd" '`.claude/hooks/session-end.sh`'):$(contains "$rd" '`.claude/scripts/relevio-archive.sh`')" "yes:yes"
 check "README: ... lists the copy and timestamp files" \
   "$(contains "$rd" '`.claude/scripts/relevio-archive-remote.sh`'):$(contains "$rd" '`.claude/scripts/relevio-archive-stamps.sh`'):$(contains "$rd" '`.claude/scripts/relevio-ots-helper.py`')" "yes:yes:yes"
-check "README: ... documents the copy off this machine, with Drive's least privilege" \
-  "$(contains "$rd" '### A copy off this machine'):$(contains "$rd" 'scope=drive.file'):$(contains "$rd" 'how many bundles there are and how big')" "yes:yes:yes"
-check "README: ... and timestamps, with what a proof does NOT prove" \
-  "$(contains "$rd" '### Timestamps'):$(contains "$rd" 'prove who wrote it, nor that what it says is true')" "yes:yes"
+ad="$(cat "$REPO/docs/archive.md")"
+check "docs/archive.md: documents the copy off this machine, with Drive's least privilege" \
+  "$(contains "$ad" '## A copy off this machine'):$(contains "$ad" 'scope=drive.file'):$(contains "$ad" 'how many bundles there are and how big')" "yes:yes:yes"
+check "docs/archive.md: ... and timestamps, with what a proof does NOT prove" \
+  "$(contains "$ad" '## Timestamps'):$(contains "$ad" 'prove who wrote it, nor that what it says is true')" "yes:yes"
 for f in relevio-archive-remote.sh relevio-archive-stamps.sh relevio-ots-helper.py; do
   check "install.sh: ships $f" "$(grep -c "^SCRIPTS=.*$f" "$REPO/install.sh")" "1"
 done
