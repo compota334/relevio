@@ -987,10 +987,50 @@ for f in commands/handoff.md templates/handoff.md; do
     "$(contains "$(cat "$REPO/$f")" 'Finishing a task is not one of those')" "yes"
 done
 
-check "README: documents the injected messages" \
-  "$(grep -c 'What relevio says to the agent' "$REPO/README.md")" "1"
-check "README: documents the lane board and the trace" \
-  "$(grep -c 'One lane per branch, and a board for the team' "$REPO/README.md")" "1"
+# The reference and the team guide live in docs/, linked from the README.
+check "docs: the reference documents the injected messages" \
+  "$(grep -c 'What relevio says to the agent' "$REPO/docs/reference.md")" "1"
+check "docs: the team guide documents the lane board and the trace" \
+  "$(grep -c 'One lane per branch, and a board for the team' "$REPO/docs/teams.md")" "1"
+check "README: links the three docs it moved its detail to" \
+  "$(for f in docs/reference.md docs/teams.md docs/archive.md; do grep -c "]($f" "$REPO/README.md" | sed 's/^[1-9][0-9]*$/yes/;s/^0$/no/'; done | sort -u)" "yes"
+# Every internal link (a relative file, with or without #anchor) must point at
+# a file that exists and a heading it has: the split moved sections between
+# files, and a dead anchor fails silently on GitHub.
+if command -v python3 >/dev/null 2>&1; then
+  check "docs: every internal link in the README and docs/ resolves" "$(python3 -I - "$REPO" <<'PYLINKS'
+import os, re, sys
+root = sys.argv[1]
+files = ["README.md", "docs/teams.md", "docs/reference.md", "docs/archive.md"]
+def anchors(path):
+    out, fence = set(), False
+    for line in open(path, encoding="utf-8").read().split("\n"):
+        if line.startswith("```"):
+            fence = not fence
+            continue
+        m = None if fence else re.match(r"^#{1,6} (.*)$", line)
+        if m:
+            out.add(re.sub(r"[^\w\- ]", "", m.group(1).strip().lower()).replace(" ", "-"))
+    return out
+bad = []
+for f in files:
+    text = open(os.path.join(root, f), encoding="utf-8").read()
+    for m in re.finditer(r"\]\(([^)\s]+)\)", text):
+        target = m.group(1)
+        if target.startswith(("http://", "https://")):
+            continue
+        path, _, anchor = target.partition("#")
+        full = os.path.normpath(os.path.join(root, os.path.dirname(f), path)) if path else os.path.join(root, f)
+        if not os.path.exists(full):
+            bad.append(f + ": " + target)
+        elif anchor and full.endswith(".md") and anchor not in anchors(full):
+            bad.append(f + ": " + target)
+print("ok" if not bad else "broken: " + ", ".join(bad))
+PYLINKS
+)" "ok"
+else
+  echo "  SKIP  docs: internal links (no python3)"; SKIPS=$((SKIPS + 1))
+fi
 check "README: documents the one-time migration for older installs" \
   "$(grep -c 'Upgrading from v0.21 or older' "$REPO/README.md")" "1"
 check "README: no longer lists relevio.md as an installed file" \
@@ -2734,10 +2774,11 @@ check "README: ... and lists both new files" \
   "$(contains "$rd" '`.claude/hooks/session-end.sh`'):$(contains "$rd" '`.claude/scripts/relevio-archive.sh`')" "yes:yes"
 check "README: ... lists the copy and timestamp files" \
   "$(contains "$rd" '`.claude/scripts/relevio-archive-remote.sh`'):$(contains "$rd" '`.claude/scripts/relevio-archive-stamps.sh`'):$(contains "$rd" '`.claude/scripts/relevio-ots-helper.py`')" "yes:yes:yes"
-check "README: ... documents the copy off this machine, with Drive's least privilege" \
-  "$(contains "$rd" '### A copy off this machine'):$(contains "$rd" 'scope=drive.file'):$(contains "$rd" 'how many bundles there are and how big')" "yes:yes:yes"
-check "README: ... and timestamps, with what a proof does NOT prove" \
-  "$(contains "$rd" '### Timestamps'):$(contains "$rd" 'prove who wrote it, nor that what it says is true')" "yes:yes"
+ad="$(cat "$REPO/docs/archive.md")"
+check "docs/archive.md: documents the copy off this machine, with Drive's least privilege" \
+  "$(contains "$ad" '## A copy off this machine'):$(contains "$ad" 'scope=drive.file'):$(contains "$ad" 'how many bundles there are and how big')" "yes:yes:yes"
+check "docs/archive.md: ... and timestamps, with what a proof does NOT prove" \
+  "$(contains "$ad" '## Timestamps'):$(contains "$ad" 'prove who wrote it, nor that what it says is true')" "yes:yes"
 for f in relevio-archive-remote.sh relevio-archive-stamps.sh relevio-ots-helper.py; do
   check "install.sh: ships $f" "$(grep -c "^SCRIPTS=.*$f" "$REPO/install.sh")" "1"
 done
