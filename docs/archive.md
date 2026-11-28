@@ -8,6 +8,12 @@ relevio keeps an **encrypted copy of every conversation** of this machine in
 `~/.relevio/` (or `$RELEVIO_HOME`), outside every repository, and can put a
 lost one back so `claude --resume` opens it again.
 
+**You need** [age](https://age-encryption.org) (Linux: `sudo apt install age`,
+macOS: `brew install age`). The copy off this machine also needs `rclone`
+(Linux: `sudo apt install rclone`, macOS: `brew install rclone`), and
+timestamps need `python3`. A missing one is named, with its install command,
+when the command that needs it runs.
+
 - **When:** each session is archived as it ends (the `SessionEnd` hook), and
   every session start sweeps its repository in the background, including the
   folders of its worktrees, so a session whose end was missed is caught at

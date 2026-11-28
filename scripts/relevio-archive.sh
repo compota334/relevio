@@ -200,7 +200,7 @@ find_deps() {
   local t missing=""
   for t in age age-keygen jq tar gzip; do command -v "$t" >/dev/null 2>&1 || missing="$missing $t"; done
   sha_tool >/dev/null || missing="$missing sha256sum"
-  [ -z "$missing" ] || die "missing:$missing. On Ubuntu: sudo apt install age jq (tar, gzip and sha256sum come with the system)."
+  [ -z "$missing" ] || die "missing:$missing. Linux: sudo apt install age jq. macOS: brew install age jq. (tar, gzip and sha256sum come with the system.)"
 }
 config_get() { [ -r "$RH/config" ] || return 0; sed -n "s/^$1=//p" "$RH/config" | head -1; }
 config_set() {  # <key> <value>: one line per key, rewritten through a temp file

@@ -37,6 +37,16 @@
 # Subagents are untouched: SessionStart fires for the main session only
 # (subagent spawns emit SubagentStart, which relevio does not hook), and the
 # messages carry a defensive line anyway. Requires jq.
+
+# Without jq nothing below can run, and a failing hook writes only to its own
+# stderr, which nobody reads: the agent would get no cycle and no context
+# reports, in silence. So this one message is built by hand: fixed text with
+# no quote or backslash inside, valid JSON as written.
+if ! command -v jq >/dev/null 2>&1; then
+  cat >/dev/null
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"relevio is OFF on this machine: the program jq is missing, and relevio needs it to read what the host sends its hooks. There is no session cycle and there are no context reports until it is installed. Tell the user, in one line, to install it (Linux: sudo apt install jq, macOS: brew install jq) and then open a new session."}}'
+  exit 0
+fi
 INPUT=$(cat)
 SOURCE=$(echo "$INPUT" | jq -r '.source // "startup"')
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')

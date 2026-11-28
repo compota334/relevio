@@ -7,6 +7,11 @@ lost to the next. For Claude Code and ZCode.
 
 ## Quick start
 
+**You need:** Linux or macOS, a project that is a git repository (`git init`
+makes one), and `jq` (Linux: `sudo apt install jq`, macOS: `brew install jq`).
+Without `jq` relevio cannot read what Claude Code sends it, and says so at
+the start of every session.
+
 1. Install it as a Claude Code plugin (or with the
    [script installer](#option-2-script-installer-per-repo-team-mode), to
    commit it into one repo for a team):
@@ -393,7 +398,8 @@ opens it again.
 - Optional: an encrypted copy off this machine (a synced folder, Google Drive,
   or an S3 bucket such as Backblaze B2), and timestamps in Bitcoin that prove a
   conversation existed by a given date.
-- Set it up once from your own terminal: `relevio-archive.sh setup` (your AI
+- It needs `age` (Linux: `sudo apt install age`, macOS: `brew install age`).
+  Set it up once from your own terminal: `relevio-archive.sh setup` (your AI
   assistant can open the terminal with the command ready; you type only the
   passphrase).
 
