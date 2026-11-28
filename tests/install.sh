@@ -492,6 +492,12 @@ rm -rf "$lnk"
 # at the very start of a session: the stretch where agents, holding no number
 # at all, started rationing their work for fear of the window.
 first="$(cw 30000 first0 claude-opus-5)"
+# The README's "What you will see" shows this first report: same words, any
+# numbers (it is wrapped across lines there), so it cannot drift from the hook.
+norm() { tr -s ' \n' ' ' | sed -E 's/[0-9]+/N/g; s/^ //; s/ $//'; }
+readme_report="$(awk '/^CONTEXT: /{f=1} f&&/^```/{exit} f' "$REPO/README.md" | norm)"
+check "README: its sample context report is the hook's real first report" \
+  "$( [ -n "$readme_report" ] && [ "$readme_report" = "$(printf '%s' "$first" | norm)" ] && echo same)" "same"
 check "context-warn: the first tool call gets a report even below 10%" \
   "$(contains "$first" 'This is your first report')" "yes"
 check "context-warn: ... with a real number, not a vague reassurance" \
@@ -992,44 +998,18 @@ check "docs: the reference documents the injected messages" \
   "$(grep -c 'What relevio says to the agent' "$REPO/docs/reference.md")" "1"
 check "docs: the team guide documents the lane board and the trace" \
   "$(grep -c 'One lane per branch, and a board for the team' "$REPO/docs/teams.md")" "1"
-check "README: links the three docs it moved its detail to" \
-  "$(for f in docs/reference.md docs/teams.md docs/archive.md; do grep -c "]($f" "$REPO/README.md" | sed 's/^[1-9][0-9]*$/yes/;s/^0$/no/'; done | sort -u)" "yes"
-# Every internal link (a relative file, with or without #anchor) must point at
-# a file that exists and a heading it has: the split moved sections between
-# files, and a dead anchor fails silently on GitHub.
+# The links of the docs, of the README, and the repo URLs inside error
+# messages: tests/check_links.py says what it checks. The split moved sections
+# between files, and a dead link or anchor fails silently on GitHub.
+# The README's sample board uses the generator's own header row, so the
+# example cannot show columns the board does not have.
+check "README: its sample board has the generator's exact header" \
+  "$(grep -cxF "$(sed -n "s/^ *echo '\(| Branch | Dev(s) |.*\)'$/\1/p" "$REPO/scripts/relevio-index.sh")" "$REPO/README.md")" "1"
 if command -v python3 >/dev/null 2>&1; then
-  check "docs: every internal link in the README and docs/ resolves" "$(python3 -I - "$REPO" <<'PYLINKS'
-import os, re, sys
-root = sys.argv[1]
-files = ["README.md", "docs/teams.md", "docs/reference.md", "docs/archive.md"]
-def anchors(path):
-    out, fence = set(), False
-    for line in open(path, encoding="utf-8").read().split("\n"):
-        if line.startswith("```"):
-            fence = not fence
-            continue
-        m = None if fence else re.match(r"^#{1,6} (.*)$", line)
-        if m:
-            out.add(re.sub(r"[^\w\- ]", "", m.group(1).strip().lower()).replace(" ", "-"))
-    return out
-bad = []
-for f in files:
-    text = open(os.path.join(root, f), encoding="utf-8").read()
-    for m in re.finditer(r"\]\(([^)\s]+)\)", text):
-        target = m.group(1)
-        if target.startswith(("http://", "https://")):
-            continue
-        path, _, anchor = target.partition("#")
-        full = os.path.normpath(os.path.join(root, os.path.dirname(f), path)) if path else os.path.join(root, f)
-        if not os.path.exists(full):
-            bad.append(f + ": " + target)
-        elif anchor and full.endswith(".md") and anchor not in anchors(full):
-            bad.append(f + ": " + target)
-print("ok" if not bad else "broken: " + ", ".join(bad))
-PYLINKS
-)" "ok"
+  check "docs: every link resolves, every doc is linked from the README" \
+    "$(python3 -I "$REPO/tests/check_links.py" "$REPO")" "ok"
 else
-  echo "  SKIP  docs: internal links (no python3)"; SKIPS=$((SKIPS + 1))
+  echo "  SKIP  docs: links (no python3)"; SKIPS=$((SKIPS + 1))
 fi
 check "README: documents the one-time migration for older installs" \
   "$(grep -c 'Upgrading from v0.21 or older' "$REPO/README.md")" "1"

@@ -38,9 +38,9 @@ until then means you have not. Status update, no action needed.
 branch:
 
 ```
-| Branch            | Dev(s) | Last handoff                         | Ahead of main |
-|-------------------|--------|--------------------------------------|---------------|
-| `session-archive` | NICO   | 2026-11-26_relevio-v0250-prueba-...  | 39            |
+| Branch | Dev(s) | Last handoff | Areas | Ahead of main | Note |
+|--------|--------|--------------|-------|---------------|------|
+| `session-archive` | NICO | 2026-11-26_relevio-v0250-prueba-real-con-backblaze-b2.md | .claude-plugin, README.md, VERSION, commands, docs, hooks, +10 more | 39 |  |
 ```
 
 ## What it does
@@ -325,7 +325,7 @@ Handoff rules (the agent gets them from the 80% warning and `/handoff`):
   block (rename the session with `/rename`; open a new one whose first message
   is `/kickoff`). The close-out also names the branch it worked on (see [docs/teams.md](docs/teams.md)).
 
-### Teams
+## Teams
 
 One lane per branch, the board generated from every handoff on every branch,
 the header that is computed instead of typed, the trace of who touched a file,
@@ -333,8 +333,12 @@ and parallel sessions in worktrees: [docs/teams.md](docs/teams.md).
 
 ## How it works inside
 
-How the context hook measures the window, and every message relevio sends the
-agent and when: [docs/reference.md](docs/reference.md).
+[docs/reference.md](docs/reference.md) has the detail: how the context hook
+measures the window, every message relevio sends the agent and when, how
+subagents fit in (they never write handoffs, and the warnings never reach
+them), where a wrong percentage comes from, the compaction and retention
+settings relevio changes, who decides when a session ends, restarts versus
+revisits, and how text written by other people is treated.
 
 ## ZCode (Z.ai) support
 
@@ -366,13 +370,14 @@ The GLM Coding Plan also works in the opposite direction: GLM models plugged
 into CLAUDE CODE itself (via Z.ai's Anthropic-compatible endpoint) are
 recognized by the same window table, with no extra setup.
 
+The measurements behind the port are in
+[docs/2026-08-26_zcode-investigation.md](docs/2026-08-26_zcode-investigation.md).
+
 ## Archiving every conversation
 
-Claude Code keeps each conversation as a plain file in `~/.claude/projects/`,
-and files can still disappear: its own cleanup, a bug, a deleted folder.
-relevio keeps an **encrypted copy of every conversation** of this machine in
-`~/.relevio/` (or `$RELEVIO_HOME`), outside every repository, and can put a
-lost one back so `claude --resume` opens it again.
+relevio keeps an **encrypted copy of every conversation** in `~/.relevio/`,
+outside every repository, and can put a lost one back so `claude --resume`
+opens it again.
 
 - Each session is archived as it ends, and every session start sweeps its
   repository in the background. Both run detached.
@@ -409,30 +414,6 @@ of its context window. The hook fires guard warnings at 85, 90, 95 and 99%;
 the 99% one is a full STOP: the agent must not answer, must warn (in the
 user's language) that one more exchange may fill the window, and must
 wait for explicit confirmation to continue.
-
-## Subagents
-
-Sub-agents (the Task tool) and the session cycle complement each other, and
-they do NOT interfere:
-
-- Subagents have their own separate, ephemeral context windows. Work delegated
-  to them barely consumes the main session's window (only their returned
-  summary enters it), so delegating actually makes sessions last longer.
-- **Subagents never write handoffs.** The handoff documents the main
-  conversation, which already received every subagent's report. A subagent's
-  context is discarded when it finishes and cannot be revisited, so anything
-  important a subagent finds must come back in its summary to the main
-  thread: that is what the handoff (and the archive) preserves.
-- The context hooks do not reach subagents: warnings are injected into the
-  main agent only, so a subagent will never try to close your session.
-
-## Behavior details
-
-Where the context reports come from when a percentage looks wrong, hooks
-without the executable bit, the compaction and retention settings relevio
-changes, who decides when a session ends, restarts versus revisits, and text
-written by other people:
-[docs/reference.md#behavior-details](docs/reference.md#behavior-details).
 
 ## Tests
 

@@ -49,6 +49,22 @@ A marker file in `/tmp` guarantees each band fires only once per session, and
 if one tool call jumps several bands at once, only the most serious one
 speaks, so the agent is nudged, not spammed.
 
+## Subagents
+
+Sub-agents (the Task tool) and the session cycle complement each other, and
+they do NOT interfere:
+
+- Subagents have their own separate, ephemeral context windows. Work delegated
+  to them barely consumes the main session's window (only their returned
+  summary enters it), so delegating actually makes sessions last longer.
+- **Subagents never write handoffs.** The handoff documents the main
+  conversation, which already received every subagent's report. A subagent's
+  context is discarded when it finishes and cannot be revisited, so anything
+  important a subagent finds must come back in its summary to the main
+  thread: that is what the handoff (and the archive) preserves.
+- The context hooks do not reach subagents: warnings are injected into the
+  main agent only, so a subagent will never try to close your session.
+
 ## What relevio says to the agent (and when)
 
 Every message relevio injects, in firing order. The exact texts live in the
@@ -274,7 +290,7 @@ injected core rather than explanations sprinkled through every command, because
 the agent already knows how to explain things and only needs to be told that it
 should.
 
-### Text written by other people
+## Security: text written by other people
 
 relevio reads other people's writing on purpose: every handoff on every
 branch, so anyone who can push a branch to a shared repository can put text in
