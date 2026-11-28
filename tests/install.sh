@@ -31,10 +31,15 @@ export CLAUDE_CONFIG_DIR
 # the developer's live sessions, and MARKS names where they land.
 XDG_CACHE_HOME="$(mktemp -d)"
 export XDG_CACHE_HOME
+# The session archive lives in ~/.relevio unless RELEVIO_HOME says otherwise:
+# never the developer's real archive.
+RELEVIO_HOME="$(mktemp -d)/relevio"
+export RELEVIO_HOME
 MARKS="$XDG_CACHE_HOME/relevio/markers"
 INSTALLER="$REPO/install.sh"
 UNINSTALLER="$REPO/uninstall.sh"
 FAILURES=0
+SKIPS=0
 
 pass() { echo "  PASS  $1"; }
 failed() { echo "  FAIL  $1"; FAILURES=$((FAILURES + 1)); }
@@ -1548,7 +1553,7 @@ mv "$zc/scripts-gone" "$zc/scripts"
 # The plugin manifest must run the hooks through an interpreter, or ZCode's
 # stripped executable bit makes every hook fail with permission denied.
 check "plugin manifest: hooks are invoked through bash, not executed directly" \
-  "$(grep -c '"command": "bash ' "$REPO/hooks/hooks.json")" "2"
+  "$(grep -c '"command": "bash ' "$REPO/hooks/hooks.json")" "3"
 # The commands' fallback must not test for executability either.
 check "kickoff fallback: it tests readability, not the executable bit" \
   "$(grep -c '\[ -r "\$c/relevio-index.sh" \]' "$REPO/commands/kickoff.md")" "1"
@@ -1929,6 +1934,15 @@ check "header: a merge you made by pulling is not one of your commits" \
   "$(printf '%s\n' "$hm14" | grep '^Commits:')" "Commits: $first14..$last14"
 check "header: ... and the files it brought in are not your Areas" \
   "$(printf '%s\n' "$hm14" | grep '^Areas:')" "Areas: b, src/a"
+# Main moved on with a commit under YOUR email (another session of yours),
+# merged into this branch: it is main's, not this session's.
+git -C "$d14" checkout -q main
+echo m > "$d14/frommain"; git -C "$d14" add -A >/dev/null 2>&1; git -C "$d14" commit -qm other-session >/dev/null 2>&1
+git -C "$d14" checkout -q feat14
+git -C "$d14" merge -q --no-ff --no-edit main >/dev/null 2>&1
+hn14="$( (cd "$d14" && bash "$HDR" "$id14") 2>/dev/null )"
+check "header: your own commit that came in from main is not this session's" \
+  "$(printf '%s\n' "$hn14" | grep -E '^(Commits|Areas):' | tr '\n' ' ')" "Commits: $first14..$last14 Areas: b, src/a "
 # A start commit that no longer exists is a missing boundary: say so.
 printf '%s %s\n' "$(cut -d' ' -f1 "$rec14")" 0123456789abcdef0123456789abcdef01234567 > "$rec14.gone"
 cp "$rec14" "$rec14.keep"; cp "$rec14.gone" "$rec14"
@@ -2104,6 +2118,944 @@ check "install: ... naming relevio and what is missing" \
 check "install: ... and installs nothing" "$(exists "$d7/.claude")" "no"
 rm -rf "$c2" "$d7"
 
+# --- Case 14: the session archive, setup / status / off ---------------------
+# relevio-archive.sh keeps an age-encrypted copy of every conversation. Setup
+# asks for a passphrase, which age reads only from a terminal, so these tests
+# run under RELEVIO_TEST_INSECURE_KEYS, honoured only for a throwaway home.
+ARC="$REPO/scripts/relevio-archive.sh"
+check "install: the archive script is shipped" \
+  "$(grep -c '^SCRIPTS=.*relevio-archive.sh' "$REPO/install.sh")" "1"
+# The screen boxes keep whole corners under a non-UTF-8 locale (a terminal with
+# LANG unset): slicing a string of corners would cut each 3-byte one in half.
+arc_box="$(LC_ALL=C bash -c 'C_CYAN= C_YELLOW= C_B= C_0=; eval "$(sed -n "/^UI_LINE=/,/^ui_keybox()/p" "$1")"; ui_title T; ui_keybox K' _ "$ARC")"
+check "archive: screen boxes keep whole corners under LC_ALL=C" \
+  "$(for k in ╭ ╮ ╰ ╯ ┌ ┐ └ ┘; do contains "$arc_box" "$k"; done | sort -u)" "yes"
+arc_t="$(mktemp -d)"
+# Setup and status refuse what could leak or be committed, with or without age.
+check "archive: setup refuses without a terminal, and creates nothing" \
+  "$(contains "$(RELEVIO_HOME="$arc_t/h0" bash "$ARC" setup </dev/null 2>&1)" 'runs only in your own terminal'):$(yesno "$([ -e "$arc_t/h0/keys" ]; echo $?)")" "yes:no"
+check "archive: the test gate is refused for the real home" \
+  "$(contains "$(env -u RELEVIO_HOME RELEVIO_TEST_INSECURE_KEYS=1 bash "$ARC" setup </dev/null 2>&1)" 'tests only')" "yes"
+git -C "$arc_t" init -q 2>/dev/null
+check "archive: a home inside a git work tree is refused for writing" \
+  "$(contains "$(RELEVIO_HOME="$arc_t/inrepo" bash "$ARC" backfill 2>&1)" 'inside a git work tree')" "yes"
+# ... but off still works there, so a dotfiles user can silence the notice.
+RELEVIO_HOME="$arc_t/inrepo" bash "$ARC" off >/dev/null 2>&1
+check "archive: off works in a home inside a git work tree, and silences the notice" \
+  "$(yesno "$([ -e "$arc_t/inrepo/off" ]; echo $?)"):$(RELEVIO_HOME="$arc_t/inrepo" bash "$ARC" notice)" "yes:"
+rm -rf "$arc_t/.git" "$arc_t/inrepo"
+mkdir -p "$arc_t/real"; ln -s "$arc_t/real" "$arc_t/link"
+check "archive: a symlinked home is refused" \
+  "$(contains "$(RELEVIO_HOME="$arc_t/link" bash "$ARC" status 2>&1)" 'symbolic link')" "yes"
+out="$(RELEVIO_HOME="$arc_t/h1" bash "$ARC" status 2>&1)"; rc=$?
+check "archive: status before setup says NOT SET UP and exits 1" \
+  "$rc:$(contains "$out" 'NOT SET UP')" "1:yes"
+RELEVIO_HOME="$arc_t/h1" bash "$ARC" off >/dev/null
+check "archive: off is a file, and on removes it" \
+  "$(yesno "$([ -e "$arc_t/h1/off" ]; echo $?)"):$(RELEVIO_HOME="$arc_t/h1" bash "$ARC" on >/dev/null; yesno "$([ -e "$arc_t/h1/off" ]; echo $?)")" "yes:no"
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  age-keygen 2>/dev/null > "$arc_t/rec.key"
+  arcg() {  # gated run in home $1
+    local h="$1"; shift
+    RELEVIO_HOME="$h" RELEVIO_TEST_INSECURE_KEYS=1 RELEVIO_TEST_RECOVERY_IDENTITY="$arc_t/rec.key" bash "$ARC" "$@"
+  }
+  out="$(printf '\nmy-pass-phrase\nAGE-SECRET-KEY-1QQQ\n' | arcg "$arc_t/h2" setup 2>&1)"
+  check "archive: a wrong recovery key at setup says what was pasted instead" \
+    "$(contains "$out" 'Nothing was pasted'):$(contains "$out" 'your PASSPHRASE, not the recovery key'):$(contains "$out" 'not the one shown above')" "yes:yes:yes"
+  printf 'wrong\nwrong\nwrong\n' | arcg "$arc_t/h2" setup >/dev/null 2>&1; rc=$?
+  check "archive: a recovery key typed wrong three times sets nothing up" \
+    "$rc:$(yesno "$([ -e "$arc_t/h2/keys" ]; echo $?)")" "2:no"
+  out="$(grep '^AGE-SECRET-KEY' "$arc_t/rec.key" | tr '[:upper:]' '[:lower:]' | arcg "$arc_t/h2" setup 2>&1)"; rc=$?
+  check "archive: setup succeeds when the recovery key is typed back (case-insensitive)" "$rc" "0"
+  check "archive: ... with two recipients, a canary and a config" \
+    "$(grep -c '^age1' "$arc_t/h2/keys/recipients.txt"):$(head -1 "$arc_t/h2/keys/canary.age"):$(grep -c '^format=1$' "$arc_t/h2/config")" "2:age-encryption.org/v1:1"
+  check "archive: ... the home and the keys readable only by you" \
+    "$(ls -ld "$arc_t/h2" | cut -c1-10):$(ls -l "$arc_t/h2/keys" | awk 'NR > 1 { print substr($1, 1, 10) }' | sort -u | tr '\n' ' ')" "drwx------:-rw------- "
+  check "archive: ... and the recovery secret is not stored anywhere" \
+    "$(grep -rl "$(grep '^AGE-SECRET-KEY' "$arc_t/rec.key")" "$arc_t/h2" | grep -c .)" "0"
+  mkdir -p "$arc_t/sb/projects/-sb"; printf '{"cwd":"/tmp","type":"user"}\n' > "$arc_t/sb/projects/-sb/0000000a-aaaa-4bbb-8ccc-dddddddddddd.jsonl"
+  touch -d '1 hour ago' "$arc_t/sb/projects/-sb/"*.jsonl 2>/dev/null
+  out="$(grep '^AGE-SECRET-KEY' "$arc_t/rec.key" | CLAUDE_CONFIG_DIR="$arc_t/sb" RELEVIO_TEST_SETUP_BACKFILL=yes RELEVIO_TEST_QUIET_MIN=0 arcg "$arc_t/hsb" setup 2>&1)"
+  check "archive: setup archives the conversations already there by itself, leaving nothing to run" \
+    "$(contains "$out" 'archived 1'):$(contains "$out" 'All done'):$(grep -c '^active' "$arc_t/hsb/index.tsv")" "yes:yes:1"
+  check "archive: setup names both keys, says what each looks like and how to save it" \
+    "$(contains "$out" 'PASSPHRASE (your everyday key)'):$(contains "$out" 'RECOVERY KEY (your emergency key)'):$(contains "$out" 'THOSE WORDS ARE YOUR PASSPHRASE'):$(contains "$out" 'relevio archive recovery key')" "yes:yes:yes:yes"
+  check "archive: setup says how to paste on Linux, macOS and Windows" \
+    "$(contains "$out" 'Ctrl+Shift+V'):$(contains "$out" 'Cmd+V'):$(contains "$out" 'Windows Terminal Ctrl+V'):$(contains "$out" 'Nothing appears while you paste')" "yes:yes:yes:yes"
+  check "archive: setup ends with when each key is used and how to test them" \
+    "$(contains "$out" 'emergency only, with --recovery'):$(contains "$out" 'keys check --recovery')" "yes:yes"
+  check "archive: ... and says the passphrase is not tested yet, so keys check is the proof" \
+    "$(contains "$out" 'has not tested it')" "yes"
+  # The real key ceremony, with real age in a pseudo-terminal and no test gate:
+  # the passphrase is asked twice (age's own prompts), never a third time.
+  if command -v python3 >/dev/null 2>&1; then
+    printf 'pty-test-passphrase\n' > "$arc_t/pass"
+    ptyd() { RELEVIO_HOME="$arc_t/hreal" CLAUDE_CONFIG_DIR="$arc_t/creal" python3 "$REPO/tests/pty-drive.py" --pass-file "$arc_t/pass" --log "$arc_t/pty.log" --timeout 60 -- bash "$ARC" "$@" | tail -1; }
+    check "archive: real setup asks the passphrase only twice and the recovery key once" \
+      "$(ptyd setup)" "pty-drive: exit=0 passphrase_prompts=2 recovery_prompts=1"
+    check "archive: ... and that passphrase opens the archive afterwards (keys check)" \
+      "$(ptyd keys check)" "pty-drive: exit=0 passphrase_prompts=1 recovery_prompts=0"
+  else
+    echo "  SKIP  archive: real key ceremony in a pseudo-terminal (no python3)"; SKIPS=$((SKIPS + 1))
+  fi
+  out="$(arcg "$arc_t/h2" guide 2>&1)"; rc=$?
+  check "archive: guide runs and separates what the assistant may run from what only the user types" \
+    "$rc:$(contains "$out" 'YOU MAY RUN THESE YOURSELF'):$(contains "$out" 'ONLY THE USER TYPES THESE'):$(contains "$out" 'NEVER read that terminal while setup runs')" "0:yes:yes:yes"
+  check "archive: guide names where the archive and the keys live" \
+    "$(contains "$out" "$arc_t/h2/archive/<project folder>"):$(contains "$out" 'stored NOWHERE')" "yes:yes"
+  check "archive: a second setup is refused" \
+    "$(contains "$(grep '^AGE-SECRET-KEY' "$arc_t/rec.key" | arcg "$arc_t/h2" setup 2>&1)" 'already set up')" "yes"
+  out="$(arcg "$arc_t/h2" status 2>&1)"; rc=$?
+  check "archive: status names the test keys as insecure and is not healthy" \
+    "$rc:$(contains "$out" 'INSECURE TEST KEYS')" "1:yes"
+  check "archive: ... and shows the recipients by prefix" "$(contains "$out" '2 recipient(s): age1')" "yes"
+  sed -i 's|^age=.*|age=/nonexistent/age|' "$arc_t/h2/config"
+  check "archive: an age recorded at a path that is gone fails loud" \
+    "$(contains "$(arcg "$arc_t/h2" status 2>&1)" 'age is missing at')" "yes"
+else
+  echo "  SKIP  archive: setup and status with real keys (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+rm -rf "$arc_t"
+
+# --- Case 15: the session archive, sync / backfill / list -------------------
+# Archiving encrypts each transcript (with its sidecar) to the public keys
+# only, so no run ever holds a secret. These tests run on throwaway project
+# folders under a throwaway CLAUDE_CONFIG_DIR.
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  ab="$(mktemp -d)"; abh="$ab/home"; abc="$ab/cc"; abp="$abc/projects"
+  age-keygen 2>/dev/null > "$ab/rec.key"
+  arcb() {  # gated run against this case's home and projects
+    RELEVIO_HOME="$abh" CLAUDE_CONFIG_DIR="$abc" RELEVIO_TEST_INSECURE_KEYS=1 \
+      RELEVIO_TEST_RECOVERY_IDENTITY="$ab/rec.key" RELEVIO_TEST_STABLE_WAIT=0 \
+      RELEVIO_TEST_LOCK_WAIT=4 bash "$ARC" "$@"
+  }
+  s1=11111111-0000-4000-8000-000000000001; s2=22222222-0000-4000-8000-000000000002
+  s3=33333333-0000-4000-8000-000000000003; s4=44444444-0000-4000-8000-000000000004
+  mkdir -p "$abp/-pa/$s1/subagents" "$abp/-pa/memory" "$abp/-pb"
+  printf '{"cwd":"/w/a b (x)","version":"2.1.1","m":"PLAIN-MARKER-1"}\n' > "$abp/-pa/$s1.jsonl"
+  echo '{"t":"PLAIN-MARKER-2"}' > "$abp/-pa/$s1/subagents/x.jsonl"
+  printf '{"cwd":"/w/b","version":"2.1.2"}\n' > "$abp/-pb/$s2.jsonl"
+  printf '{"cwd":"/w/b"}\n' > "$abp/-pb/$s3.jsonl"
+  echo '{"v":1,"reason":"delete"}' > "$abp/-pb/$s3.desktop-released.json"
+  echo m > "$abp/-pa/memory/notes.md"; echo '{}' > "$abp/-pa/sessions-index.json"
+  touch -d '1 hour ago' $(find "$abp" -type f)
+  grep '^AGE-SECRET-KEY' "$ab/rec.key" | arcb setup >/dev/null 2>&1
+  out="$(arcb backfill 2>&1)"; rc=$?
+  check "archive: backfill archives the sessions and skips a desktop deletion" \
+    "$rc:$(contains "$out" 'archived 2 skipped 1 deferred 0 failed 0')" "0:yes"
+  check "archive: no transcript text is ever written unencrypted" \
+    "$(grep -rl 'PLAIN-MARKER' "$abh" | grep -c .)" "0"
+  check "archive: no secret key on disk but the gated test key" \
+    "$(grep -rl 'AGE-SECRET-KEY' "$abh" | sed "s|$abh/||")" "keys/main.key"
+  check "archive: every bundle is an age file" \
+    "$(find "$abh/archive" -name '*.age' -exec head -1 {} \; | sort -u)" "age-encryption.org/v1"
+  check "archive: a bundle holds the manifest, the transcript and its sidecar" \
+    "$(age -d -i "$abh/keys/main.key" "$abh/archive/-pa/$s1.tgz.age" | tar -tzf - | tr '\n' ' ')" \
+    "MANIFEST $s1.jsonl $s1/subagents/x.jsonl "
+  check "archive: memory/, sessions-index.json and the desktop-released file are never archived" \
+    "$(find "$abh/archive" -type f | sed 's|.*/||' | sort | tr '\n' ' ')" "$s1.tgz.age $s2.tgz.age "
+  cp "$abh/index.tsv" "$ab/idx1"
+  arcb sync --all >/dev/null 2>&1
+  check "archive: an unchanged transcript makes no new bundle and leaves the index alone" \
+    "$(cmp -s "$abh/index.tsv" "$ab/idx1" && echo same):$(find "$abh/archive" -type f | grep -c .)" "same:2"
+  check "archive: list reads the index, filtered by id prefix" \
+    "$(arcb list 1111 | tail -n +2 | awk '{ print $1, $5 }')" "$s1 active"
+  # Growth that only appends replaces the bundle; anything else keeps the old one.
+  echo '{"more":1}' >> "$abp/-pa/$s1.jsonl"; touch -d '1 hour ago' "$abp/-pa/$s1.jsonl"
+  arcb sync --folder -pa >/dev/null 2>&1
+  check "archive: an appended transcript replaces its bundle, one active line" \
+    "$(ls "$abh/archive/-pa" | grep -c .):$(awk -F'\t' -v s="$s1" '$2 == s && $1 == "active"' "$abh/index.tsv" | grep -c .):$(awk -F'\t' -v s="$s1" '$2 == s && $1 == "active" { print $6 }' "$abh/index.tsv")" \
+    "1:1:$(stat -c %s "$abp/-pa/$s1.jsonl")"
+  printf '{"cwd":"/w/a b (x)","rewritten":1}\n' > "$abp/-pa/$s1.jsonl"; touch -d '1 hour ago' "$abp/-pa/$s1.jsonl"
+  arcb sync --folder -pa >/dev/null 2>&1
+  check "archive: a rewritten transcript keeps the old bundle as a generation" \
+    "$(ls "$abh/archive/-pa" | grep -c "^$s1\.2[0-9T]*Z\.tgz\.age$"):$(awk -F'\t' -v s="$s1" '$2 == s { print $1 }' "$abh/index.tsv" | sort | tr '\n' ' ')" \
+    "1:active superseded "
+  # A transcript still being written waits for a later run.
+  echo y >> "$abp/-pb/$s2.jsonl"
+  arcb sync --folder -pb >/dev/null 2>&1
+  check "archive: a transcript touched just now is deferred" "$(sed -n 's/^counts //p' "$abh/status")" "archived 0 skipped 1 deferred 1 failed 0"
+  touch -d '1 hour ago' "$abp/-pb/$s2.jsonl"
+  # D5: a session deleted in the desktop app after it was archived.
+  echo '{"v":1,"reason":"delete"}' > "$abp/-pb/$s2.desktop-released.json"
+  arcb sync --folder -pb >/dev/null 2>&1
+  check "archive: a session deleted in Claude after archiving is marked, its bundle kept" \
+    "$(awk -F'\t' -v s="$s2" '$2 == s { print $1 }' "$abh/index.tsv"):$(yesno "$([ -f "$abh/archive/-pb/$s2.tgz.age" ]; echo $?)")" "deleted-in-claude:yes"
+  check "archive: ... and status counts it" "$(contains "$(arcb status 2>&1)" '1 deleted in Claude, kept')" "yes"
+  # Forgotten ids are never archived again.
+  printf '{"cwd":"/w/b"}\n' > "$abp/-pb/$s4.jsonl"; touch -d '1 hour ago' "$abp/-pb/$s4.jsonl"
+  printf '%s\t2026-11-07\n' "$s4" > "$abh/forgotten.tsv"
+  arcb sync --folder -pb >/dev/null 2>&1
+  check "archive: a forgotten session is not archived again" \
+    "$(yesno "$([ -e "$abh/archive/-pb/$s4.tgz.age" ]; echo $?)")" "no"
+  : > "$abh/forgotten.tsv"
+  # A bundle with no index line is never overwritten.
+  echo orphan > "$abh/archive/-pb/$s4.tgz.age"
+  arcb sync --folder -pb >/dev/null 2>&1
+  check "archive: a bundle without an index line is kept as an orphan generation" \
+    "$(ls "$abh/archive/-pb" | grep -c "^$s4\.orphan-.*\.tgz\.age$"):$(head -1 "$abh/archive/-pb/$s4.tgz.age")" "1:age-encryption.org/v1"
+  # The lock: a live holder blocks a sweep quietly; a dead one is taken over.
+  mkdir "$abh/lock"; sleep 30 & lp=$!; echo "$lp" > "$abh/lock/pid"
+  echo z >> "$abp/-pb/$s4.jsonl"; touch -d '1 hour ago' "$abp/-pb/$s4.jsonl"
+  cp "$abh/index.tsv" "$ab/idx2"
+  arcb sync --folder -pb >/dev/null 2>&1; rc=$?
+  check "archive: a live lock makes a sweep exit quietly, changing nothing" \
+    "$rc:$(cmp -s "$abh/index.tsv" "$ab/idx2" && echo same)" "0:same"
+  kill "$lp" 2>/dev/null; wait "$lp" 2>/dev/null
+  arcb sync --folder -pb >/dev/null 2>&1
+  check "archive: a lock whose process is gone is taken over" \
+    "$(cmp -s "$abh/index.tsv" "$ab/idx2" && echo same || echo changed):$(yesno "$([ -d "$abh/lock" ]; echo $?)")" "changed:no"
+  # --repo: every folder of the repository and its worktrees, removed ones too.
+  rr="$ab/repo"; mkdir -p "$rr"; git -C "$rr" init -q; git -C "$rr" -c user.email=t@t -c user.name=t commit -q --allow-empty -m i
+  git -C "$rr" worktree add -q "$rr/.claude/worktrees/wt" 2>/dev/null
+  s5=55555555-0000-4000-8000-000000000005; s6=66666666-0000-4000-8000-000000000006; s7=77777777-0000-4000-8000-000000000007
+  mkdir -p "$abp/-r-main" "$abp/-r-wt" "$abp/-r-gone" "$abp/-other"
+  printf '{"cwd":"%s"}\n' "$rr" > "$abp/-r-main/$s5.jsonl"
+  printf '{"cwd":"%s/.claude/worktrees/wt"}\n' "$rr" > "$abp/-r-wt/$s6.jsonl"
+  printf '{"cwd":"%s/.claude/worktrees/removed-long-ago"}\n' "$rr" > "$abp/-r-gone/$s7.jsonl"
+  printf '{"cwd":"/elsewhere"}\n' > "$abp/-other/$s1.jsonl"
+  touch -d '1 hour ago' $(find "$abp/-r-main" "$abp/-r-wt" "$abp/-r-gone" "$abp/-other" -type f)
+  arcb sync --repo "$rr" >/dev/null 2>&1
+  check "archive: --repo takes the repo, its worktrees and a removed worktree's folder, nothing else" \
+    "$(ls -d "$abh"/archive/-r-* "$abh"/archive/-other 2>/dev/null | sed 's|.*/||' | tr '\n' ' ')" "-r-gone -r-main -r-wt "
+  arcb sync --repo "$ab/not-a-repo" >/dev/null 2>&1
+  check "archive: --repo on something that is not a repository fails loud" \
+    "$(sed -n 's/^state //p' "$abh/status")" "fail"
+  check "archive: list refuses extra arguments" "$(contains "$(arcb list a b 2>&1)" 'at most one query')" "yes"
+  # A rewritten transcript whose bundle is gone is archived again, with no
+  # index line pointing at a file that does not exist.
+  mv "$abh/archive/-r-main/$s5.tgz.age" "$ab/gone.age"
+  printf '{"cwd":"%s","rewritten":2}\n' "$rr" > "$abp/-r-main/$s5.jsonl"; touch -d '1 hour ago' "$abp/-r-main/$s5.jsonl"
+  arcb sync --folder -r-main >/dev/null 2>&1
+  check "archive: a missing bundle is not recorded as a generation" \
+    "$(awk -F'\t' -v s="$s5" '$2 == s { print $1 }' "$abh/index.tsv" | sort | tr '\n' ' '):$(ls "$abh/archive/-r-main" | grep -c .)" "active :1"
+  # A transcript outside projects/ is an early sign Claude Code changed layout.
+  arcb sync --session "$s5" --transcript "/tmp/elsewhere/$s5.jsonl" >/dev/null 2>&1
+  check "archive: a transcript where relevio does not expect it is reported as a failure" \
+    "$(sed -n 's/^state //p' "$abh/status"):$(contains "$(arcb status 2>&1)" 'not where relevio expects it')" "fail:yes"
+  arcb sync --session "$s5" --transcript "$abp/-r-main/$s5.jsonl" >/dev/null 2>&1
+  check "archive: --session archives that one session and the status recovers" \
+    "$(sed -n 's/^state //p' "$abh/status")" "ok"
+  # Fail loud: a failing age, then an age that is gone. Nothing half-written.
+  printf '#!/bin/sh\nexit 1\n' > "$ab/age-fail"; chmod +x "$ab/age-fail"
+  cp "$abh/config" "$ab/config.ok"; sed -i "s|^age=.*|age=$ab/age-fail|" "$abh/config"
+  echo w >> "$abp/-r-main/$s5.jsonl"; touch -d '1 hour ago' "$abp/-r-main/$s5.jsonl"
+  arcb sync --folder -r-main >/dev/null 2>&1
+  check "archive: a failing age leaves status fail and no temporary file" \
+    "$(sed -n 's/^state //p' "$abh/status"):$(find "$abh/archive" -name '.*tmp*' | grep -c .)" "fail:0"
+  sed -i "s|^age=.*|age=$ab/nowhere/age|" "$abh/config"
+  arcb sync --folder -r-main >/dev/null 2>&1
+  check "archive: an age that is gone fails loud in the status" \
+    "$(sed -n 's/^state //p' "$abh/status"):$(contains "$(sed -n 's/^message //p' "$abh/status")" 'stopped early')" "fail:yes"
+  check "archive: list still works without age (it never decrypts)" \
+    "$(arcb list | grep -c "$s5")" "1"
+  cp "$ab/config.ok" "$abh/config"
+  # backfill: too little disk is refused before anything; progress every 25.
+  check "archive: backfill refuses when the disk is too small" \
+    "$(contains "$(RELEVIO_TEST_FREE_KB=0 arcb backfill 2>&1)" 'not enough free space')" "yes"
+  mkdir -p "$abp/-many"
+  for i in $(seq 10 40); do printf '{"cwd":"/w/m"}\n' > "$abp/-many/$i$i$i$i-0000-4000-8000-0000000000$i.jsonl" 2>/dev/null; done
+  for f in "$abp"/-many/*.jsonl; do mv "$f" "$abp/-many/$(printf '%08d' "$(basename "$f" | cut -c1-2)")-0000-4000-8000-0000000000$(basename "$f" | cut -c1-2).jsonl"; done
+  touch -d '1 hour ago' "$abp"/-many/*.jsonl
+  check "archive: backfill prints its progress" "$(contains "$(arcb backfill 2>&1)" '25 of ')" "yes"
+  rm -rf "$ab"
+else
+  echo "  SKIP  archive: sync, backfill and list (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+
+# --- Case 16: the session archive, restore / keys / forget ------------------
+# Restore puts a session back where claude --resume finds it, only after every
+# file is proven to match what was archived. It needs a key, so it runs only
+# in the user's terminal; these tests use the gated test keys.
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  ar="$(mktemp -d)"; arh="$ar/home"; arc="$ar/cc"; arp="$arc/projects"
+  age-keygen 2>/dev/null > "$ar/rec.key"
+  arcr() {
+    RELEVIO_HOME="$arh" CLAUDE_CONFIG_DIR="$arc" RELEVIO_TEST_INSECURE_KEYS=1 \
+      RELEVIO_TEST_RECOVERY_IDENTITY="$ar/rec.key" RELEVIO_TEST_STABLE_WAIT=0 \
+      RELEVIO_TEST_LOCK_WAIT=4 bash "$ARC" "$@"
+  }
+  r1=aaaaaaaa-0000-4000-8000-00000000000a; r2=bbbbbbbb-0000-4000-8000-00000000000b
+  rcwd="$ar/my proj (x)"; mkdir -p "$rcwd" "$arp/-f1/$r1/tool-results" "$arp/-f2"
+  printf '{"cwd":"%s"}\n{"m":"hello"}\n' "$rcwd" > "$arp/-f1/$r1.jsonl"
+  echo out > "$arp/-f1/$r1/tool-results/t1.txt"
+  printf '{"cwd":"/gone/away"}\n' > "$arp/-f2/$r2.jsonl"
+  touch -d '1 hour ago' $(find "$arp" -type f)
+  cp -a "$arp/-f1" "$ar/orig"
+  grep '^AGE-SECRET-KEY' "$ar/rec.key" | arcr setup >/dev/null 2>&1
+  arcr backfill >/dev/null 2>&1
+  check "archive: restore refuses without a terminal" \
+    "$(contains "$(RELEVIO_HOME="$arh" CLAUDE_CONFIG_DIR="$arc" bash "$ARC" restore "$r1" </dev/null 2>&1)" 'own terminal')" "yes"
+  check "archive: restore refuses something that is not a session id" \
+    "$(contains "$(arcr restore '../../x' 2>&1)" 'not a session id')" "yes"
+  out="$(arcr restore "$r1" 2>&1)"; rc=$?
+  check "archive: a session already in place and intact is left alone" \
+    "$rc:$(contains "$out" 'already in place and intact')" "0:yes"
+  mkdir -p "$ar/aside"; mv "$arp/-f1/$r1.jsonl" "$arp/-f1/$r1" "$ar/aside/"
+  out="$(arcr restore "$r1" 2>&1)"; rc=$?
+  check "archive: restore puts the transcript and its sidecar back, byte for byte" \
+    "$rc:$(cmp -s "$arp/-f1/$r1.jsonl" "$ar/orig/$r1.jsonl" && diff -r "$arp/-f1/$r1" "$ar/orig/$r1" >/dev/null && echo same)" "0:same"
+  check "archive: ... readable only by you, with a fresh mtime" \
+    "$(stat -c %a "$arp/-f1/$r1.jsonl"):$([ -n "$(find "$arp/-f1/$r1.jsonl" -mmin -1)" ] && echo fresh)" "600:fresh"
+  check "archive: ... no staging directory left behind" \
+    "$(find "$arp" -name '.relevio-restore.*' | grep -c .)" "0"
+  check "archive: ... and prints the quoted resume line for a cwd with spaces" \
+    "$(contains "$out" "cd '$rcwd' && claude --resume $r1")" "yes"
+  mv "$arp/-f2/$r2.jsonl" "$ar/aside/"
+  check "archive: a cwd that is gone gets the bare resume line" \
+    "$(arcr restore "$r2" 2>&1 | grep -c "^  claude --resume $r2$")" "1"
+  # Refusals: nothing written in any of them.
+  cp "$arp/-f2/$r2.jsonl" "$arp/-f1/$r2.jsonl"; mv "$arp/-f2/$r2.jsonl" "$ar/aside/r2b"
+  check "archive: a copy of the id in another folder is refused (it would break --resume)" \
+    "$(contains "$(arcr restore "$r2" 2>&1)" 'another folder'):$(yesno "$([ -e "$arp/-f2/$r2.jsonl" ]; echo $?)")" "yes:no"
+  mv "$arp/-f1/$r2.jsonl" "$arp/-f2/$r2.jsonl"
+  printf '{"different":1}\n' > "$arp/-f2/$r2.jsonl"; touch -d '1 hour ago' "$arp/-f2/$r2.jsonl"
+  check "archive: a different copy in place is refused without --replace" \
+    "$(contains "$(arcr restore "$r2" 2>&1)" 'rerun with --replace')" "yes"
+  arcr restore "$r2" --replace >/dev/null 2>&1
+  check "archive: --replace moves the current copy aside, never deletes it" \
+    "$(ls "$arp/-f2" | grep -c "^$r2.jsonl.relevio-replaced-"):$(head -1 "$arp/-f2/$r2.jsonl")" '1:{"cwd":"/gone/away"}'
+  printf '{"live":1}\n' > "$arp/-f2/$r2.jsonl"
+  check "archive: --replace refuses a copy written in the last 10 minutes" \
+    "$(contains "$(arcr restore "$r2" --replace 2>&1)" 'less than 10 minutes ago')" "yes"
+  mv "$arp/-f2/$r2.jsonl" "$ar/aside/live"
+  # A bundle that does not match its index, or holds something it must not.
+  mv "$arp/-f1/$r1.jsonl" "$ar/aside/r1b.jsonl"; mv "$arp/-f1/$r1" "$ar/aside/r1bside"
+  cp "$arh/index.tsv" "$ar/idx"
+  awk -F'\t' -v OFS='\t' -v s="$r1" '$2 == s { $7 = "0000" } { print }' "$ar/idx" > "$arh/index.tsv"
+  check "archive: a bundle that does not match its index is refused, nothing left behind" \
+    "$(contains "$(arcr restore "$r1" 2>&1)" 'does not match its index'):$(yesno "$([ -e "$arp/-f1/$r1.jsonl" ]; echo $?)"):$(find "$arp" -name '.relevio-restore.*' | grep -c .)" "yes:no:0"
+  cp "$ar/idx" "$arh/index.tsv"
+  cp "$arh/archive/-f1/$r1.tgz.age" "$ar/good-r1.age"
+  ev="$ar/evil"; mkdir -p "$ev"; printf 'relevio-archive-manifest 1\n' > "$ev/MANIFEST"; echo x > "$ev/$r1.jsonl"; ln -s /etc/passwd "$ev/link"
+  tar -cf - -C "$ev" MANIFEST "$r1.jsonl" link | gzip -c | age -e -R "$arh/keys/recipients.txt" -o "$arh/archive/-f1/$r1.tgz.age"
+  check "archive: a bundle with an unexpected entry is refused before extracting" \
+    "$(contains "$(arcr restore "$r1" 2>&1)" 'unexpected entry'):$(yesno "$([ -e "$arp/-f1/link" ]; echo $?)")" "yes:no"
+  # Claude Code can delete a transcript and leave its sidecar behind.
+  cp "$ar/good-r1.age" "$arh/archive/-f1/$r1.tgz.age"
+  mkdir -p "$arp/-f1/$r1/subagents"; echo leftover > "$arp/-f1/$r1/subagents/old.txt"
+  [ -e "$arp/-f1/$r1.jsonl" ] && mv "$arp/-f1/$r1.jsonl" "$ar/aside/r1c.jsonl"
+  out="$(arcr restore "$r1" 2>&1)"; rc=$?
+  check "archive: a leftover sidecar with no transcript is moved aside and the session restored" \
+    "$rc:$(yesno "$([ -f "$arp/-f1/$r1.jsonl" ]; echo $?)"):$(ls "$arp/-f1" | grep -c "^$r1.relevio-replaced-")" "0:yes:1"
+  # keys: check both, and a reset that keeps every bundle openable.
+  check "archive: keys check works with the main key and with the recovery key" \
+    "$(arcr keys check 2>&1 | head -1):$(grep '^AGE-SECRET-KEY' "$ar/rec.key" | arcr keys check --recovery 2>/dev/null | head -1)" "passphrase works.:recovery key works."
+  out="$(echo 'apple-river-stone-cloud-tiger-lemon-piano-ocean-fox-maple' | arcr keys check --recovery 2>&1)"; rc=$?
+  check "archive: a passphrase typed where the recovery key goes says to drop --recovery" \
+    "$rc:$(contains "$out" 'rerun the same command WITHOUT --recovery'):$(contains "$out" 'RECOVERY KEY (your emergency key)')" "2:yes:yes"
+  check "archive: a key that is not the archive's is refused" \
+    "$(contains "$(age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY' | arcr keys check --recovery 2>&1)" "not one of this archive's keys")" "yes"
+  cp "$arh/keys/main.key" "$ar/old-main.key"
+  grep '^AGE-SECRET-KEY' "$ar/rec.key" | RELEVIO_TEST_FAIL_AFTER=1 arcr keys reset >/dev/null 2>&1
+  check "archive: a reset that fails half way leaves the old keys and bundles in force" \
+    "$(cmp -s "$arh/keys/main.key" "$ar/old-main.key" && echo same):$(yesno "$([ -e "$arh/archive.new" ]; echo $?)"):$(age -d -i "$ar/old-main.key" "$arh/archive/-f2/$r2.tgz.age" >/dev/null 2>&1 && echo opens)" "same:no:opens"
+  grep '^AGE-SECRET-KEY' "$ar/rec.key" | arcr keys reset >/dev/null 2>&1; rc=$?
+  check "archive: a reset re-encrypts every bundle to a new main key" \
+    "$rc:$(age -d -i "$arh/keys/main.key" "$arh/archive/-f2/$r2.tgz.age" >/dev/null 2>&1 && echo new-opens):$(age -d -i "$ar/old-main.key" "$arh/archive/-f2/$r2.tgz.age" >/dev/null 2>&1 && echo old-opens || echo old-refused)" \
+    "0:new-opens:old-refused"
+  check "archive: ... keeping the old main key in keys/old" "$(ls "$arh/keys/old" | grep -c '^main\.')" "1"
+  # Index rows are relevio's, but a planted one must not steer a path.
+  cp "$arh/index.tsv" "$ar/idx3"; echo precious > "$ar/precious"
+  printf 'active\t%s\t../..\t-\t-\t1\tx\t1\t1\tprecious\t1\t-\n' "$r2" >> "$arh/index.tsv"
+  check "archive: forget refuses an index row whose path leaves the archive" \
+    "$(contains "$(echo "${r2:0:8}" | arcr forget "$r2" 2>&1)" 'unexpected file'):$(cat "$ar/precious")" "yes:precious"
+  cp "$ar/idx3" "$arh/index.tsv"
+  printf 'state ok\nat BASH_VERSINFO[$(touch %s/pwned)]\npid 1\n' "$ar" > "$arh/status"
+  arcr status >/dev/null 2>&1
+  check "archive: a status field is never evaluated as code" "$(yesno "$([ -e "$ar/pwned" ]; echo $?)")" "no"
+  # forget: confirmation, removal, and never archived again.
+  check "archive: forget refuses a wrong confirmation, removing nothing" \
+    "$(contains "$(echo nope | arcr forget "$r2" 2>&1)" 'nothing was removed'):$(ls "$arh/archive/-f2" | grep -c .)" "yes:1"
+  cp "$arh/archive/-f2/$r2.tgz.age" "$arh/archive/-f2/$r2.orphan-20260101T000000Z.tgz.age"
+  echo "${r2:0:8}" | arcr forget "$r2" >/dev/null 2>&1
+  check "archive: forget removes every bundle and line of the session, orphans included" \
+    "$(ls "$arh/archive/-f2" | grep -c .):$(grep -c "$r2" "$arh/index.tsv")" "0:0"
+  cp "$ar/aside/r2b" "$arp/-f2/$r2.jsonl"; touch -d '1 hour ago' "$arp/-f2/$r2.jsonl"
+  arcr sync --all >/dev/null 2>&1
+  check "archive: ... and a later sweep does not archive it again" "$(ls "$arh/archive/-f2" | grep -c .)" "0"
+  rm -rf "$ar"
+else
+  echo "  SKIP  archive: restore, keys and forget (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+for chan in commands templates; do
+  check "$chan/revisit: a session Claude Code no longer has is looked up in the archive" \
+    "$(contains "$(cat "$REPO/$chan/revisit.md")" 'relevio-archive.sh" list')" "yes"
+  check "$chan/revisit: ... the key is typed by the user in their terminal, never by the agent" \
+    "$(contains "$(cat "$REPO/$chan/revisit.md")" 'never type the key for them')" "yes"
+  check "$chan/revisit: ... after reading the archive guide" \
+    "$(contains "$(cat "$REPO/$chan/revisit.md")" 'relevio-archive.sh" guide')" "yes"
+  check "$chan/kickoff: points to the archive guide for anything the user needs from it" \
+    "$(contains "$(cat "$REPO/$chan/kickoff.md")" 'relevio-archive.sh" guide')" "yes"
+done
+
+# --- Case 17: the session archive at session start --------------------------
+# A background archiving run cannot speak, so the session-start hook speaks
+# for it, in the one notice slot after the settings notice; and every start
+# sweeps the repository's sessions in the background.
+an="$(mktemp -d)"; anh="$an/home"; anc="$an/cc"; anx="$an/cache"
+mkdir -p "$anc"; printf '{"cleanupPeriodDays": 36500}\n' > "$anc/settings.json"
+anp="$(mktemp -d)"; mkdir -p "$anp/.claude/hooks" "$anp/.claude/scripts"
+cp "$REPO"/templates/*.sh "$anp/.claude/hooks/"; cp "$REPO"/scripts/*.sh "$anp/.claude/scripts/"
+# The notice tests run where no sweep can start (no git, a transcript outside
+# projects/), so a background run never rewrites the status they set up.
+ANT="$an/t/17ab0000-0000-4000-8000-000000000017.jsonl"
+ans() {  # $1 source, $2 transcript path, $3 model -> message
+  printf '{"source":"%s","session_id":"17ab0000-0000-4000-8000-000000000017","transcript_path":"%s","model":"%s"}' \
+    "$1" "${2-$ANT}" "${3:-claude-opus-5}" \
+    | env -u CLAUDE_PLUGIN_ROOT RELEVIO_HOME="$anh" CLAUDE_CONFIG_DIR="$anc" XDG_CACHE_HOME="$anx" \
+        CLAUDE_PROJECT_DIR="$anp" bash "$anp/.claude/hooks/session-start.sh" \
+    | jq -r '.hookSpecificOutput.additionalContext // ""'
+}
+out="$(ans startup)"
+check "archive notice: not set up is said, with the setup command and a warning not to run it" \
+  "$(contains "$out" 'ARCHIVE NOT SET UP'):$(contains "$out" 'relevio-archive.sh setup'):$(contains "$out" 'Never run setup yourself')" "yes:yes:yes"
+check "archive notice: ... at most once a day" "$(contains "$(ans startup)" 'ARCHIVE')" "no"
+rm -rf "$anx"
+mkdir -p "$anh"; : > "$anh/off"
+check "archive notice: off silences it" "$(contains "$(ans startup)" 'ARCHIVE')" "no"
+rm -f "$anh/off"; rm -rf "$anx"
+check "archive notice: never on ZCode" \
+  "$(contains "$(ans startup /tmp/zcode-claude-hook-x/t.jsonl builtin:zai/GLM-5.3)" 'ARCHIVE')" "no"
+check "archive notice: never on a host that sends no transcript" "$(contains "$(ans startup '')" 'ARCHIVE')" "no"
+rm -rf "$anx"
+printf '{"cleanupPeriodDays": 30}\n' > "$anc/settings.json"
+out="$(ans startup)"
+check "archive notice: the settings notice takes the slot first" \
+  "$(contains "$out" 'SETTINGS CHANGED'):$(contains "$out" 'ARCHIVE')" "yes:no"
+check "archive notice: ... and the archive's comes at the next start" "$(contains "$(ans startup)" 'ARCHIVE NOT SET UP')" "yes"
+# Once set up: failing, interrupted and stale runs are reported, a healthy one is not.
+mkdir -p "$anh/keys"; echo "age1x" > "$anh/keys/recipients.txt"
+printf 'state fail\nat %s\npid 1\nscope repo\ncounts archived 0 skipped 0 deferred 0 failed 1\nmessage encrypting session x failed (tar 0, gzip 0, age 1)\n' "$(date +%s)" > "$anh/status"
+out="$(ans startup)"
+check "archive notice: a failing archive is reported every session, with its reason" \
+  "$(contains "$out" 'ARCHIVE FAILING since'):$(contains "$out" 'age 1'):$(contains "$(ans startup)" 'ARCHIVE FAILING')" "yes:yes:yes"
+sleep 1000 & ap=$!
+printf 'state running\nat %s\npid %s\n' "$(date +%s)" "$ap" > "$anh/status"
+check "archive notice: a run in progress is not reported" "$(contains "$(ans startup)" 'ARCHIVE')" "no"
+kill "$ap" 2>/dev/null; wait "$ap" 2>/dev/null
+check "archive notice: a run whose process is gone is reported as interrupted" "$(contains "$(ans startup)" 'ARCHIVE INTERRUPTED')" "yes"
+printf 'state ok\nat %s\npid 1\n' "$(( $(date +%s) - 8 * 86400 ))" > "$anh/status"
+check "archive notice: no success in over a week is reported as stale" "$(contains "$(ans startup)" 'ARCHIVE STALE')" "yes"
+printf 'state ok\nat %s\npid 1\n' "$(date +%s)" > "$anh/status"
+check "archive notice: a healthy archive says nothing" "$(contains "$(ans startup)" 'ARCHIVE')" "no"
+# The worst case for the budget: a resumed first session with no readable
+# start, and the longest failing notice.
+printf 'state fail\nat %s\npid 1\nmessage %s\n' "$(date +%s)" "$(printf 'x%.0s' $(seq 400))" > "$anh/status"
+n=$(printf '%s' "$(ans resume "$an/none/17ab0000-0000-4000-8000-000000000017.jsonl")" | wc -c)
+check "archive notice: a resumed first session with a failing archive fits the budget ($n <= $INJECT_BUDGET)" \
+  "$([ "$n" -le "$INJECT_BUDGET" ] && echo yes || echo no)" "yes"
+rm -rf "$anh"
+# The sweep: archives this repository's sessions in the background, and the
+# session start does not wait for it.
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  age-keygen 2>/dev/null > "$an/rec.key"
+  grep '^AGE-SECRET-KEY' "$an/rec.key" | RELEVIO_HOME="$anh" CLAUDE_CONFIG_DIR="$anc" RELEVIO_TEST_INSECURE_KEYS=1 \
+    RELEVIO_TEST_RECOVERY_IDENTITY="$an/rec.key" bash "$ARC" setup >/dev/null 2>&1
+  sw=18ab0000-0000-4000-8000-000000000018
+  mkdir -p "$anc/projects/-sweep"; printf '{"cwd":"%s"}\n' "$anp" > "$anc/projects/-sweep/$sw.jsonl"
+  touch -d '1 hour ago' "$anc/projects/-sweep/$sw.jsonl"
+  git -C "$anp" init -q
+  t0="$(date +%s%N)"; ans startup "$anc/projects/-sweep/$sw.jsonl" >/dev/null; t1="$(date +%s%N)"
+  check "archive sweep: the session start does not wait for it (under a second)" \
+    "$([ $(( (t1 - t0) / 1000000 )) -lt 1000 ] && echo fast || echo "$(( (t1 - t0) / 1000000 )) ms")" "fast"
+  for _ in $(seq 50); do [ -s "$anh/index.tsv" ] && [ ! -d "$anh/lock" ] && break; sleep 0.2; done
+  check "archive sweep: the repository's session is archived in the background" \
+    "$(awk -F'\t' -v s="$sw" '$2 == s { print $1 }' "$anh/index.tsv" 2>/dev/null)" "active"
+else
+  echo "  SKIP  archive sweep at session start (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+rm -rf "$an" "$anp"
+
+# The notice is the script's: it also speaks for a home it refuses, and for
+# test keys that must never be a real archive's.
+nt="$(mktemp -d)"; mkdir -p "$nt/real"; ln -s "$nt/real" "$nt/link"
+check "archive notice: a home relevio refuses is reported, not silenced" \
+  "$(contains "$(RELEVIO_HOME="$nt/link" bash "$ARC" notice)" 'ARCHIVE FAILING: ')" "yes"
+mkdir -p "$nt/h/keys"; echo age1x > "$nt/h/keys/recipients.txt"; echo k > "$nt/h/keys/main.key"
+check "archive notice: unprotected test keys are reported" \
+  "$(contains "$(RELEVIO_HOME="$nt/h" bash "$ARC" notice)" 'INSECURE TEST KEYS')" "yes"
+check "archive notice: a healthy, never-run archive says nothing" \
+  "$(rm "$nt/h/keys/main.key"; RELEVIO_HOME="$nt/h" bash "$ARC" notice)" ""
+rm -rf "$nt"
+
+# --- Case 18: the SessionEnd hook --------------------------------------------
+# Each session is archived as it ends. The hook only launches the archiving,
+# detached, prints nothing, and does nothing where it must not.
+check "plugin manifest: SessionEnd runs session-end.sh" \
+  "$(jq -r '.hooks.SessionEnd[0].hooks[0].command' "$REPO/hooks/hooks.json")" 'bash "${CLAUDE_PLUGIN_ROOT}"/hooks/session-end.sh'
+check "session-end: the hook and its template are identical" \
+  "$(cmp -s "$REPO/hooks/session-end.sh" "$REPO/templates/session-end.sh" && echo same)" "same"
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  se="$(mktemp -d)"; seh="$se/home"; sec="$se/cc"; sid=19ab0000-0000-4000-8000-000000000019
+  mkdir -p "$sec/projects/-p"; printf '{"cwd":"/w"}\n' > "$sec/projects/-p/$sid.jsonl"
+  age-keygen 2>/dev/null > "$se/rec.key"
+  sen() {  # $1 payload -> stdout of the hook
+    printf '%s' "$1" | env RELEVIO_HOME="$seh" CLAUDE_CONFIG_DIR="$sec" RELEVIO_TEST_INSECURE_KEYS=1 \
+      RELEVIO_TEST_STABLE_WAIT=0 bash "$REPO/hooks/session-end.sh"
+  }
+  pay="{\"session_id\":\"$sid\",\"transcript_path\":\"$sec/projects/-p/$sid.jsonl\",\"reason\":\"other\"}"
+  check "session-end: before setup it does nothing" "$(sen "$pay"):$(yesno "$([ -e "$seh" ]; echo $?)")" ":no"
+  grep '^AGE-SECRET-KEY' "$se/rec.key" | RELEVIO_HOME="$seh" CLAUDE_CONFIG_DIR="$sec" RELEVIO_TEST_INSECURE_KEYS=1 \
+    RELEVIO_TEST_RECOVERY_IDENTITY="$se/rec.key" bash "$ARC" setup >/dev/null 2>&1
+  : > "$seh/off"; sen "$pay" >/dev/null; sleep 1
+  check "session-end: off means nothing is archived" "$(yesno "$([ -e "$seh/index.tsv" ]; echo $?)")" "no"
+  rm -f "$seh/off"
+  sen "{\"session_id\":\"$sid\",\"transcript_path\":\"/tmp/zcode-claude-hook-x/$sid.jsonl\"}" >/dev/null
+  sen "{\"session_id\":\"../../x\",\"transcript_path\":\"$sec/projects/-p/$sid.jsonl\"}" >/dev/null; sleep 1
+  check "session-end: ZCode and an id that is not a session id are ignored" \
+    "$(yesno "$([ -e "$seh/index.tsv" ]; echo $?)")" "no"
+  t0="$(date +%s%N)"; out="$(sen "$pay")"; t1="$(date +%s%N)"
+  check "session-end: it prints nothing and returns at once" \
+    "$out:$([ $(( (t1 - t0) / 1000000 )) -lt 1000 ] && echo fast)" ":fast"
+  for _ in $(seq 50); do [ -s "$seh/index.tsv" ] && [ ! -d "$seh/lock" ] && break; sleep 0.2; done
+  check "session-end: the session is archived in the background" \
+    "$(awk -F'\t' -v s="$sid" '$2 == s { print $1 }' "$seh/index.tsv" 2>/dev/null)" "active"
+  sen "{\"session_id\":\"$sid\",\"transcript_path\":\"$se/elsewhere/$sid.jsonl\"}" >/dev/null
+  for _ in $(seq 50); do grep -q '^state fail' "$seh/status" 2>/dev/null && break; sleep 0.2; done
+  check "session-end: a transcript outside projects/ is reported in the status" \
+    "$(contains "$(cat "$seh/status")" 'not where relevio expects it')" "yes"
+  rm -rf "$se"
+else
+  echo "  SKIP  session-end archiving (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+
+# --- Case 19: the installer and the archive ----------------------------------
+d19="$(fixture '')"
+( cd "$d19" && bash "$INSTALLER" >/dev/null 2>&1 )
+check "install: session-end.sh is installed, executable and stamped" \
+  "$(yesno "$([ -x "$d19/.claude/hooks/session-end.sh" ]; echo $?)"):$(sed -n 2p "$d19/.claude/hooks/session-end.sh")" "yes:# relevio v$(cat "$REPO/VERSION")"
+check "install: SessionEnd is registered once" \
+  "$(jq '[.hooks.SessionEnd[]?.hooks[]?.command | select(contains("session-end.sh"))] | length' "$d19/.claude/settings.json")" "1"
+( cd "$d19" && bash "$INSTALLER" --update >/dev/null 2>&1 )
+check "install: ... and still once after an update" \
+  "$(jq '[.hooks.SessionEnd[]?.hooks[]?.command | select(contains("session-end.sh"))] | length' "$d19/.claude/settings.json")" "1"
+check "install: the next steps say how to set up the archive, in the user's own terminal" \
+  "$(contains "$( (cd "$d19" && bash "$INSTALLER" --update) 2>&1)" 'relevio-archive.sh setup')" "yes"
+mkdir -p "$RELEVIO_HOME"; echo keep > "$RELEVIO_HOME/marker"
+out="$( (cd "$d19" && bash "$UNINSTALLER") 2>&1 )"
+check "uninstall: session-end.sh and its registration are removed" \
+  "$(yesno "$([ -e "$d19/.claude/hooks/session-end.sh" ]; echo $?)"):$(jq -r '.hooks.SessionEnd // "none"' "$d19/.claude/settings.json" 2>/dev/null || echo none)" "no:none"
+check "uninstall: the archive in RELEVIO_HOME is kept, and said so" \
+  "$(cat "$RELEVIO_HOME/marker"):$(contains "$out" 'Kept: ')" "keep:yes"
+rm -rf "$d19" "$RELEVIO_HOME"
+# The methodology detector: a CLAUDE.md that writes about relevio's own cycle
+# is not a second methodology, and neither is a project relevio is already in.
+d19="$(fixture 'Ciclo relevio: /kickoff al abrir, /handoff al cerrar. Handoffs en docs/handoff/.')"
+( cd "$d19" && bash "$INSTALLER" >/dev/null 2>&1 ); rc=$?
+check "install: a CLAUDE.md that names relevio's own cycle does not block it" "$rc" "0"
+rm -rf "$d19"
+d19="$(fixture '')"
+( cd "$d19" && bash "$INSTALLER" >/dev/null 2>&1 )
+printf 'Open with /kickoff, close with /handoff.\n' > "$d19/CLAUDE.md"
+( cd "$d19" && bash "$INSTALLER" --update >/dev/null 2>&1 ); rc=$?
+check "install: an update of a project relevio is already in is not blocked" "$rc" "0"
+rm -rf "$d19"
+d19="$(fixture 'Our cycle: write docs/handoff/NOTES.md at the end of every session.')"
+( cd "$d19" && bash "$INSTALLER" >/dev/null 2>&1 ); rc=$?
+check "install: ... while a methodology of its own still blocks" "$rc" "1"
+rm -rf "$d19"
+
+# --- Case 20: the archive is documented where people look -------------------
+rd="$(cat "$REPO/README.md")"
+check "README: it documents the encrypted archive" "$(contains "$rd" '## Archiving every conversation')" "yes"
+check "README: ... says plainly that losing both keys loses the archive" \
+  "$(contains "$rd" 'If you lose both the passphrase and the recovery key, the archive is')" "yes"
+check "README: ... and lists both new files" \
+  "$(contains "$rd" '`.claude/hooks/session-end.sh`'):$(contains "$rd" '`.claude/scripts/relevio-archive.sh`')" "yes:yes"
+check "README: ... lists the copy and timestamp files" \
+  "$(contains "$rd" '`.claude/scripts/relevio-archive-remote.sh`'):$(contains "$rd" '`.claude/scripts/relevio-archive-stamps.sh`'):$(contains "$rd" '`.claude/scripts/relevio-ots-helper.py`')" "yes:yes:yes"
+check "README: ... documents the copy off this machine, with Drive's least privilege" \
+  "$(contains "$rd" '### A copy off this machine'):$(contains "$rd" 'scope=drive.file'):$(contains "$rd" 'how many bundles there are and how big')" "yes:yes:yes"
+check "README: ... and timestamps, with what a proof does NOT prove" \
+  "$(contains "$rd" '### Timestamps'):$(contains "$rd" 'prove who wrote it, nor that what it says is true')" "yes:yes"
+for f in relevio-archive-remote.sh relevio-archive-stamps.sh relevio-ots-helper.py; do
+  check "install.sh: ships $f" "$(grep -c "^SCRIPTS=.*$f" "$REPO/install.sh")" "1"
+done
+for chan in commands templates; do
+  kd="$(cat "$REPO/$chan/kickoff.md")"
+  check "$chan/kickoff: it reports the archive's status in one line" "$(contains "$kd" 'relevio-archive.sh" status')" "yes"
+  check "$chan/kickoff: ... and never runs setup or restore itself" "$(contains "$kd" 'Never run `setup`, `restore`, `keys` or')" "yes"
+done
+
+# --- Case 21: the copy off this machine (remote, push, verify) --------------
+# What leaves the machine is encrypted, names included, and the copy is
+# proven by the provider's own checksum. Same code for both transports: a
+# synced folder, and rclone (here on a local path, when rclone is installed).
+# rclone-sha1 is rclone behind a provider that keeps only sha1, as Backblaze B2
+# does (measured 2026-11-26: it answers "hash unsupported" to md5).
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  cp_path="$PATH"
+  for kind in folder rclone rclone-sha1; do
+    tport="${kind%-sha1}"; PATH="$cp_path"
+    if [ "$tport" = rclone ] && ! command -v rclone >/dev/null 2>&1; then
+      echo "  SKIP  copy ($kind): rclone is not installed"; SKIPS=$((SKIPS + 1)); continue
+    fi
+    cp_t="$(mktemp -d)"; mkdir -p "$cp_t/cc/projects/-p1" "$cp_t/cloud" "$cp_t/p1"
+    if [ "$kind" = rclone-sha1 ]; then
+      mkdir "$cp_t/bin"
+      printf '#!/usr/bin/env bash\nfor a in "$@"; do\n  [ "$a" = features ] && [ -n "${FAKE_FEATURES_NOTFOUND:-}" ] && { echo "directory not found" >&2; exit 3; }\n  [ "$a" = features ] && { echo %s; exit 0; }\n  [ "$a" = md5 ] && { echo "hash unsupported: hash type not supported" >&2; exit 1; }\ndone\nexec %q "$@"\n' \
+        "'{\"Hashes\":[\"sha1\"]}'" "$(command -v rclone)" > "$cp_t/bin/rclone"
+      chmod +x "$cp_t/bin/rclone"; PATH="$cp_t/bin:$cp_path"
+    fi
+    age-keygen 2>/dev/null > "$cp_t/rec.key"
+    for i in 1 2 3; do
+      printf '{"cwd":"%s","type":"user","timestamp":"2026-01-0%dT00:00:00Z","secret":"plain-text-%d"}\n' "$cp_t/p1" "$i" "$i" \
+        > "$cp_t/cc/projects/-p1/0000000$i-aaaa-4bbb-8ccc-dddddddddddd.jsonl"
+      touch -d '1 hour ago' "$cp_t/cc/projects/-p1/0000000$i-aaaa-4bbb-8ccc-dddddddddddd.jsonl" 2>/dev/null
+    done
+    cpa() {
+      RELEVIO_HOME="$cp_t/h" CLAUDE_CONFIG_DIR="$cp_t/cc" RELEVIO_TEST_INSECURE_KEYS=1 \
+        RELEVIO_TEST_RECOVERY_IDENTITY="${CP_REC:-$cp_t/rec.key}" RELEVIO_TEST_QUIET_MIN=0 bash "$ARC" "$@"
+    }
+    grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpa setup >/dev/null 2>&1
+    cpa backfill >/dev/null 2>&1
+    if [ "$tport" = folder ]; then tgt="$cp_t/cloud"; else tgt=":local:$cp_t/cloud"; fi
+    check "copy ($kind): push before a copy is set fails loud" \
+      "$(contains "$(cpa push 2>&1)" 'no off-machine copy is set')" "yes"
+    cpa remote set "$tport" "$tgt" >/dev/null 2>&1
+    want_hash=md5; [ "$kind" = rclone-sha1 ] && want_hash=sha1
+    check "copy ($kind): remote set records the checksum the provider keeps ($want_hash)" \
+      "$(sed -n 's/^remote_hash=//p' "$cp_t/h/config")" "$want_hash"
+    out="$(cpa push 2>&1)"; rc=$?
+    check "copy ($kind): the first push sends every bundle and a catalog" \
+      "$rc:$(contains "$out" '3 bundle(s) sent, catalog #1')" "0:yes"
+    check "copy ($kind): ... under opaque names only: no session id, no project folder" \
+      "$(find "$cp_t/cloud" | grep -c -e '0000000' -e '-p1'):$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | grep -cE '/[0-9a-f]{32}\.age$')" "0:3"
+    check "copy ($kind): ... and nothing in it is readable: no transcript text, no index" \
+      "$(grep -rl -e 'plain-text' -e 'relevio-archive-index' "$cp_t/cloud" | grep -c .)" "0"
+    check "copy ($kind): ... no internal file leaks into it" \
+      "$(find "$cp_t/cloud" -name '.*' -o -name '*.part' | grep -c .)" "0"
+    out="$(cpa verify 2>&1)"; rc=$?
+    check "copy ($kind): verify passes on an intact copy" "$rc:$(contains "$out" 'complete and intact')" "0:yes"
+    out="$(cpa push 2>&1)"
+    check "copy ($kind): a second push sends nothing" "$(contains "$out" '0 bundle(s) sent')" "yes"
+    f="$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | head -1)"; echo tamper >> "$f"
+    out="$(cpa verify 2>&1)"; rc=$?
+    check "copy ($kind): verify catches a bundle altered in the copy" "$rc:$(contains "$out" 'ALTERED in the copy')" "1:yes"
+    out="$(cpa push 2>&1)"
+    check "copy ($kind): ... and the next push sends it again" \
+      "$(contains "$out" '1 bundle(s) sent'):$(cpa verify >/dev/null 2>&1; echo $?)" "yes:0"
+    rm -f "$f"
+    check "copy ($kind): a bundle deleted from the copy is sent again" \
+      "$(contains "$(cpa push 2>&1)" '1 bundle(s) sent')" "yes"
+    c="$(find "$cp_t/cloud/machines" -name catalog.age)"; cp "$c" "$cp_t/old-catalog"
+    cpa push >/dev/null 2>&1; echo "$(date)" >> "$cp_t/cc/projects/-p1/00000001-aaaa-4bbb-8ccc-dddddddddddd.jsonl"
+    touch -d '1 hour ago' "$cp_t/cc/projects/-p1/00000001-aaaa-4bbb-8ccc-dddddddddddd.jsonl" 2>/dev/null
+    cpa sync --all >/dev/null 2>&1
+    check "copy ($kind): an archiving run sends what is new by itself" \
+      "$(cpa remote status 2>&1 | grep -c 'last push: ok')" "1"
+    cp "$cp_t/old-catalog" "$c"
+    out="$(cpa verify 2>&1)"; rc=$?
+    check "copy ($kind): verify catches an older catalog put back in the copy" \
+      "$rc:$(contains "$out" 'NOT the one this machine wrote')" "1:yes"
+    cpa push >/dev/null 2>&1
+    check "copy ($kind): ... and the next push writes the current catalog back" \
+      "$(cpa verify >/dev/null 2>&1; echo $?)" "0"
+    if [ "$kind" = rclone ]; then
+      sed -i 's|^rclone=.*|rclone=/nonexistent/rclone|' "$cp_t/h/config"
+      out="$(cpa status 2>&1)"; rc=$?
+      check "copy (rclone): with rclone gone, status still reports everything and names the copy as unreadable" \
+        "$rc:$(contains "$out" 'copy: CANNOT READ: rclone is missing'):$(contains "$out" 'Claude Code keeps conversations')" "1:yes:yes"
+      sed -i "s|^rclone=.*|rclone=$(command -v rclone)|" "$cp_t/h/config"
+    fi
+    if [ "$kind" = rclone ]; then
+      # remote connect: the key is read hidden and written to rclone's config
+      # (never on a command line); a key that does not work is not kept.
+      rcfg="$cp_t/rclone.conf"
+      out="$(printf 'AKIDEXAMPLE123\nsecretKEY/abc+123=\n' | RCLONE_CONFIG="$rcfg" cpa remote connect s3 mybucket https://127.0.0.1:9 Minio 2>&1)"; rc=$?
+      check "copy: remote connect with an unreachable cloud fails loud and keeps nothing" \
+        "$rc:$(contains "$out" 'no connection to the cloud'):$(grep -c 'relevio-s3' "$rcfg")" "2:yes:0"
+      check "copy: ... and the secret never reaches the screen" "$(contains "$out" 'secretKEY')" "no"
+      out="$(printf 'short\nx\n' | RCLONE_CONFIG="$rcfg" cpa remote connect s3 mybucket https://127.0.0.1:9 2>&1)"
+      check "copy: remote connect refuses something that is not a key, saving nothing" \
+        "$(contains "$out" 'does not look like a key ID'):$(grep -c 'relevio-s3' "$rcfg")" "yes:0"
+      check "copy: remote connect refuses a bad bucket name or a plain http endpoint" \
+        "$(contains "$(RCLONE_CONFIG="$rcfg" cpa remote connect b2 'My Bucket' 2>&1 </dev/null)" 'not a bucket name'):$(contains "$(RCLONE_CONFIG="$rcfg" cpa remote connect s3 bb http://x 2>&1 </dev/null)" 'https://')" "yes:yes"
+    fi
+    if [ "$kind" = folder ]; then
+      # An archiving run with nothing new trusts the upload records: no call
+      # to the copy at all, until the daily audit is due.
+      mv "$cp_t/cloud" "$cp_t/cloud.away"
+      cpa sync --all >/dev/null 2>&1
+      check "copy (folder): a run with nothing new does not touch the copy" \
+        "$(grep -c '^state ok' "$cp_t/h/remote.status")" "1"
+      sed -i 's/^remote_audit_at=.*/remote_audit_at=1/' "$cp_t/h/config"
+      cpa sync --all >/dev/null 2>&1
+      check "copy (folder): ... and the daily audit does, and says when the copy is gone" \
+        "$(grep -c '^state fail' "$cp_t/h/remote.status")" "1"
+      out="$(cpa push 2>&1)"; rc=$?
+      check "copy (folder): a missing folder fails loud, with what to check" \
+        "$rc:$(contains "$out" 'is the drive or the sync client mounted')" "2:yes"
+      check "copy (folder): ... status says the copy is failing, and exits 1" \
+        "$(contains "$(cpa status 2>&1)" 'last push: FAILING'):$(cpa status >/dev/null 2>&1; echo $?)" "yes:1"
+      cpa sync --all >/dev/null 2>&1; rc=$?
+      check "copy (folder): ... while archiving itself keeps working" \
+        "$rc:$(grep -c '^state ok' "$cp_t/h/status")" "0:1"
+      mv "$cp_t/cloud.away" "$cp_t/cloud"
+      mkdir -p "$cp_t/repo"; git -C "$cp_t/repo" init -q
+      check "copy (folder): a copy inside a git repository is refused" \
+        "$(contains "$(cpa remote set folder "$cp_t/repo" 2>&1)" 'inside a git repository')" "yes"
+      check "copy (folder): a target with a line break is refused (it would plant config keys)" \
+        "$(contains "$(cpa remote set folder "$(printf '%s\nage=/tmp/evil' "$cp_t/cloud")" 2>&1)" 'must be one line'):$(grep -c '^age=/tmp/evil' "$cp_t/h/config")" "yes:0"
+      check "copy (folder): a copy inside the archive is refused" \
+        "$(contains "$(cpa remote set folder "$cp_t/h/archive" 2>&1)" 'inside the archive itself')" "yes"
+      cpa remote set folder "$cp_t/cloud" >/dev/null 2>&1; cpa push >/dev/null 2>&1
+      # An emptied index is never a reason to delete the copy.
+      cp "$cp_t/h/index.tsv" "$cp_t/index.bak"; head -1 "$cp_t/index.bak" > "$cp_t/h/index.tsv"
+      cpa push >/dev/null 2>&1
+      check "copy (folder): an emptied index deletes nothing from the copy" \
+        "$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | grep -c .)" "3"
+      cp "$cp_t/index.bak" "$cp_t/h/index.tsv"
+      printf '00000002\n' | cpa forget 00000002-aaaa-4bbb-8ccc-dddddddddddd >/dev/null 2>&1
+      check "copy (folder): forget removes the session from the copy too, catalog included" \
+        "$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | grep -c .):$(grep -c '^state ok' "$cp_t/h/remote.status")" "2:1"
+    fi
+    # pull: a new machine brings the whole archive back from the copy.
+    cpa push >/dev/null 2>&1
+    cpn() { RELEVIO_HOME="$cp_t/new" CLAUDE_CONFIG_DIR="$cp_t/cc-new" RELEVIO_TEST_INSECURE_KEYS=1 RELEVIO_TEST_STABLE_WAIT=0 bash "$ARC" "$@"; }
+    mkdir -p "$cp_t/cc-new/projects"
+    out="$(age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY' | cpn pull "$tport" "$tgt" --recovery 2>&1)"; rc=$?
+    check "copy ($kind): pull with a key that is not the archive's brings nothing back" \
+      "$rc:$(contains "$out" "not one of this archive's keys"):$(find "$cp_t/new/archive" -name '*.age' 2>/dev/null | grep -c .)" "2:yes:0"
+    f="$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | head -1)"; cp "$f" "$cp_t/good.age"; echo tamper >> "$f"
+    out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$tport" "$tgt" --recovery 2>&1)"; rc=$?
+    check "copy ($kind): pull stops on a bundle altered in the copy, and says how to resume" \
+      "$rc:$(contains "$out" 'is not what was sent (sha256)')" "2:yes"
+    cp "$cp_t/good.age" "$f"
+    out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$tport" "$tgt" --recovery 2>&1)"; rc=$?
+    n_src="$(find "$cp_t/h/archive" -name '*.age' | grep -c .)"
+    check "copy ($kind): rerunning pull resumes and brings every bundle back" \
+      "$rc:$(find "$cp_t/new/archive" -name '*.age' | grep -c .)" "0:$n_src"
+    check "copy ($kind): ... with the same index as the old machine" \
+      "$(cmp -s "$cp_t/h/index.tsv" "$cp_t/new/index.tsv" && echo same)" "same"
+    sid="$(sed -n '2p' "$cp_t/new/index.tsv" | cut -f2)"
+    out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn restore "$sid" --recovery 2>&1)"; rc=$?
+    check "copy ($kind): a conversation restored on the new machine is identical to the original" \
+      "$rc:$(cmp -s "$cp_t/cc/projects/-p1/$sid.jsonl" "$cp_t/cc-new/projects/-p1/$sid.jsonl" && echo same)" "0:same"
+    check "copy ($kind): ... the new machine continues the copy without sending anything again" \
+      "$(contains "$(cpn push 2>&1)" '0 bundle(s) sent'):$(cpn verify >/dev/null 2>&1; echo $?)" "yes:0"
+    check "copy ($kind): pull refuses a machine that already has an archive" \
+      "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull "$tport" "$tgt" --recovery 2>&1)" 'already has an archive')" "yes"
+    # A copy someone else can write to: age proves nothing about who wrote a
+    # file, so a forged catalog opens with the owner's key. pull must refuse
+    # every field it cannot trust, never run or follow it.
+    if [ "$kind" = folder ]; then
+      mb="$(find "$cp_t/cloud/machines" -mindepth 1 -maxdepth 1 -type d | head -1)"; mid="${mb##*/}"
+      cp -R "$cp_t/cloud" "$cp_t/cloud.good"
+      forge() {  # <dir with the tar content>: encrypts it as the copy's catalog
+        tar -cf - -C "$1" . | gzip -c | age -e -R "$mb/keys/recipients.txt" -o "$mb/catalog.age"
+      }
+      fresh() { rm -rf "${cp_t:?}/new"; mkdir -p "$cp_t/cc-new/projects"; }
+      # Under the test gate the main key is a plain file instead of the
+      # passphrase: having it on the new machine stands for typing it.
+      fresh_main() { fresh; mkdir -p "$cp_t/new/keys"; cp "$cp_t/h/keys/main.key" "$cp_t/new/keys/main.key"; }
+      mkdir -p "$cp_t/forge"
+      printf 'relevio-catalog 1\nseq a[$(touch %s/PWNED)]\nmachine %s\ncopy_salt %s\n' "$cp_t" "$mid" "$(printf x | sha256sum | cut -c1-64)" > "$cp_t/forge/META"
+      head -1 "$cp_t/h/remote.tsv" > "$cp_t/forge/remote.tsv"
+      forge "$cp_t/forge"; fresh
+      out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" "$cp_t/rec.key" 2>/dev/null | sed 's/^[^:]*://' | head -1 | cpn pull folder "$cp_t/cloud" --recovery 2>&1)"
+      cpn push >/dev/null 2>&1
+      check "copy: a forged catalog with code in a number is refused, and nothing runs" \
+        "$(contains "$out" 'header is malformed'):$(yesno "$([ -e "$cp_t/PWNED" ]; echo $?)")" "yes:no"
+      printf 'relevio-catalog 1\nseq 5\nmachine %s\ncopy_salt %s\n' "$mid" "$(printf x | sha256sum | cut -c1-64)" > "$cp_t/forge/META"
+      ln -s ../../../../.ssh/id_ed25519 "$cp_t/forge/folders.tsv"
+      forge "$cp_t/forge"; fresh
+      out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery 2>&1)"
+      check "copy: a forged catalog holding a link is refused" "$(contains "$out" 'holds a link')" "yes"
+      rm -f "$cp_t/forge/folders.tsv"
+      printf 'zz\tx\n' >> "$cp_t/forge/remote.tsv"
+      forge "$cp_t/forge"; fresh
+      out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery 2>&1)"
+      check "copy: a forged catalog with a malformed record is refused" "$(contains "$out" 'remote.tsv line 2 is malformed')" "yes"
+      rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"
+      age-keygen 2>/dev/null | age-keygen -y >> "$mb/keys/recipients.txt"; fresh
+      out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery 2>&1)"
+      check "copy: a key added to the copy's key list is caught by its seal, and nothing is brought back" \
+        "$(contains "$out" 'does NOT match its seal'):$(find "$cp_t/new/archive" -name '*.age' 2>/dev/null | grep -c .)" "yes:0"
+      rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"; rm -f "$mb/keys/recipients.mac"; fresh
+      check "copy: a copy whose key list has no seal shows its keys and asks for the owner's decision" \
+        "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery 2>&1)" 'need BOTH keys'):$(find "$cp_t/new/archive" -name '*.age' 2>/dev/null | grep -c .)" "yes:0"
+      fresh_main
+      out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery --accept-unsealed 2>&1)"; rc=$?
+      check "copy: ... and with --accept-unsealed and both keys it comes back, sealed with both" \
+        "$rc:$(grep -c '^\(main\|recovery\) ' "$cp_t/new/keys/recipients.mac")" "0:2"
+      rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"; rm -f "$mb/keys/recipients.mac"
+      age-keygen 2>/dev/null | age-keygen -y >> "$mb/keys/recipients.txt"; fresh_main
+      check "copy: an unsealed copy with a third key is refused even with --accept-unsealed" \
+        "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery --accept-unsealed 2>&1)" 'NOT exactly your two keys')" "yes"
+      rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"; rm -f "$mb/keys/recipients.mac"
+      { grep '^age1' "$mb/keys/recipients.txt" | head -1; age-keygen 2>/dev/null | age-keygen -y; } > "$cp_t/swapped"; cp "$cp_t/swapped" "$mb/keys/recipients.txt"
+      fresh_main
+      check "copy: an unsealed copy whose second key was swapped for another is refused" \
+        "$(contains "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpn pull folder "$cp_t/cloud" --recovery --accept-unsealed 2>&1)" 'NOT exactly your two keys\|not one of this archive.s keys')" "yes"
+      cp "$cp_t/h/keys/recipients.mac" "$cp_t/mac.bak"; rm -f "$cp_t/h/keys/recipients.mac"
+      check "copy: push says a copy is not ok while the key list is not sealed with both keys" \
+        "$(cpa push >/dev/null 2>&1; echo $?):$(contains "$(cpa remote status 2>&1)" 'not sealed with both keys')" "2:yes"
+      cp "$cp_t/mac.bak" "$cp_t/h/keys/recipients.mac"
+      rm -rf "$cp_t/cloud"; cp -R "$cp_t/cloud.good" "$cp_t/cloud"; rm -rf "${cp_t:?}/new"
+      cp "$cp_t/h/keys/recipients.txt" "$cp_t/rcp.bak"; age-keygen 2>/dev/null | age-keygen -y >> "$cp_t/h/keys/recipients.txt"
+      check "copy: keys check catches a key added to the local key list" \
+        "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpa keys check --recovery >/dev/null 2>&1; echo $?)" "1"
+      cp "$cp_t/rcp.bak" "$cp_t/h/keys/recipients.txt"
+    fi
+    # keys rotate-recovery: a leaked recovery key is replaced, here and in the copy.
+    age-keygen 2>/dev/null > "$cp_t/rec2.key"
+    out="$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | CP_REC="$cp_t/rec2.key" cpa keys rotate-recovery 2>&1)"; rc=$?
+    check "copy ($kind): rotate-recovery re-encrypts every bundle and replaces the copy" \
+      "$rc:$(contains "$out" 'opens nothing here any more'):$(contains "$out" 'copy: replaced')" "0:yes:yes"
+    check "copy ($kind): ... the old recovery key no longer opens the archive, the new one does" \
+      "$(grep '^AGE-SECRET-KEY' "$cp_t/rec.key" | cpa keys check --recovery >/dev/null 2>&1; echo $?):$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | cpa keys check --recovery 2>/dev/null | head -1)" "2:recovery key works."
+    f="$(find "$cp_t/cloud/machines" -path '*/b/*' -name '*.age' | head -1)"
+    check "copy ($kind): ... nor any bundle in the copy, which the new key opens" \
+      "$(age -d -i "$cp_t/rec.key" "$f" >/dev/null 2>&1; echo $?):$(age -d -i "$cp_t/rec2.key" "$f" >/dev/null 2>&1; echo $?)" "1:0"
+    check "copy ($kind): ... and the copy verifies" "$(cpa verify >/dev/null 2>&1; echo $?)" "0"
+    sid="$(sed -n '2p' "$cp_t/h/index.tsv" | cut -f2)"; mv "$cp_t/cc/projects/-p1/$sid.jsonl" "$cp_t/aside.jsonl"
+    check "copy ($kind): ... and a restore with the passphrase still works" \
+      "$(cpa restore "$sid" >/dev/null 2>&1; echo $?):$(cmp -s "$cp_t/aside.jsonl" "$cp_t/cc/projects/-p1/$sid.jsonl" && echo same)" "0:same"
+    out="$(printf 'x\nx\nx\n' | CP_REC="$cp_t/rec.key" cpa keys rotate-recovery 2>&1)"; rc=$?
+    check "copy ($kind): rotate-recovery typed back wrong three times changes nothing" \
+      "$rc:$(contains "$out" 'nothing changed'):$(grep '^AGE-SECRET-KEY' "$cp_t/rec2.key" | cpa keys check --recovery 2>/dev/null | head -1)" "2:yes:recovery key works."
+    if [ "$kind" = rclone-sha1 ]; then
+      # rclone answers "not found" when asked which checksums the provider
+      # keeps: that is the reason given, not "keeps neither md5 nor sha1".
+      out="$(FAKE_FEATURES_NOTFOUND=1 cpa remote set rclone "$tgt" 2>&1)"; rc=$?
+      check "copy ($kind): a provider that answers not found is named as such, not as one without checksums" \
+        "$rc:$(contains "$out" 'which checksums it keeps: not found'):$(contains "$out" 'neither an md5')" "2:yes:no"
+    fi
+    rm -rf "$cp_t"
+  done
+  PATH="$cp_path"
+else
+  echo "  SKIP  copy: remote, push and verify (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+
+# --- Case 22: timestamps (stamp, proof, proof-check) -------------------------
+# The OpenTimestamps client and the Bitcoin explorers are faked here (no
+# network in tests); the real ones were measured by hand (blueprint, O1-O4).
+if command -v age >/dev/null 2>&1 && command -v age-keygen >/dev/null 2>&1; then
+  sp_t="$(mktemp -d)"; mkdir -p "$sp_t/cc/projects/-p1" "$sp_t/p1" "$sp_t/api/block-height" "$sp_t/api/block" "$sp_t/cloud"
+  age-keygen 2>/dev/null > "$sp_t/rec.key"
+  cat > "$sp_t/ots" <<'FAKE'
+#!/usr/bin/env bash
+# fake ots: stamp writes "<file>.ots" holding the file's sha256; upgrade marks
+# every proof complete in block 900000 when FAKE_OTS_CONFIRM=1.
+cmd=""; files=()
+for a in "$@"; do case "$a" in -q|-m|2) ;; stamp|upgrade) cmd="$a" ;; *) files+=("$a") ;; esac; done
+if [ "$cmd" = stamp ]; then
+  [ "${FAKE_OTS_DOWN:-}" = 1 ] && { echo "Failed to create timestamp: need at least 2 attestations but received 0 within timeout" >&2; exit 1; }
+  echo "$#" >> "$FAKE_OTS_LOG"
+  for f in "${files[@]}"; do echo "PENDING $(sha256sum < "$f" | cut -c1-64)" > "$f.ots"; done
+else
+  [ "${FAKE_OTS_CONFIRM:-}" = 1 ] || exit 1
+  for f in "${files[@]}"; do sed -i 's/^PENDING /COMPLETE /' "$f"; done
+fi
+FAKE
+  cat > "$sp_t/helper" <<'FAKE'
+cmd="$1"; shift
+for f in "$@"; do
+  read -r st dg < "$f"
+  case "$cmd" in
+    digest) echo "$dg" ;;
+    attest) if [ "$st" = COMPLETE ]; then echo "${f##*/} bitcoin 900000 $(printf 'root' | sha256sum | cut -c1-64)"; else echo "${f##*/} pending https://fake"; fi ;;
+  esac
+done
+FAKE
+  h="$(printf 'block' | sha256sum | cut -c1-64)"
+  echo "$h" > "$sp_t/api/block-height/900000"
+  printf '{"merkle_root":"%s","timestamp":1795000000}\n' "$(printf 'root' | sha256sum | cut -c1-64)" > "$sp_t/api/block/$h"
+  mkdir -p "$sp_t/bad/block-height" "$sp_t/bad/block"; cp "$sp_t/api/block-height/900000" "$sp_t/bad/block-height/"
+  printf '{"merkle_root":"%s","timestamp":1795000000}\n' "$(printf 'other' | sha256sum | cut -c1-64)" > "$sp_t/bad/block/$h"
+  for i in 1 2 3; do
+    printf '{"cwd":"%s","type":"user","secret":"transcript-text-%d"}\n' "$sp_t/p1" "$i" > "$sp_t/cc/projects/-p1/0000000$i-aaaa-4bbb-8ccc-dddddddddddd.jsonl"
+  done
+  touch -d '1 hour ago' "$sp_t/cc/projects/-p1/"*.jsonl 2>/dev/null
+  spa() {
+    RELEVIO_HOME="$sp_t/h" CLAUDE_CONFIG_DIR="$sp_t/cc" RELEVIO_TEST_INSECURE_KEYS=1 \
+      RELEVIO_TEST_RECOVERY_IDENTITY="$sp_t/rec.key" RELEVIO_TEST_QUIET_MIN=0 RELEVIO_TEST_STABLE_WAIT=0 \
+      RELEVIO_TEST_OTS_BIN="$sp_t/ots" RELEVIO_TEST_OTS_HELPER="$sp_t/helper" FAKE_OTS_LOG="$sp_t/ots.log" \
+      RELEVIO_TEST_STAMP_MAX_WAIT=0 RELEVIO_TEST_STAMP_RETRY=0 RELEVIO_TEST_STAMP_UPGRADE_AFTER=0 \
+      RELEVIO_TEST_EXPLORERS="${SP_EXPLORERS:-file://$sp_t/api}" bash "$ARC" "$@"
+  }
+  chmod +x "$sp_t/ots"
+  grep '^AGE-SECRET-KEY' "$sp_t/rec.key" | spa setup >/dev/null 2>&1
+  spa backfill >/dev/null 2>&1
+  # Session 3's transcript disappears before stamping starts: it needs a key.
+  mv "$sp_t/cc/projects/-p1/00000003-aaaa-4bbb-8ccc-dddddddddddd.jsonl" "$sp_t/s3.jsonl"
+  check "stamp: status says off before setup" "$(contains "$(spa stamp status 2>&1)" 'stamps: off')" "yes"
+  # A run holding the lock stops setup before it turns anything on.
+  mkdir "$sp_t/h/lock"; sleep 30 & lp=$!; echo "$lp" > "$sp_t/h/lock/pid"
+  out="$(RELEVIO_TEST_LOCK_WAIT=2 spa stamp setup 2>&1)"; rc=$?
+  kill "$lp" 2>/dev/null; wait "$lp" 2>/dev/null; rm -rf "$sp_t/h/lock"
+  check "stamp: setup with the lock held fails loud and leaves stamping off" \
+    "$rc:$(contains "$out" 'holds the lock'):$(contains "$(spa stamp status 2>&1)" 'stamps: off')" "2:yes:yes"
+  out="$(spa stamp setup 2>&1)"
+  check "stamp: setup queues what is already archived and says how many, and which need a key" \
+    "$(contains "$out" '2 queued for the next batch'):$(contains "$out" '1 need a key'):$(contains "$(spa stamp status 2>&1)" '2 queued for the next batch')" "yes:yes:yes"
+  FAKE_OTS_DOWN=1 spa sync --all >/dev/null 2>&1; rc=$?
+  check "stamp: with no calendar answering, the leaves stay queued and the archive run still succeeds" \
+    "$rc:$(grep -c '^state ok' "$sp_t/h/status"):$(contains "$(spa stamp status 2>&1)" '2 queued for the next batch'):$(contains "$(spa stamp status 2>&1)" 'last try FAILED: no timestamp calendar answered')" "0:1:yes:yes"
+  check "stamp: ... and status is not healthy while stamping fails" "$(spa status >/dev/null 2>&1; echo $?)" "1"
+  spa sync --all >/dev/null 2>&1
+  check "stamp: the next archiving run sends every queued leaf in ONE client call" \
+    "$(contains "$(spa stamp status 2>&1)" '2 waiting for Bitcoin'):$(grep -c . "$sp_t/ots.log")" "yes:1"
+  check "stamp: a transcript gone from the machine needs a key, and status says how" \
+    "$(contains "$(spa stamp status 2>&1)" '1 need a key')" "yes"
+  check "stamp: a leaf holds only a salted hash: no transcript text, no session id" \
+    "$(grep -rl -e 'transcript-text' -e '0000000' "$sp_t/h/stamps" | grep -c .):$(head -1 "$(ls "$sp_t/h/stamps/"*.leaf | head -1)")" "0:relevio timestamp leaf 1"
+  check "stamp: backfill --recovery really asks for the recovery key (a wrong one is refused)" \
+    "$(age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY' | spa stamp backfill --recovery >/dev/null 2>&1; echo $?):$(contains "$(spa stamp status 2>&1)" '1 need a key')" "2:yes"
+  out="$(grep '^AGE-SECRET-KEY' "$sp_t/rec.key" | spa stamp backfill --recovery 2>&1)"
+  check "stamp: backfill opens the archived copy and queues its leaf" \
+    "$(contains "$out" '1 leaf(s) computed'):$(contains "$(spa stamp status 2>&1)" '1 queued')" "yes:yes"
+  check "stamp: ... leaving no transcript behind in clear" "$(find "$sp_t/h" -name '*.jsonl' | grep -c .)" "0"
+  spa stamp now >/dev/null 2>&1
+  check "stamp: a proof before Bitcoin confirms says it is not confirmed" \
+    "$(contains "$(spa proof 00000001-aaaa-4bbb-8ccc-dddddddddddd --out "$sp_t/early" 2>&1)" 'not confirmed in Bitcoin yet'):$(spa proof-check "$sp_t/early" >/dev/null 2>&1; echo $?)" "yes:1"
+  FAKE_OTS_CONFIRM=1 spa stamp now >/dev/null 2>&1
+  check "stamp: once Bitcoin confirms, every proof is complete" \
+    "$(contains "$(spa stamp status 2>&1)" 'stamps: 3 proven in Bitcoin, 0 waiting')" "yes"
+  out="$(spa proof 00000001-aaaa-4bbb-8ccc-dddddddddddd --out "$sp_t/p" 2>&1)"; rc=$?
+  check "stamp: proof builds the folder and warns that the conversation is in clear" \
+    "$rc:$(ls "$sp_t/p" | tr '\n' ' '):$(contains "$out" 'Read it for secrets')" "0:conversation.jsonl leaf.txt leaf.txt.ots salt.txt VERIFY.txt :yes"
+  check "stamp: ... the command in VERIFY.txt, run by hand, gives the stamped hash" \
+    "$(cd "$sp_t/p" && (printf '%s\n' "$(cat salt.txt)"; cat conversation.jsonl) | sha256sum | cut -c1-64):$(grep -c 'opentimestamps.org' "$sp_t/p/VERIFY.txt")" "$(sed -n 's/^salted-sha256 //p' "$sp_t/p/leaf.txt"):1"
+  out="$(spa proof-check "$sp_t/p" 2>&1)"; rc=$?
+  check "stamp: proof-check passes against a Bitcoin explorer" "$rc:$(contains "$out" 'existed no later than that block')" "0:yes"
+  out="$(SP_EXPLORERS="file://$sp_t/nothing file://$sp_t/api" spa proof-check "$sp_t/p" 2>&1)"; rc=$?
+  check "stamp: ... one explorer down is fine when another answers" "$rc:$(contains "$out" 'no answer')" "0:yes"
+  out="$(SP_EXPLORERS="file://$sp_t/nothing" spa proof-check "$sp_t/p" 2>&1)"; rc=$?
+  check "stamp: ... no explorer answering is not a pass" "$rc:$(contains "$out" 'not checked yet')" "2:yes"
+  out="$(SP_EXPLORERS="file://$sp_t/api file://$sp_t/bad" spa proof-check "$sp_t/p" 2>&1)"; rc=$?
+  check "stamp: ... any explorer that disagrees fails the proof" "$rc:$(contains "$out" 'disagrees')" "2:yes"
+  sed -i 's/transcript-text-1/transcript-text-X/' "$sp_t/p/conversation.jsonl"
+  check "stamp: proof-check catches one changed byte in the conversation" \
+    "$(contains "$(spa proof-check "$sp_t/p" 2>&1)" 'does NOT match the stamped leaf')" "yes"
+  check "stamp: proof of the session whose transcript is gone opens the archive (a key)" \
+    "$(grep '^AGE-SECRET-KEY' "$sp_t/rec.key" | spa proof 00000003-aaaa-4bbb-8ccc-dddddddddddd --out "$sp_t/p3" --recovery >/dev/null 2>&1; spa proof-check "$sp_t/p3" >/dev/null 2>&1; echo $?):$(cmp -s "$sp_t/s3.jsonl" "$sp_t/p3/conversation.jsonl" && echo same)" "0:same"
+  # A session rewritten after it was stamped: the old content keeps its proof
+  # (now in an older generation), the new content gets its own.
+  printf '{"cwd":"%s","type":"user","secret":"transcript-text-1 rewritten"}\n' "$sp_t/p1" > "$sp_t/cc/projects/-p1/00000001-aaaa-4bbb-8ccc-dddddddddddd.jsonl"
+  touch -d '1 hour ago' "$sp_t/cc/projects/-p1/00000001-aaaa-4bbb-8ccc-dddddddddddd.jsonl" 2>/dev/null
+  spa sync --all >/dev/null 2>&1; FAKE_OTS_CONFIRM=1 spa stamp now >/dev/null 2>&1
+  check "stamp: a rewritten session keeps the old proof and gets a new one" \
+    "$(grep -c '^complete	00000001' "$sp_t/h/stamps.tsv"):$(grep -c '^needs-key' "$sp_t/h/stamps.tsv")" "2:0"
+  spa proof 00000001-aaaa-4bbb-8ccc-dddddddddddd --out "$sp_t/p-new" >/dev/null 2>&1
+  check "stamp: ... and proof gives the CURRENT conversation, which checks" \
+    "$(grep -c rewritten "$sp_t/p-new/conversation.jsonl"):$(spa proof-check "$sp_t/p-new" >/dev/null 2>&1; echo $?)" "1:0"
+  # The stamps travel in the encrypted catalog: a new machine can still prove.
+  spa remote set folder "$sp_t/cloud" >/dev/null 2>&1; spa push >/dev/null 2>&1
+  check "stamp: the copy holds no readable stamp file" \
+    "$(find "$sp_t/cloud" -name '*.leaf*' -o -name 'stamps*' | grep -c .)" "0"
+  mkdir -p "$sp_t/cc2/projects"
+  grep '^AGE-SECRET-KEY' "$sp_t/rec.key" | RELEVIO_HOME="$sp_t/h2" CLAUDE_CONFIG_DIR="$sp_t/cc2" RELEVIO_TEST_INSECURE_KEYS=1 bash "$ARC" pull folder "$sp_t/cloud" --recovery >/dev/null 2>&1
+  check "stamp: after pull on a new machine, every proof is there" \
+    "$(cmp -s "$sp_t/h/stamps.tsv" "$sp_t/h2/stamps.tsv" && echo same):$(ls "$sp_t/h2/stamps" | grep -c '\.ots$')" "same:4"
+  rm -rf "$sp_t"
+else
+  echo "  SKIP  stamp: timestamps (age is not installed)"; SKIPS=$((SKIPS + 1))
+fi
+
 # --- Case 13: the one-time migration of pre-v0.22 headers -------------------
 # Other projects (and other people) are running relevio v0.21 and older, where
 # Branch could carry prose and Commits a "(N commits)" suffix. There is no
@@ -2183,6 +3135,7 @@ check "migrate: ... with every session in the catalog" \
 rm -rf "$d"
 
 echo
+[ "$SKIPS" -eq 0 ] || echo "$SKIPS case(s) SKIPPED (a skip is not a pass)"
 if [ "$FAILURES" -eq 0 ]; then
   echo "all cases passed"
   exit 0

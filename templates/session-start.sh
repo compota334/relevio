@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.24.8
+# relevio v0.25.0
 # relevio: inject the session cycle at session start.
 #
 # relevio does NOT write to your CLAUDE.md. The methodology reaches the agent
@@ -388,7 +388,7 @@ ensure_user_settings() {
       *)  # every compaction key in NO_COMPACTION
         pairs="${pairs:+$pairs and} \"$k\": false"
         parts="${parts:+$parts and} \"$k\": false${was:+ (it was $was)}"
-        why_compact=" Compaction summarizes a conversation away, so relevio turns off every automatic compaction; manual /compact still works." ;;
+        why_compact=" Automatic compaction summarizes conversations away; manual /compact still works." ;;
     esac
   done <<EOF
 $todo
@@ -405,6 +405,28 @@ EOF
   SETTINGS_LINE="SETTINGS CHANGED: relevio set$parts in $SETTINGS_FILE, once.$why$managed Tell the user in one line."
 }
 
+# --- The session archive --------------------------------------------------------
+# relevio-archive.sh keeps an encrypted copy of every conversation. Each
+# session start sweeps this repository's sessions in the background (a session
+# whose end was missed, or one Claude Code is about to delete), and, because a
+# background run cannot speak, puts the archive's state in the notice slot
+# after the settings notice. The archive is read only through the script: this
+# hook decides only that the host is Claude Code, the one host whose
+# transcripts the archive reads, and that the script is there.
+ARCHIVE_LINE=""
+archive_ready() {
+  [ "$HOST" != zcode ] && [ -n "$TRANSCRIPT" ] && [ -n "$RELEVIO_SCRIPTS" ] && [ -r "$RELEVIO_SCRIPTS/relevio-archive.sh" ]
+}
+# One call: the notice (unless $1 says the slot is taken), then the detached
+# sweep. Its output is the notice line, or nothing.
+archive_start() {
+  ARCHIVE_LINE=""
+  archive_ready || return 0
+  ARCHIVE_LINE="$(bash "$RELEVIO_SCRIPTS/relevio-archive.sh" session-start --project "${CLAUDE_PROJECT_DIR:-$PWD}" \
+    --transcript "$TRANSCRIPT" ${1:+--no-notice} </dev/null 2>/dev/null | head -1)" || ARCHIVE_LINE=""
+  return 0
+}
+
 # The context hook's once-per-session markers (see context-warn.sh) are only
 # read during their own session; a couple of days covers any restart.
 prune_markers() {
@@ -414,9 +436,11 @@ prune_markers() {
 
 core() {
   ensure_user_settings
+  # One notice slot: the settings notice first, then the archive's.
+  archive_start "$SETTINGS_LINE"
   record_session_start
   prune_markers
-  emit "relevio v0.24.8: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
+  emit "relevio v0.25.0: this project uses the relevio session cycle, a structured way to carry work and context from one coding session to the next, so that nothing is lost between them.
 
 $1
 
@@ -428,7 +452,9 @@ $SESSION_ID_LINE}
 
 $CHANNEL_LINE${SETTINGS_LINE:+
 
-$SETTINGS_LINE}
+$SETTINGS_LINE}${ARCHIVE_LINE:+
+
+$ARCHIVE_LINE}
 
 WHEN THE SESSION ENDS IS NOT YOUR CALL: never write a handoff, and never suggest wrapping up, on your own initiative. Do it only when the user asks for it, or when a relevio message tells you to in those words. Finishing the task you were given is not a reason to end anything: the user decides what happens next, and a session normally has room for far more work than the one task that opened it. If you think the session should end, say why in one line and let the user answer.
 
@@ -450,6 +476,7 @@ $SUBAGENT_LINE"
 case "$SOURCE" in
   resume)
     if session_was_closed; then
+      archive_start no-notice
       emit "relevio: this conversation was resumed, and a handoff names its session id in its Resume field: docs/handoff/$CLOSED_BY. That USUALLY means it was closed with that handoff and is now reopened from the archive, but check it against your own conversation before acting on it, because the same evidence appears in two situations where the session is still live.
 - If your conversation ENDS with writing that handoff and its close-out, this is a REOPENED conversation from the session archive. Its purpose is answering questions about what happened here, not doing new work: it sits near the top of its context window, and auto-compact would destroy the detail that makes it valuable. Keep answers brief, avoid reading files or starting tasks that consume significant context, and if the user wants new work done, suggest opening a fresh session with $KICKOFF.
 - If you KEPT WORKING after writing that handoff, or that handoff describes work this conversation never did (a session that recorded the wrong id), this is NOT the archive: the app or the computer restarted in the middle of the work. Say so to the user in one line and carry on where you stopped. Context reports arrive on your tool calls as usual, and they, not this message, say how much room is left.
@@ -459,6 +486,7 @@ $SCRIPTS_LINE${SESSION_ID:+ The session id of this conversation is $SESSION_ID.}
     fi
     ;;
   compact)
+    archive_start no-notice
     record_session_start
     emit "relevio: auto-compact just happened in this conversation: the fine-grained detail before this point has been summarized away. Tell the user. If no handoff has been written for this session yet, write one now (docs/handoff/YYYY-MM-DD_<short-title>.md, then regenerate docs/handoff/INDEX.md with relevio-index.sh) with whatever detail remains, then recommend closing this session and opening a fresh one with $KICKOFF. $SCRIPTS_LINE${SESSION_ID_LINE:+ $SESSION_ID_LINE} $SUBAGENT_LINE"
     ;;

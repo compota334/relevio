@@ -21,6 +21,21 @@ session title; if empty, ask what the user is looking for).
 
    (run from this project's root; in the Claude Code UI the user can instead
    just click the conversation with that name in the session list).
+   If `claude --resume` answers that the session is not found (Claude Code
+   deletes old conversations), look it up in relevio's encrypted archive.
+   `$S` is the path on relevio's "WHERE THE SCRIPTS ARE" line, used verbatim:
+
+       bash "$S/relevio-archive.sh" list <session-id>
+
+   If it is listed, read the archive's guide first
+   (`bash "$S/relevio-archive.sh" guide`): it says how to tell the user which
+   key to use and how to paste it. Then have the user run this in THEIR
+   terminal (it asks for their passphrase); never type the key for them:
+
+       bash "$S/relevio-archive.sh" restore <session-id>
+
+   It prints the exact `cd ... && claude --resume` line to use next. If it is
+   not listed, say the conversation is gone and the handoff is what remains.
 5. Warn whoever reopens it: a revisited session is for ASKING, not for working.
    It reopens near the top of its context window; guard warnings fire at 85,
    90, 95 and 99%, and at 99% the agent stops and asks for confirmation before
