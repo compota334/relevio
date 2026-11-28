@@ -548,32 +548,35 @@ branch_tip() {
   echo ""
 }
 
-# unmerged_count <tip>: how many of the branch's commits have no equal change
-# on main. Measured by content (`git cherry`, a patch-id per commit), not by
+# lane_measure <branch>: the single definition of what an active lane is. The
+# board keeps the `open` ones and counts their unmerged commits, the trace
+# labels every row with the state; two copies of this decision would let the
+# board and the trace disagree about the same branch, which is the one thing
+# a board must never do. Sets three globals instead of printing, so it is
+# called directly, never inside $( ) (where a die would end only a subshell):
+#   LANE_STATE     gone | merged | open
+#   LANE_TIP       the ref measured (empty when gone)
+#   LANE_UNMERGED  the branch's commits whose change is not on main, one hash
+#                  per line (empty unless open)
+# Merged is measured by content (`git cherry`, a patch-id per commit), not by
 # hash: a PR merged by rebase lands every commit on main under a NEW hash, and
-# an ancestry test then reported the branch open forever. Merge commits are
-# not counted (cherry skips them): a merge from main is main's work.
+# an ancestry test alone reported the branch open forever. Merge commits are
+# not counted (cherry skips them): a merge from main is main's work. An
+# ancestor of main is merged without computing patch-ids, which is the common
+# case and the cheap one for an old branch far behind main.
 # Known limit: a squash merge folds the commits into one patch that matches
 # none of them, so a squashed branch still counts as open.
-# Callers run it inside $( ), where set -e does not reach and a die ends only
-# that subshell: each one passes the failure on with `|| exit 2`.
-unmerged_count() {
+lane_measure() {
   local c
-  c="$(git cherry "$MAIN" "$1" 2>/dev/null)" || die "git cherry could not compare $1 with $MAIN."
-  grep -c '^+' <<<"$c" || true
-}
-
-# gone | merged | open. The single definition of what an active lane is: the
-# board keeps the `open` ones, the trace labels every row with it. Two copies
-# of this decision would let the board and the trace disagree about the same
-# branch, which is the one thing a board must never do.
-branch_state() {
-  local tip n
-  [ "$REPO_UNBORN" = yes ] && { echo gone; return 0; }
-  tip="$(branch_tip "$1")"
-  [ -n "$tip" ] || { echo gone; return 0; }
-  n="$(unmerged_count "$tip")" || exit 2
-  if [ "$n" -eq 0 ]; then echo merged; else echo open; fi
+  LANE_STATE=gone; LANE_TIP=""; LANE_UNMERGED=""
+  [ "$REPO_UNBORN" = yes ] && return 0
+  LANE_TIP="$(branch_tip "$1")"
+  [ -n "$LANE_TIP" ] || return 0
+  LANE_STATE=merged
+  git merge-base --is-ancestor "$LANE_TIP" "$MAIN" 2>/dev/null && return 0
+  c="$(git cherry "$MAIN" "$LANE_TIP" 2>/dev/null)" || die "git cherry could not compare $LANE_TIP with $MAIN."
+  LANE_UNMERGED="$(awk '$1 == "+" { print $2 }' <<<"$c")"
+  [ -z "$LANE_UNMERGED" ] || LANE_STATE=open
 }
 
 # The devs who closed a session on a branch, as "ANA, NICO".
@@ -642,12 +645,11 @@ catalog_branches() {
 # Merged and deleted branches drop off by design: the board answers "what is
 # open right now", the catalog keeps the history.
 board_rows() {
-  local b st tip ahead areas last note rows=""
+  local b ahead areas last note rows=""
   for b in $(catalog_branches); do
-    st="$(branch_state "$b")" || exit 2
-    [ "$st" = open ] || continue
-    tip="$(branch_tip "$b")"
-    ahead="$(unmerged_count "$tip")" || exit 2
+    lane_measure "$b"
+    [ "$LANE_STATE" = open ] || continue
+    ahead="$(grep -c . <<<"$LANE_UNMERGED")"
     # One pass for both fields of the branch's last record.
     last="$(printf '%s' "$CATALOG" | awk -F'\t' -v b="$b" '$5 == b { d = $2; p = $1 } END { sub(/.*\//, "", p); print d "\t" p }')"
     # The board is meant to be scanned, so a lane that touched thirty paths
@@ -657,7 +659,7 @@ board_rows() {
       | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' | sort -u \
       | awk 'NR <= 6 { out = (NR == 1 ? $0 : out ", " $0) }
              END { if (NR == 0) print "none"; else print (NR > 6 ? out ", +" NR - 6 " more" : out) }')"
-    case "$tip" in origin/*) note="" ;; *) note="local only" ;; esac
+    case "$LANE_TIP" in origin/*) note="" ;; *) note="local only" ;; esac
     rows="${rows}${b}	$(devs_of "$b")	${last}	${areas}	${ahead}	${note}
 "
   done

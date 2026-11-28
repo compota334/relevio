@@ -1222,6 +1222,20 @@ check "index: ... one merged by half stays, ahead by the commits main does not h
 out="$( cd "$d" && bash "$TRC" rb 2>&1 )"
 check "trace: ... the rebased one is merged, the half one is open work" \
   "$(printf '%s' "$out" | grep -c '`feat-rebased`.*merged'):$(printf '%s' "$out" | grep -c 'OPEN WORK | `feat-half`')" "1:1"
+# feat-half touched rb in two commits; one is on main already (picked), so
+# one collision is left, the same count the board uses.
+check "trace: ... counting only the commits on that path that main does not have" \
+  "$(printf '%s' "$out" | awk -F'|' '/OPEN WORK \| `feat-half`/ { gsub(/ /, "", $6); print $6 }')" "1"
+# A git that cannot compare must stop the index and the trace, naming it,
+# never pass for "merged" (a die inside $( ) ends only the subshell).
+mkdir -p "$d/.fakegit"
+printf '#!/usr/bin/env bash\n[ "$1" = cherry ] && { echo "fatal: simulated" >&2; exit 128; }\nexec %q "$@"\n' "$(command -v git)" > "$d/.fakegit/git"
+chmod +x "$d/.fakegit/git"
+out_i="$( cd "$d" && PATH="$d/.fakegit:$PATH" bash "$IDX" 2>&1 )"; rc_i=$?
+out_t="$( cd "$d" && PATH="$d/.fakegit:$PATH" bash "$TRC" rb 2>&1 )"; rc_t=$?
+rm -rf "$d/.fakegit"
+check "index and trace: a failing git cherry stops both and says so" \
+  "$rc_i:$(contains "$out_i" 'git cherry could not compare'):$rc_t:$(contains "$out_t" 'git cherry could not compare')" "2:yes:2:yes"
 git -C "$d" push -q origin --delete feat-half >/dev/null 2>&1
 git -C "$d" branch -qD feat-half feat-rebased >/dev/null 2>&1
 
