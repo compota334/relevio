@@ -1196,6 +1196,9 @@ check "trace: an untouched path says so instead of printing an empty table" \
 # commits stays, counting the half that is not on main.
 git -C "$d" checkout -q -b feat-rebased main
 mkdir -p "$d/rb"; echo r1 > "$d/rb/r.txt"; git -C "$d" add -A; git -C "$d" commit -qm "rebased work 1"
+# An empty commit (a "trigger CI" one) has no patch-id: it must not keep the
+# branch open once its real work is on main.
+git -C "$d" commit -q --allow-empty -m "trigger ci"
 echo r2 >> "$d/rb/r.txt"; git -C "$d" commit -qam "rebased work 2"
 write_handoff "$d" 2026-09-04_feat-rebased.md "04-09-26 feat rebased" ANA feat-rebased \
   "$(git -C "$d" rev-parse --short HEAD)..$(git -C "$d" rev-parse --short HEAD)" rb "rebased session"
@@ -1211,7 +1214,8 @@ git -C "$d" add -A; git -C "$d" commit -qm "handoff feat-half"; git -C "$d" push
 # the very same commits and the test would prove nothing).
 git -C "$d" checkout -q main
 echo m > "$d/src/m.txt"; git -C "$d" add -A; git -C "$d" commit -qm "main moves on"
-git -C "$d" cherry-pick main~1..feat-rebased >/dev/null 2>&1
+# Only the three real commits reach main: the empty one stays behind.
+git -C "$d" cherry-pick feat-rebased~3 feat-rebased~1 feat-rebased >/dev/null 2>&1
 git -C "$d" cherry-pick feat-half~2 >/dev/null 2>&1
 git -C "$d" push -q origin main; git -C "$d" fetch -q origin
 ( cd "$d" && bash "$IDX" >/dev/null 2>&1 )

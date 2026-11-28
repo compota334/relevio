@@ -557,7 +557,8 @@ branch_tip() {
 #   LANE_STATE     gone | merged | open
 #   LANE_TIP       the ref measured (empty when gone)
 #   LANE_UNMERGED  the branch's commits whose change is not on main, one hash
-#                  per line (empty unless open)
+#                  per line (empty unless open; commits that change nothing
+#                  are never in it)
 # Merged is measured by content (`git cherry`, a patch-id per commit), not by
 # hash: a PR merged by rebase lands every commit on main under a NEW hash, and
 # an ancestry test alone reported the branch open forever. Merge commits are
@@ -567,7 +568,7 @@ branch_tip() {
 # Known limit: a squash merge folds the commits into one patch that matches
 # none of them, so a squashed branch still counts as open.
 lane_measure() {
-  local c
+  local c h rc
   LANE_STATE=gone; LANE_TIP=""; LANE_UNMERGED=""
   [ "$REPO_UNBORN" = yes ] && return 0
   LANE_TIP="$(branch_tip "$1")"
@@ -575,7 +576,17 @@ lane_measure() {
   LANE_STATE=merged
   git merge-base --is-ancestor "$LANE_TIP" "$MAIN" 2>/dev/null && return 0
   c="$(git cherry "$MAIN" "$LANE_TIP" 2>/dev/null)" || die "git cherry could not compare $LANE_TIP with $MAIN."
-  LANE_UNMERGED="$(awk '$1 == "+" { print $2 }' <<<"$c")"
+  for h in $(awk '$1 == "+" { print $2 }' <<<"$c"); do
+    # An empty commit (--allow-empty) has no patch-id, so cherry always lists
+    # it; it carries no change, so nothing of it can be missing from main.
+    rc=0; git diff-tree --quiet --root -r "$h" || rc=$?
+    case "$rc" in
+      0) continue ;;
+      1) LANE_UNMERGED="${LANE_UNMERGED}${h}
+" ;;
+      *) die "git diff-tree could not read commit $h of $LANE_TIP." ;;
+    esac
+  done
   [ -z "$LANE_UNMERGED" ] || LANE_STATE=open
 }
 
