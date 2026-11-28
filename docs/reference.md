@@ -4,6 +4,38 @@ Part of the [relevio](../README.md) documentation. How the context hook
 measures the window, every message relevio sends the agent and when, and the
 behavior details behind them.
 
+## The core idea: never lose context again
+
+Without a methodology, working with Claude Code for months looks like this: a
+pile of conversations named "Untitled", most of them auto-compacted (their
+detail destroyed by summarization), and no record of why anything was done the
+way it was.
+
+With relevio, your history becomes a complete, navigable archive:
+
+- **Every conversation gets closed with a handoff** (at 80% of its window,
+  with automatic compaction turned off), renamed to
+  `DD-MM-YY short-title`, and ends with a written handoff document. Your
+  session list reads like a project logbook.
+- **Every closed conversation keeps about a fifth of its context window free
+  and is never compacted.** That remaining room is the point: you can REOPEN any old
+  conversation weeks later and ask "why did we choose X here?" or "explain
+  that bug you fixed", and the agent answers with the FULL original context
+  still intact.
+- **Handoffs accumulate in `docs/handoff/`**, dated, never overwritten. Each
+  new session starts by reading the latest one, so no knowledge dies when a
+  conversation ends.
+- **Everything is cataloged.** `docs/handoff/INDEX.md` is the library index:
+  one row per session linking its three records: the handoff file, the
+  conversation name, and the commit range (`git log first..last` narrates the
+  session's work commit by commit, since commit messages are themselves
+  summaries of what was done).
+
+The result: TOTAL history. The handoff folder is the written memory, the
+index is the catalog, git history is the code trail, and the renamed
+conversation list is the archive of complete, still-queryable sessions.
+Nothing is ever lost to compaction again.
+
 ## How the hook works
 
 > **The design rule that protects you: relevio never guesses a window size.**

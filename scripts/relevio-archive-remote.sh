@@ -63,7 +63,7 @@ rclone_reason() {  # stdin: rclone's stderr
     # rateLimitExceeded when too many requests reach it (measured
     # 2026-11-25: rclone's shared app hits it often). Not a full disk.
     *rateLimitExceeded*|*userRateLimitExceeded*|*"quota metric"*)
-      R_ERR="the provider is limiting requests (rate limit), not out of space: it is retried next time. If it keeps happening, give rclone its own Google client id: https://github.com/compota334/relevio/blob/main/docs/archive.md#a-copy-off-this-machine" ;;
+      R_ERR="Google rate limit, not a full disk - retried next time. If it repeats, give rclone its own Google client id - see the relevio archive docs" ;;
     *storageQuotaExceeded*|*"storage quota"*|*"Quota"*|*"quota"*) R_ERR="the cloud storage is full: quota exceeded" ;;
     *"dial tcp"*|*"no such host"*|*"connection refused"*|*"i/o timeout"*|*"network is unreachable"*|*"TLS handshake timeout"*)
       R_ERR="no connection to the cloud: offline, or the provider is down" ;;

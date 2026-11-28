@@ -1001,6 +1001,11 @@ check "docs: the team guide documents the lane board and the trace" \
 # The links of the docs, of the README, and the repo URLs inside error
 # messages: tests/check_links.py says what it checks. The split moved sections
 # between files, and a dead link or anchor fails silently on GitHub.
+# A failure reason ends up in a status file kept at 200 characters and in the
+# session-start notice kept at 150: a literal reason longer than that loses
+# its end (the part that says what to do).
+check "archive: every literal failure reason fits the 150-character notice" \
+  "$(grep -ho 'R_ERR="[^"$]*"' "$REPO"/scripts/relevio-archive*.sh | awk '{ l = length($0) - 8; if (l > 150) print l }' | head -1)" ""
 # The README's sample board uses the generator's own header row, so the
 # example cannot show columns the board does not have.
 check "README: its sample board has the generator's exact header" \

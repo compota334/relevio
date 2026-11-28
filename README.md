@@ -21,7 +21,9 @@ lost to the next. For Claude Code and ZCode.
    board of open work, and asks which branch to continue on.
 3. Work as usual. When you are done, ask for a handoff. The agent writes
    `docs/handoff/YYYY-MM-DD_<title>.md`, commits it, and gives you the two
-   commands to rename this conversation and open the next one.
+   commands to rename this conversation and open the next one (on ZCode,
+   which has no rename command, it asks you to rename it in the session
+   list).
 
 ## What you will see
 
@@ -54,15 +56,18 @@ branch:
 - **Keeps a team's work apart**: one lane per branch, a board of who has open
   work where, and a trace of who touched a file
   ([docs/teams.md](docs/teams.md)).
-- **Never summarizes a conversation behind your back**: it turns off Claude
-  Code's automatic compaction (`autoCompactEnabled`,
+- **Stops Claude Code from summarizing a conversation behind your back**: it
+  turns off its automatic compaction (`autoCompactEnabled`,
   `precomputeCompactionEnabled` and `idleCompaction`, all `false`), so any
   old conversation can be reopened weeks later with its full detail and
-  asked "why did we choose X here?".
-- **Never lets one be deleted**: `cleanupPeriodDays` goes to 36500 (100
-  years, instead of Claude Code's default 30 days), and an optional
-  [encrypted archive](#archiving-every-conversation) keeps a copy of every
-  conversation, with a copy off the machine and Bitcoin timestamps.
+  asked "why did we choose X here?". (ZCode's own settings are left alone.)
+- **Stops Claude Code from deleting old conversations**: `cleanupPeriodDays`
+  goes to 36500 (100 years, instead of the default 30 days). An open Claude
+  Code bug can still delete some
+  ([details](docs/reference.md#claude-code-no-longer-deletes-old-conversations)),
+  so an optional [encrypted archive](#archiving-every-conversation) keeps a
+  copy of every conversation, with a copy off the machine and Bitcoin
+  timestamps.
 
 > **About `docs/handoff/` in this repository:** relevio is developed with
 > relevio. Those notes (in Spanish) are this project's own session history,
