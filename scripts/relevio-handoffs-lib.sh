@@ -575,7 +575,7 @@ lane_measure() {
   [ -n "$LANE_TIP" ] || return 0
   LANE_STATE=merged
   git merge-base --is-ancestor "$LANE_TIP" "$MAIN" 2>/dev/null && return 0
-  c="$(git cherry "$MAIN" "$LANE_TIP" 2>/dev/null)" || die "git cherry could not compare $LANE_TIP with $MAIN."
+  c="$(git cherry "$MAIN" "$LANE_TIP" 2>/dev/null)" || die "git cherry could not compare $(relevio_safe "$LANE_TIP") with $MAIN."
   for h in $(awk '$1 == "+" { print $2 }' <<<"$c"); do
     # An empty commit (--allow-empty) has no patch-id, so cherry always lists
     # it; it carries no change, so nothing of it can be missing from main.
@@ -584,7 +584,7 @@ lane_measure() {
       0) continue ;;
       1) LANE_UNMERGED="${LANE_UNMERGED}${h}
 " ;;
-      *) die "git diff-tree could not read commit $h of $LANE_TIP." ;;
+      *) die "git diff-tree could not read commit $h of $(relevio_safe "$LANE_TIP")." ;;
     esac
   done
   [ -z "$LANE_UNMERGED" ] || LANE_STATE=open

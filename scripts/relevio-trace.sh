@@ -108,7 +108,7 @@ EOF
     # Only the commits whose change is not on main yet, as the board counts
     # them: one already merged by rebase is no collision risk.
     # shellcheck disable=SC2086  # one hash per word
-    hits="$(git log --no-walk=unsorted --format=%H ${UNMERGED[$b]} -- "$p")" || die "git log could not read the open commits of $b."
+    hits="$(git log --no-walk=unsorted --format=%H ${UNMERGED[$b]} -- "$p")" || die "git log could not read the open commits of $(relevio_safe "$b")."
     hits="$(grep -c . <<<"$hits" || true)"
     [ "$hits" -gt 0 ] || continue
     note="collision risk"
