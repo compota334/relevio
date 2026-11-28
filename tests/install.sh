@@ -435,6 +435,19 @@ check "context-warn: hard tells the agent not to rush" \
 # commit order made agents cut work mid-change to obey it.
 check "context-warn: hard does not ask to commit before the handoff" \
   "$(printf '%s' "$cw_out" | grep '^1\.' | grep -c 'commit')" "0"
+# The last guards (85, 90, 95, 99%) describe what a full window really does.
+# relevio turns automatic compaction off, so "auto-compact is imminent" was a
+# promise that never came true: the next message fails as too long instead.
+cw_99="$(cw 995000 g99)"
+cw_late="$(cw 860000 g85)$(cw 910000 g90)$(cw 960000 g95)$cw_99"
+check "context-warn: 85-99% no longer announce an auto-compact that is turned off" \
+  "$(printf '%s' "$cw_late" | grep -ciE 'auto-compact')" "0"
+check "context-warn: ... 99% says the next message fails as too long, or is summarized if compaction is back on" \
+  "$(contains "$cw_99" 'fails as too long'):$(contains "$cw_99" 'loses its remaining detail')" "yes:yes"
+# relevio turns compaction off only on Claude Code (never on ZCode): the
+# STOP must not claim it did everywhere.
+check "context-warn: ... and says relevio turns it off on Claude Code, not on every host" \
+  "$(contains "$cw_99" 'as relevio sets it on Claude Code')" "yes"
 # GLM (Z.ai) models: the GLM Coding Plan plugs them into Claude Code, so the
 # window table must know them. Same token count, different band, proves the
 # window is really being applied (150k is 15% of 1M but 75% of 200k). An

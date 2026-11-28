@@ -538,7 +538,7 @@ read or audit every word the agent receives.
 | 70% (soft, configurable) | The sweet spot: maximum understanding loaded AND plenty of free tokens, so put that combination to work. Finish and polish what is open, new user requests welcome at any size, begin thinking about what the next session will need. Explicitly: nothing needs writing yet, a later message will say when. |
 | 80% (hard, configurable) | The complete close-out checklist, first time it appears: bring the work to a coherent stopping point (nothing abandoned mid-change), write the handoff while the understanding is still loaded (structure included), run the project's checks, then commit everything and push, hand the user the close-out (on Claude Code two commands, `/rename` plus the kickoff; on ZCode the kickoff command plus a rename-from-the-UI request, since ZCode has no rename command). Explicitly: the free tokens are enough to do it well, no rushing. |
 | 85 / 90 / 95% | Escalating guards: short answers, no new work, remind the user the window is nearly full. |
-| 99% | Full STOP: do not answer the pending request; warn that one more exchange may trigger auto-compact and wait for explicit confirmation. |
+| 99% | Full STOP: do not answer the pending request; warn that one more exchange may fill the window (with compaction off the next message fails as too long; with it turned back on, the conversation is summarized) and wait for explicit confirmation. |
 | Unknown model | The raw token count on the first tool call and every 100k after, with the reasoning spelled out (relevio refuses to guess a window size). If the window is nearly full the agent tells the user, and the user decides. |
 | Foreign host, session start | Some Claude-compatible harnesses (e.g. Devin) load `.claude/` hooks but send no transcript path, so usage cannot be measured there. The startup core then does NOT promise the report cadence: it says no usage reports will arrive, silence tells you nothing, and never guess a figure. |
 | Foreign host, first tool call | One loud notice, once per session: usage reporting is OFF, no counts or warnings will come, the agent must use its own knowledge of its window to time the handoff and keep the user informed. Never silence: an agent waiting for reports that structurally cannot arrive is the exact failure relevio exists to prevent. |
@@ -775,7 +775,7 @@ the `restore` command to run in your terminal.
 A revisited session is for asking, not for working: it reopens near the top
 of its context window. The hook fires guard warnings at 85, 90, 95 and 99%;
 the 99% one is a full STOP: the agent must not answer, must warn (in the
-user's language) that one more exchange may trigger auto-compact, and must
+user's language) that one more exchange may fill the window, and must
 wait for explicit confirmation to continue.
 
 ## Subagents
