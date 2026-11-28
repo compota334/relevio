@@ -320,6 +320,23 @@ rm -rf "$d" "$copy"
 # ceiling: ~8 KB arrives, ~12 KB does not. So every branch stays well under it,
 # and this test fails if anyone grows one past the budget.
 INJECT_BUDGET=6000
+# Without jq the hooks cannot read their payload. A failing hook writes only to
+# its stderr, which nobody reads, so relevio would be off in silence: the
+# session start must say so in valid JSON, and the context hook stay quiet.
+nojq="$(mktemp -d)"; mkdir "$nojq/bin"
+for t in bash sh cat sed awk grep tr cut head tail date mkdir rm mv cp ls find stat printf env dirname basename wc sort git; do
+  p="$(command -v "$t")" && ln -s "$p" "$nojq/bin/$t"
+done
+out="$(printf '{"source":"startup","session_id":"nojq-1"}' | env -i HOME="$nojq" PATH="$nojq/bin" bash "$REPO/hooks/session-start.sh" 2>"$nojq/err")"; rc=$?
+check "session-start: without jq it says relevio is off and how to install jq, in valid JSON" \
+  "$rc:$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext' 2>/dev/null | grep -c 'jq is missing.*brew install jq'):$(wc -c < "$nojq/err")" "0:1:0"
+out="$(printf '{"transcript_path":"x","session_id":"nojq-2"}' | env -i HOME="$nojq" PATH="$nojq/bin" bash "$REPO/hooks/context-warn.sh" 2>"$nojq/err")"; rc=$?
+check "context-warn: without jq it stays quiet (the session start already said why)" \
+  "$rc:${#out}:$(wc -c < "$nojq/err")" "0:0:0"
+out="$(cd "$nojq" && bash "$REPO/scripts/relevio-index.sh" 2>&1)"; rc=$?
+check "index: outside a git repository it says to run git init" \
+  "$rc:$(contains "$out" "run 'git init'")" "2:yes"
+rm -rf "$nojq"
 # Claude Code sends transcript_path on every hook event, so the helper does
 # too (the value just has to be non-empty; only its presence is checked). A
 # payload WITHOUT it simulates a foreign host (Devin et al.), tested below.

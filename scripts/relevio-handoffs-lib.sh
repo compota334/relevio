@@ -39,7 +39,8 @@ die() { echo "ERROR: $*" >&2; exit 2; }
 
 # The repository root, from anywhere inside it (a worktree included).
 relevio_top() {
-  git rev-parse --show-toplevel 2>/dev/null || die "not inside a git repository"
+  git rev-parse --show-toplevel 2>/dev/null \
+    || die "not inside a git repository. relevio keeps its handoffs in git: run 'git init' in the project folder (or open the session inside the repository) and try again."
 }
 
 # Print a script's banner comment as its usage text. Derived from the file, so

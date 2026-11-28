@@ -50,6 +50,9 @@
 #   CLAUDE_CONTEXT_WARN   "soft,hard" percentages (default "70,80")
 #
 # Portable: Linux and macOS (no tac, no GNU-only flags). Requires jq.
+# Without jq the session-start hook already told the agent that relevio is
+# off and how to fix it; here, stay quiet instead of failing on every tool call.
+command -v jq >/dev/null 2>&1 || { cat >/dev/null; exit 0; }
 INPUT=$(cat)
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // empty')
 SESSION=$(echo "$INPUT" | jq -r '.session_id // "nosession"')
