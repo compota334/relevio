@@ -34,11 +34,7 @@ Branches with handoffs that still exist and are not yet merged into `origin/main
 
 | Branch | Dev(s) | Last handoff | Areas | Ahead of main | Note |
 |--------|--------|--------------|-------|---------------|------|
-| `ee24c71cefaf3dc501a1557e7f0ae4129b2fa7e6` |  |  |  |  |  |
-| `3869d267ce974bac7895f1a13eecd85fc73d1bdd` |  |  |  |  |  |
-| `a077a40b2996b89edcdf19fc90fb0c3e875847ba` |  |  |  |  |  |
-| `f0504e293aa61e6ff364c5a71bd4dc24477ae11a` |  |  |  |  |  |
-| `index-merged-by-content` | NICO | 2026-11-28_relevio-v0250-publicada-tablero-y-avisos.md | README.md, scripts/relevio-handoffs-lib.sh, scripts/relevio-trace.sh, tests/install.sh | 4 |  |
+| `index-merged-by-content` | NICO | 2026-11-28_relevio-v0250-publicada-tablero-y-avisos.md | README.md, scripts/relevio-handoffs-lib.sh, scripts/relevio-trace.sh, tests/install.sh | 5 |  |
 
 ## Catalog
 

@@ -64,8 +64,15 @@ este tramo, `context-warn-window-full` (PR #4), estan en la seccion 2.4.
   --root -r`; un error de diff-tree corta con mensaje).
 - `f0504e2` (/security-review): sin hallazgos; los errores nuevos muestran
   el nombre de rama con `relevio_safe` (regla propia del lib).
-- 698 casos en verde. Medido en el repo real: el tablero queda "No active
-  lanes".
+- Commit posterior a este handoff (mismo PR): `git diff-tree --quiet`
+  igual imprime el id del commit cuando recibe uno solo, y como corre dentro
+  de la salida de `board_rows`, el tablero real mostro 4 filas con hashes
+  sueltos. Arreglado con `--no-commit-id` y `>/dev/null`, y test nuevo de
+  que toda fila del tablero es una rama (rojo con el codigo anterior: 4
+  filas de mas). Lo vio el INDEX.md real al regenerarlo, no los tests: los
+  tests buscaban filas puntuales, no que no hubiera filas de mas.
+- 699 casos en verde. Medido en el repo real: el tablero queda "No active
+  lanes" desde main (en esta rama, solo su propio carril).
 - PR #3: https://github.com/compota334/relevio/pull/3 (abierto, MERGEABLE).
 
 ### 2.4 Rama `context-warn-window-full` (PR #4)

@@ -1221,6 +1221,8 @@ git -C "$d" push -q origin main; git -C "$d" fetch -q origin
 ( cd "$d" && bash "$IDX" >/dev/null 2>&1 )
 check "index: a branch merged by rebase (new hashes, same changes) leaves the board" \
   "$?:$(git -C "$d" merge-base --is-ancestor origin/feat-rebased main && echo same-hash || echo new-hash):$(board_of "$idx" | grep -c 'feat-rebased')" "0:new-hash:0"
+check "index: every board row is a branch with a handoff, nothing else leaks into it" \
+  "$(board_of "$idx" | grep '^| `' | grep -vc '^| `feat-')" "0"
 check "index: ... one merged by half stays, ahead by the commits main does not have" \
   "$(board_of "$idx" | awk -F'|' '/feat-half/ { gsub(/ /, "", $6); print $6 }')" "2"
 out="$( cd "$d" && bash "$TRC" rb 2>&1 )"

@@ -579,7 +579,9 @@ lane_measure() {
   for h in $(awk '$1 == "+" { print $2 }' <<<"$c"); do
     # An empty commit (--allow-empty) has no patch-id, so cherry always lists
     # it; it carries no change, so nothing of it can be missing from main.
-    rc=0; git diff-tree --quiet --root -r "$h" || rc=$?
+    # --quiet still prints the commit id of a single-commit diff-tree, and
+    # this runs inside board_rows' output: silence it.
+    rc=0; git diff-tree --quiet --no-commit-id --root -r "$h" >/dev/null || rc=$?
     case "$rc" in
       0) continue ;;
       1) LANE_UNMERGED="${LANE_UNMERGED}${h}
