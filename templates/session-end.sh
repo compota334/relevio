@@ -1,5 +1,5 @@
 #!/bin/bash
-# relevio v0.25.0
+# relevio v0.25.1
 # relevio: archive this session as it ends.
 #
 # Claude Code runs SessionEnd hooks when a session closes (exit, /clear, a new
